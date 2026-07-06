@@ -1,0 +1,73 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import {
+  loadClusterNamespaces,
+  saveClusterNamespaces,
+  getDefaultNamespace,
+  setDefaultNamespace,
+  DEFAULT_WORKSPACE_LAYOUT,
+  loadWorkspaceLayout,
+  saveWorkspaceLayout,
+  contextDisplayName,
+  loadContextProfiles,
+  saveContextProfiles,
+  loadKubeconfigFiles,
+  saveKubeconfigFiles,
+  loadContextOrder,
+  orderContexts,
+  saveContextOrder,
+} from "./settings";
+
+beforeEach(() => localStorage.clear());
+
+describe("settings persistence", () => {
+  it("round-trips per-cluster namespaces", () => {
+    expect(loadClusterNamespaces()).toEqual({});
+    saveClusterNamespaces({ "kind-dev": "kube-system", prod: "monitoring" });
+    expect(loadClusterNamespaces()).toEqual({ "kind-dev": "kube-system", prod: "monitoring" });
+  });
+
+  it("round-trips the default namespace", () => {
+    expect(getDefaultNamespace()).toBe("");
+    setDefaultNamespace("monitoring");
+    expect(getDefaultNamespace()).toBe("monitoring");
+  });
+
+  it("tolerates corrupt storage", () => {
+    localStorage.setItem("srelens.clusterNamespaces", "{not json");
+    expect(loadClusterNamespaces()).toEqual({});
+  });
+
+  it("persists workspace panel widths and bounds invalid values", () => {
+    expect(loadWorkspaceLayout()).toEqual(DEFAULT_WORKSPACE_LAYOUT);
+    saveWorkspaceLayout({ leftSidebarWidth: 260, rightSidebarWidth: 640 });
+    expect(loadWorkspaceLayout()).toEqual({ leftSidebarWidth: 260, rightSidebarWidth: 640 });
+
+    localStorage.setItem(
+      "srelens.workspaceLayout",
+      JSON.stringify({ leftSidebarWidth: 20, rightSidebarWidth: 2000 }),
+    );
+    expect(loadWorkspaceLayout()).toEqual({ leftSidebarWidth: 160, rightSidebarWidth: 960 });
+  });
+
+  it("persists context names, short labels, colors, and logos", () => {
+    const profiles = {
+      production: { displayName: "Production EU", shortName: "EU", color: "#dc2626", logo: "custom" as const, logoUrl: "https://example.com/logo.png" },
+    };
+    saveContextProfiles(profiles);
+    expect(loadContextProfiles()).toEqual(profiles);
+    expect(contextDisplayName("production", profiles.production)).toBe("Production EU");
+    expect(contextDisplayName("staging", undefined)).toBe("staging");
+  });
+
+  it("persists and deduplicates additional kubeconfig files", () => {
+    saveKubeconfigFiles(["/tmp/a", "/tmp/b", "/tmp/a"]);
+    expect(loadKubeconfigFiles()).toEqual(["/tmp/a", "/tmp/b"]);
+  });
+
+  it("persists context order and appends unordered contexts", () => {
+    saveContextOrder(["prod", "dev", "prod"]);
+    expect(loadContextOrder()).toEqual(["prod", "dev"]);
+    expect(orderContexts([{ name: "dev" }, { name: "new" }, { name: "prod" }], loadContextOrder()))
+      .toEqual([{ name: "prod" }, { name: "dev" }, { name: "new" }]);
+  });
+});

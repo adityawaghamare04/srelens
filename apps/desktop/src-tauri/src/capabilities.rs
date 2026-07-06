@@ -1,0 +1,135 @@
+//! The single place the app registers every backend capability.
+//!
+//! Each capability is exposed automatically through BOTH the Tauri command
+//! bridge (for the WebView) and the MCP server (for external clients). The
+//! `every_capability_is_mcp_exposed` test enforces that guarantee.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use srelens_capability::{Capability, Registry};
+use srelens_kube::client_cache::ClientCache;
+use serde_json::json;
+
+/// Resolve kubeconfig paths: every `$KUBECONFIG` entry, else `$HOME/.kube/config`.
+pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
+    if let Some(value) = std::env::var_os("KUBECONFIG") {
+        let paths = std::env::split_paths(&value)
+            .filter(|path| !path.as_os_str().is_empty())
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            return paths;
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    vec![PathBuf::from(home).join(".kube").join("config")]
+}
+
+#[cfg(test)]
+pub fn default_kubeconfig_path() -> PathBuf {
+    default_kubeconfig_paths().into_iter().next().unwrap_or_default()
+}
+
+/// Build the registry with a freshly-created client cache. Used by the MCP
+/// stdio binary, which doesn't need to share the cache with watch tasks.
+pub fn build_registry() -> Registry {
+    build_registry_with(ClientCache::new_many(default_kubeconfig_paths()))
+}
+
+/// Build the registry using a caller-provided client cache, so the GUI can
+/// share one cache between request/response capabilities and live watches.
+pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
+    let mut reg = Registry::new();
+
+    reg.register(Capability::read_only(
+        "ping",
+        "health check; echoes the input back as { pong: <input> }",
+        |input| async move { Ok(json!({ "pong": input })) },
+    ));
+
+    reg.register(srelens_kube::contexts::list_contexts_capability(
+        cache.clone(),
+        default_kubeconfig_paths(),
+    ));
+
+    reg.register(srelens_kube::connect::cluster_info_capability(cache.clone()));
+    reg.register(srelens_kube::workloads::list_namespaces_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::workloads::list_pods_capability(cache.clone()));
+    reg.register(srelens_kube::workloads::pods_for_selector_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::logs::pod_logs_capability(cache.clone()));
+    reg.register(srelens_kube::deployments::list_deployments_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::deployments::list_replicasets_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::services::list_services_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::actions::delete_pod_capability(cache.clone()));
+    reg.register(srelens_kube::actions::evict_pod_capability(cache.clone()));
+    reg.register(srelens_kube::actions::delete_resource_capability(cache.clone()));
+    reg.register(srelens_kube::actions::scale_capability(cache.clone()));
+    reg.register(srelens_kube::actions::rollout_restart_capability(cache.clone()));
+    reg.register(srelens_kube::actions::cordon_node_capability(cache.clone()));
+    reg.register(srelens_kube::actions::drain_node_capability(cache.clone()));
+    reg.register(srelens_kube::events::list_events_capability(cache.clone()));
+    reg.register(srelens_kube::metrics::node_metrics_capability(cache.clone()));
+    reg.register(srelens_kube::metrics::pod_metrics_capability(cache.clone()));
+    reg.register(srelens_kube::nodes::list_nodes_capability(cache.clone()));
+    reg.register(srelens_kube::manifest::get_manifest_capability(cache.clone()));
+    reg.register(srelens_kube::manifest::get_object_capability(cache.clone()));
+    reg.register(srelens_kube::manifest::apply_manifest_capability(cache.clone()));
+    reg.register(srelens_kube::manifest::validate_manifest_capability(cache.clone()));
+    reg.register(srelens_kube::schema::open_api_schema_capability(cache.clone()));
+    reg.register(srelens_kube::crds::list_crds_capability(cache.clone()));
+    reg.register(srelens_kube::crds::list_custom_resource_capability(cache.clone()));
+    reg.register(srelens_kube::helm::list_helm_releases_capability(cache.clone()));
+    reg.register(srelens_kube::helm::get_helm_release_capability(cache.clone()));
+    reg.register(srelens_kube::manifest::list_resource_capability(cache));
+
+    reg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use srelens_mcp::completeness::assert_every_capability_has_a_tool;
+    use srelens_mcp::McpServer;
+    use std::sync::Arc;
+
+    #[test]
+    fn every_capability_is_mcp_exposed() {
+        let reg = build_registry();
+        let server = McpServer::new(Arc::new(reg.clone()));
+        assert_eq!(assert_every_capability_has_a_tool(&reg, &server), Ok(()));
+    }
+
+    #[test]
+    fn registers_core_capabilities() {
+        let reg = build_registry();
+        let mut ids = reg.ids();
+        ids.sort();
+        assert!(ids.contains(&"ping"));
+        assert!(ids.contains(&"k8s.listContexts"));
+        assert!(ids.contains(&"k8s.clusterInfo"));
+    }
+
+    #[tokio::test]
+    async fn ping_echoes_input() {
+        let reg = build_registry();
+        let out = reg.invoke("ping", json!("hello")).await.unwrap();
+        assert_eq!(out, json!({ "pong": "hello" }));
+    }
+
+    #[test]
+    fn kubeconfig_path_prefers_env() {
+        // Default falls back to a path under HOME when KUBECONFIG is unset.
+        let path = default_kubeconfig_path();
+        assert!(path.to_string_lossy().contains(".kube/config") || std::env::var("KUBECONFIG").is_ok());
+    }
+}

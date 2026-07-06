@@ -1,0 +1,176 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { SettingsView } from "./SettingsView";
+import { DEFAULT_WORKSPACE_LAYOUT } from "../lib/settings";
+
+const fileMocks = vi.hoisted(() => ({
+  pickKubeconfigFiles: vi.fn(),
+  savePastedKubeconfig: vi.fn(),
+}));
+
+vi.mock("../lib/files", () => fileMocks);
+
+vi.mock("../lib/clusters", () => ({
+  listContexts: () =>
+    Promise.resolve({
+      contexts: [
+        { name: "prod-eu", cluster: "production", server: "https://prod.example", isCurrent: true },
+        { name: "staging", cluster: "staging", server: "https://staging.example", isCurrent: false },
+      ],
+    }),
+}));
+
+describe("SettingsView", () => {
+  it("separates settings and edits context identity", async () => {
+    const onContextProfilesChange = vi.fn();
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={onContextProfilesChange}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("Choose a palette and display mode. Changes apply immediately.")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    const displayName = await screen.findByRole("textbox", { name: "Display name for prod-eu" });
+    fireEvent.change(displayName, { target: { value: "Production Europe" } });
+    expect(onContextProfilesChange).toHaveBeenCalledWith({
+      "prod-eu": { displayName: "Production Europe" },
+    });
+  });
+
+  it("accepts a custom logo URL", async () => {
+    const onContextProfilesChange = vi.fn();
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{ "prod-eu": { logo: "custom" } }}
+        onContextProfilesChange={onContextProfilesChange}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    const url = await screen.findByRole("textbox", { name: "Custom logo URL for prod-eu" });
+    fireEvent.change(url, { target: { value: "https://example.com/logo.png" } });
+    expect(onContextProfilesChange).toHaveBeenCalledWith({
+      "prod-eu": { logo: "custom", logoUrl: "https://example.com/logo.png" },
+    });
+  });
+
+  it("moves contexts in the persisted order", async () => {
+    const onContextOrderChange = vi.fn();
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={onContextOrderChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    const moveDown = await screen.findByRole("button", { name: "Move prod-eu down" });
+    fireEvent.click(moveDown);
+    expect(onContextOrderChange).toHaveBeenCalledWith(["staging", "prod-eu"]);
+  });
+
+  it("reorders contexts using pointer dragging on the grip", async () => {
+    const onContextOrderChange = vi.fn();
+    const { container } = render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={onContextOrderChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await screen.findByText("Context identity");
+    const rows = container.querySelectorAll<HTMLButtonElement>(".fl-context-manager__list > div > button");
+    const grip = rows[0].querySelector<HTMLElement>(".fl-context-manager__grip")!;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => rows[1]),
+    });
+    fireEvent.pointerDown(grip, { pointerId: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 10, clientY: 50 });
+    fireEvent.pointerUp(grip, { pointerId: 1, clientX: 10, clientY: 50 });
+    expect(onContextOrderChange).toHaveBeenCalledWith(["staging", "prod-eu"]);
+    Reflect.deleteProperty(document, "elementFromPoint");
+  });
+
+  it("saves and adds a pasted kubeconfig", async () => {
+    fileMocks.savePastedKubeconfig.mockResolvedValue("/app/kubeconfigs/team.yaml");
+    const onKubeconfigFilesChange = vi.fn();
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={onKubeconfigFilesChange}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Paste" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Pasted kubeconfig name" }), {
+      target: { value: "Team" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Kubeconfig YAML" }), {
+      target: { value: "apiVersion: v1\nkind: Config\ncontexts: []" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add kubeconfig" }));
+    expect(fileMocks.savePastedKubeconfig).toHaveBeenCalledWith(
+      "apiVersion: v1\nkind: Config\ncontexts: []",
+      "Team",
+    );
+    await waitFor(() =>
+      expect(onKubeconfigFilesChange).toHaveBeenCalledWith(["/app/kubeconfigs/team.yaml"]),
+    );
+  });
+});

@@ -1,0 +1,11 @@
+{
+  "name": "srelens-tauri",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @srelens/desktop tauri dev",
+    "tauri": "pnpm --filter @srelens/desktop tauri",
+    "build": "pnpm --filter @srelens/desktop build",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": { "turbo": "^2.0.0" }
+}
