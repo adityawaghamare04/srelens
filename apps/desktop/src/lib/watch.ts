@@ -29,7 +29,11 @@ export async function watchResource(
   onRows: (rows: Array<{ name: string }>) => void,
   onStatus?: (status: WatchStatus) => void,
 ): Promise<WatchHandle> {
-  const channel = `watch:${kind}:${context}:${namespace}:${++watchSeq}`;
+  // Tauri event names allow only [alphanumeric, -, /, :, _], but a context name
+  // can contain other characters (e.g. the "@" in "admin@cluster"), which makes
+  // `listen` throw. Sanitize to the allowed set; the `watchSeq` suffix keeps
+  // every channel unique regardless of any collisions the replacement introduces.
+  const channel = `watch:${kind}:${context}:${namespace}:${++watchSeq}`.replace(/[^a-zA-Z0-9/:_-]/g, "_");
   const dispose = await subscribe(channel, (payload) => {
     // The backend emits either a snapshot (array) or a `{status}` object.
     if (Array.isArray(payload)) {
