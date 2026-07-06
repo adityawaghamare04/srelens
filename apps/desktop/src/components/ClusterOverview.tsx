@@ -6,6 +6,7 @@ import { listNodes, listResource, listEvents } from "../lib/manifest";
 import {
   DashboardSegmentBar,
   EmptyState,
+  ErrorState,
   MetricTile,
   PageHeader,
   PageShell,
@@ -13,6 +14,7 @@ import {
   Spinner,
   StatusMeter,
 } from "../ui";
+import { describeError } from "../lib/errors";
 import type { ResourceKind } from "./ResourceBrowser";
 
 interface Stats {
@@ -173,7 +175,10 @@ export function ClusterOverview({
     setReloadKey((key) => key + 1);
   }
 
-  if (error && !stats) return <p className="fl-error-text">Error: {error}</p>;
+  if (error && !stats) {
+    const friendly = describeError(error);
+    return <ErrorState title={friendly.title} detail={friendly.detail} onRetry={refresh} />;
+  }
   if (!stats) return <Spinner label="Loading overview" />;
 
   const nodeReadiness = percent(stats.nodes.ready, stats.nodes.total);

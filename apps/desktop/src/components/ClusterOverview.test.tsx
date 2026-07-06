@@ -55,3 +55,28 @@ describe("ClusterOverview cache", () => {
     await waitFor(() => expect(mocks.listNodes).toHaveBeenCalledTimes(2));
   });
 });
+
+describe("ClusterOverview error handling", () => {
+  it("renders a friendly connectivity message on a connection timeout", async () => {
+    mocks.listNamespaces.mockResolvedValue({ error: "handler error: list namespaces timed out" });
+
+    render(<ClusterOverview context="kind-unreachable" />);
+
+    // Friendly title, not the raw backend string.
+    expect(await screen.findByText("Can't reach the cluster")).toBeDefined();
+    expect(screen.getByText(/didn't respond in time/)).toBeDefined();
+    expect(screen.queryByText(/handler error/)).toBeNull();
+  });
+
+  it("retries the load when the user clicks Retry", async () => {
+    mocks.listNamespaces.mockResolvedValueOnce({
+      error: "handler error: list namespaces timed out",
+    });
+
+    render(<ClusterOverview context="kind-flaky" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    // Second attempt succeeds with the default healthy mocks.
+    expect(await screen.findAllByText("1 / 1")).toHaveLength(2);
+  });
+});

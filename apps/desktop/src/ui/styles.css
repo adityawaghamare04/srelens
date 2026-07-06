@@ -2188,6 +2188,34 @@ body {
   padding: 12px;
   color: var(--fl-color-danger);
 }
+.fl-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 460px;
+  margin: 32px auto;
+  padding: 24px;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-lg);
+  background: var(--fl-color-surface);
+  text-align: center;
+}
+.fl-error-state__icon {
+  width: 28px;
+  height: 28px;
+  color: var(--fl-color-danger);
+}
+.fl-error-state__title {
+  color: var(--fl-color-text);
+  font-size: 14px;
+}
+.fl-error-state__detail {
+  margin: 0;
+  color: var(--fl-color-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
 
 .fl-settings-page {
   overflow: hidden;
