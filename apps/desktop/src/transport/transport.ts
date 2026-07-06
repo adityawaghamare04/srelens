@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 /** A function that invokes a backend capability — injectable for testing. */
 export type Invoker = <T>(id: string, input?: unknown) => Promise<T>;
@@ -37,4 +40,19 @@ export async function subscribe(
   handler: (payload: unknown) => void,
 ): Promise<() => void> {
   return listen(channel, (event) => handler(event.payload));
+}
+
+/** The updater plugin's check — talks Tauri IPC internally. */
+export async function checkForAppUpdate(): Promise<Update | null> {
+  return check();
+}
+
+/** Restart the app (used after an update is installed). */
+export async function relaunchApp(): Promise<void> {
+  return relaunch();
+}
+
+/** The running app's bundle version. */
+export async function appVersion(): Promise<string> {
+  return getVersion();
 }

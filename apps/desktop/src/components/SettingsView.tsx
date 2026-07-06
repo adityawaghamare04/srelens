@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Boxes,
   Check,
+  Download,
   LayoutPanelLeft,
   Monitor,
   Moon,
@@ -41,6 +42,8 @@ import {
 } from "../lib/settings";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { pickKubeconfigFiles, savePastedKubeconfig } from "../lib/files";
+import { checkForUpdate, type AvailableUpdate } from "../lib/updater";
+import { appVersion, relaunchApp } from "../transport/transport";
 
 const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string; icon: React.ElementType }> = [
   { mode: "dark", label: "Dark", description: "Low-light operational workspace", icon: Moon },
@@ -48,7 +51,16 @@ const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string;
   { mode: "system", label: "System", description: "Follow the OS appearance", icon: Monitor },
 ];
 
-type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts";
+type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts" | "updates";
+
+type UpdatePhase =
+  | { phase: "idle" }
+  | { phase: "checking" }
+  | { phase: "uptodate" }
+  | { phase: "available"; update: AvailableUpdate }
+  | { phase: "downloading"; update: AvailableUpdate; percent: number | null }
+  | { phase: "ready" }
+  | { phase: "error"; message: string };
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSection;
@@ -60,6 +72,7 @@ const SETTINGS_SECTIONS: Array<{
   { id: "layout", label: "Layout", description: "Panel dimensions", icon: LayoutPanelLeft },
   { id: "kubernetes", label: "Kubernetes", description: "Workspace defaults", icon: Network },
   { id: "contexts", label: "Contexts", description: "Names, logos and colors", icon: Boxes },
+  { id: "updates", label: "Updates", description: "App version and updates", icon: Download },
 ];
 
 const CONTEXT_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#16a34a", "#0891b2", "#475569"];
@@ -105,8 +118,44 @@ export function SettingsView({
   const [pasteKubeconfigOpen, setPasteKubeconfigOpen] = useState(false);
   const [pastedKubeconfig, setPastedKubeconfig] = useState("");
   const [pastedKubeconfigName, setPastedKubeconfigName] = useState("");
+  const [updateState, setUpdateState] = useState<UpdatePhase>({ phase: "idle" });
+  const [currentVersion, setCurrentVersion] = useState("");
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    appVersion()
+      .then((version) => {
+        if (active) setCurrentVersion(version);
+      })
+      .catch(() => {
+        /* version display is cosmetic — never block settings on it */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const runUpdateCheck = async () => {
+    setUpdateState({ phase: "checking" });
+    try {
+      const update = await checkForUpdate();
+      setUpdateState(update ? { phase: "available", update } : { phase: "uptodate" });
+    } catch (cause) {
+      setUpdateState({ phase: "error", message: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const installUpdate = async (update: AvailableUpdate) => {
+    setUpdateState({ phase: "downloading", update, percent: null });
+    try {
+      await update.download((percent) => setUpdateState({ phase: "downloading", update, percent }));
+      setUpdateState({ phase: "ready" });
+    } catch (cause) {
+      setUpdateState({ phase: "error", message: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -662,6 +711,60 @@ export function SettingsView({
                   )}
                 </div>
               )}
+            </SectionPanel>
+          )}
+
+          {section === "updates" && (
+            <SectionPanel title="Updates" description="Check for and install new versions of srelens.">
+              <div className="fl-settings-update">
+                <div className="fl-settings-update__version">
+                  <small>Current version</small>
+                  <code>{currentVersion || "unknown"}</code>
+                </div>
+
+                {(updateState.phase === "idle" ||
+                  updateState.phase === "checking" ||
+                  updateState.phase === "uptodate" ||
+                  updateState.phase === "error") && (
+                  <Button onClick={() => void runUpdateCheck()} disabled={updateState.phase === "checking"}>
+                    {updateState.phase === "checking" ? "Checking…" : "Check for updates"}
+                  </Button>
+                )}
+
+                {updateState.phase === "uptodate" && <p className="fl-settings-update__status">srelens is up to date.</p>}
+                {updateState.phase === "error" && (
+                  <p className="fl-settings-update__status" role="alert">{updateState.message}</p>
+                )}
+
+                {updateState.phase === "available" && (
+                  <div className="fl-settings-update__offer">
+                    <p>
+                      Version <strong>{updateState.update.version}</strong> is available.
+                    </p>
+                    {updateState.update.notes && (
+                      <pre className="fl-settings-update__notes">{updateState.update.notes}</pre>
+                    )}
+                    <Button onClick={() => void installUpdate(updateState.update)}>
+                      <Download data-icon="inline-start" /> Download &amp; install
+                    </Button>
+                  </div>
+                )}
+
+                {updateState.phase === "downloading" && (
+                  <p className="fl-settings-update__status" role="status">
+                    Downloading{updateState.percent != null ? ` — ${updateState.percent}%` : "…"}
+                  </p>
+                )}
+
+                {updateState.phase === "ready" && (
+                  <div className="fl-settings-update__offer">
+                    <p>Update installed. Restart to finish.</p>
+                    <Button onClick={() => void relaunchApp()}>
+                      <RotateCcw data-icon="inline-start" /> Restart srelens
+                    </Button>
+                  </div>
+                )}
+              </div>
             </SectionPanel>
           )}
         </div>

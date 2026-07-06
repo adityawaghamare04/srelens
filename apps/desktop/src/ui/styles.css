@@ -2379,6 +2379,47 @@ body {
   font-size: 13px;
   font-weight: 600;
 }
+.fl-settings-update {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  max-width: 460px;
+}
+.fl-settings-update__version {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.fl-settings-update__version small {
+  color: var(--fl-color-text-muted);
+}
+.fl-settings-update__status {
+  margin: 0;
+  color: var(--fl-color-text-muted);
+  font-size: 13px;
+}
+.fl-settings-update__status[role="alert"] {
+  color: var(--fl-color-danger, #e5484d);
+}
+.fl-settings-update__offer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.fl-settings-update__offer p {
+  margin: 0;
+}
+.fl-settings-update__notes {
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--fl-color-border-faint);
+  border-radius: var(--fl-radius-md);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
 .fl-settings-width-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
