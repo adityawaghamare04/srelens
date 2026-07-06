@@ -30,5 +30,10 @@ srelens-mcp = { path = "../../../crates/mcp" }
 srelens-kube = { path = "../../../crates/kube" }
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "macros"] }
 
+# Auto-update is desktop-only (mobile stores handle their own updates).
+[target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
