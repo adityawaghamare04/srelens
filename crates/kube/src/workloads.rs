@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListNamespacesIn {
@@ -63,7 +63,7 @@ pub fn list_namespaces_capability(cache: Arc<ClientCache>) -> Capability {
                     .await
                     .map_err(CapabilityError::Handler)?;
                 let api: Api<Namespace> = Api::all(client);
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("list namespaces timed out".into()))?
                     .map_err(handler_err)?;
@@ -131,7 +131,7 @@ pub fn list_pods_capability(cache: Arc<ClientCache>) -> Capability {
                     .await
                     .map_err(CapabilityError::Handler)?;
                 let api: Api<Pod> = crate::scoped_api(client, &input.namespace);
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("list pods timed out".into()))?
                     .map_err(handler_err)?;
@@ -179,7 +179,7 @@ pub fn pods_for_selector_capability(cache: Arc<ClientCache>) -> Capability {
                     .map_err(CapabilityError::Handler)?;
                 let api: Api<Pod> = crate::scoped_api(client, &input.namespace);
                 let params = ListParams::default().labels(&label_selector(&input.selector));
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&params))
+                let list = tokio::time::timeout(request_timeout(), api.list(&params))
                     .await
                     .map_err(|_| CapabilityError::Handler("list pods timed out".into()))?
                     .map_err(handler_err)?;

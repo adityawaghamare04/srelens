@@ -17,9 +17,40 @@ import {
   saveContextOrder,
   loadUpdateChannel,
   saveUpdateChannel,
+  REQUEST_TIMEOUT,
+  clampTimeoutSecs,
+  getRequestTimeoutSecs,
+  setRequestTimeoutSecs,
 } from "./settings";
 
 beforeEach(() => localStorage.clear());
+
+describe("request timeout setting", () => {
+  it("defaults to the documented default when unset", () => {
+    expect(getRequestTimeoutSecs()).toBe(REQUEST_TIMEOUT.DEFAULT);
+  });
+
+  it("clamps values to the supported range", () => {
+    expect(clampTimeoutSecs(100)).toBe(REQUEST_TIMEOUT.MAX);
+    expect(clampTimeoutSecs(0)).toBe(REQUEST_TIMEOUT.MIN);
+    expect(clampTimeoutSecs(-5)).toBe(REQUEST_TIMEOUT.MIN);
+    expect(clampTimeoutSecs(15)).toBe(15);
+    expect(clampTimeoutSecs("nonsense")).toBe(REQUEST_TIMEOUT.DEFAULT);
+  });
+
+  it("persists and reloads a clamped value", () => {
+    expect(setRequestTimeoutSecs(25)).toBe(25);
+    expect(getRequestTimeoutSecs()).toBe(25);
+    // Out-of-range writes are clamped on the way in.
+    expect(setRequestTimeoutSecs(999)).toBe(REQUEST_TIMEOUT.MAX);
+    expect(getRequestTimeoutSecs()).toBe(REQUEST_TIMEOUT.MAX);
+  });
+
+  it("falls back to the default when stored data is corrupt", () => {
+    localStorage.setItem("srelens.requestTimeoutSecs", "{not json");
+    expect(getRequestTimeoutSecs()).toBe(REQUEST_TIMEOUT.DEFAULT);
+  });
+});
 
 describe("settings persistence", () => {
   it("round-trips per-cluster namespaces", () => {

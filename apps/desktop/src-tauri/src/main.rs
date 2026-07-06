@@ -4,6 +4,10 @@
 use std::sync::Arc;
 
 fn main() {
+    // Apply the SRELENS_TIMEOUT_SECS override up front so every mode — GUI, MCP
+    // stdio, and MCP HTTP — honors it (the GUI can adjust it further at runtime).
+    srelens_kube::connect::init_timeout_from_env();
+
     let args: Vec<String> = std::env::args().collect();
     // `--mcp-stdio` / `--mcp-http [addr]` run the MCP server instead of the GUI,
     // so external MCP clients/agents can drive every capability.

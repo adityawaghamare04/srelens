@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 
 const DEFAULT_TAIL_LINES: i64 = 200;
 
@@ -40,7 +40,7 @@ where
         tail_lines: Some(tail_lines),
         ..Default::default()
     };
-    let reader = tokio::time::timeout(CONNECT_TIMEOUT, api.log_stream(&pod, &params))
+    let reader = tokio::time::timeout(request_timeout(), api.log_stream(&pod, &params))
         .await
         .map_err(|_| "open log stream timed out".to_string())?
         .map_err(|e| e.to_string())?;
@@ -131,7 +131,7 @@ pub fn pod_logs_capability(cache: Arc<ClientCache>) -> Capability {
                     tail_lines: Some(input.tail_lines.unwrap_or(DEFAULT_TAIL_LINES)),
                     ..Default::default()
                 };
-                let logs = tokio::time::timeout(CONNECT_TIMEOUT, api.logs(&input.pod, &params))
+                let logs = tokio::time::timeout(request_timeout(), api.logs(&input.pod, &params))
                     .await
                     .map_err(|_| CapabilityError::Handler("fetch logs timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
