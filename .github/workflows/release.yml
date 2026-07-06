@@ -190,11 +190,22 @@ jobs:
           ' "$V"
           echo "Built version: $V"
 
-      # Notarization uses an App Store Connect API key (.p8). Materialize it to
-      # a file on the runner; tauri-action reads APPLE_API_KEY_PATH from there.
-      - name: Prepare Apple API key (macOS signing)
+      # Export the Apple signing env ONLY when the full secret set exists.
+      # Tauri treats a *defined but empty* APPLE_CERTIFICATE as "please sign"
+      # and then fails importing the empty cert — so these variables must be
+      # absent (not empty) on unsigned builds.
+      - name: Enable macOS signing (when secrets are configured)
         if: matrix.platform == 'macos-latest' && env.ENABLE_MAC_SIGNING == 'true'
         run: |
+          {
+            echo "APPLE_CERTIFICATE<<__EOF__";          echo "${{ secrets.APPLE_CERTIFICATE }}";          echo "__EOF__"
+            echo "APPLE_CERTIFICATE_PASSWORD<<__EOF__"; echo "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"; echo "__EOF__"
+            echo "APPLE_SIGNING_IDENTITY<<__EOF__";     echo "${{ secrets.APPLE_SIGNING_IDENTITY }}";     echo "__EOF__"
+            echo "APPLE_API_ISSUER<<__EOF__";           echo "${{ secrets.APPLE_API_ISSUER }}";           echo "__EOF__"
+            echo "APPLE_API_KEY<<__EOF__";              echo "${{ secrets.APPLE_API_KEY }}";              echo "__EOF__"
+          } >> "$GITHUB_ENV"
+          # Notarization uses an App Store Connect API key (.p8) materialized
+          # to a file; tauri-action reads APPLE_API_KEY_PATH from there.
           echo "${{ secrets.APPLE_API_KEY_P8 }}" | base64 --decode > "$RUNNER_TEMP/apple_api_key.p8"
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/apple_api_key.p8" >> "$GITHUB_ENV"
 
@@ -210,16 +221,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS code signing + notarization — inactive until the matching
-          # repo secrets are set, so non-mac and unsigned builds are unaffected.
-          # Gated on ENABLE_MAC_SIGNING so a partial secret set (e.g. cert
-          # without its password) produces an unsigned build, not a red run.
-          APPLE_CERTIFICATE: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_API_ISSUER: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_API_ISSUER || '' }}
-          APPLE_API_KEY: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_API_KEY || '' }}
-          # APPLE_API_KEY_PATH is exported by the prepare step above (macOS only).
+          # Apple signing env (APPLE_CERTIFICATE etc.) is exported to
+          # GITHUB_ENV by the step above only when signing is enabled —
+          # defining the variables empty here would trigger Tauri's signing
+          # path, which then fails importing an empty certificate.
         with:
           projectPath: apps/desktop
           tagName: ${{ env.REL_TAG }}

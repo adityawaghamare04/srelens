@@ -15,56 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  # TEMPORARY: validates the Apple signing secrets on a mac runner without a
-  # full release build. Prints only lengths, file types, and pass/fail — never
-  # secret values. Remove once macOS signing is green.
-  diagnose-signing:
-    if: github.event_name == 'push' && github.ref_name == 'main'
-    runs-on: macos-latest
-    continue-on-error: true
-    env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-    steps:
-      - name: Check secret presence and shape
-        run: |
-          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY APPLE_API_KEY_P8; do
-            len=$(printf '%s' "${!v}" | wc -c | tr -d ' ')
-            echo "$v: length=$len"
-          done
-      - name: Decode certificate
-        run: |
-          if printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > /tmp/cert.p12 2>/dev/null; then
-            echo "base64 decode: OK ($(stat -f%z /tmp/cert.p12) bytes)"
-            file /tmp/cert.p12
-          else
-            echo "::error::APPLE_CERTIFICATE is not valid base64 — re-export the .p12 and set the secret to: base64 -i cert.p12 | pbcopy"
-            exit 1
-          fi
-      - name: Test keychain import with the given password
-        run: |
-          security create-keychain -p tmpjqx tmp.keychain
-          if security import /tmp/cert.p12 -k tmp.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -A -T /usr/bin/codesign 2>err.txt; then
-            echo "keychain import: OK"
-            security find-identity -v tmp.keychain || true
-          else
-            echo "keychain import: FAILED"
-            cat err.txt
-            echo "::error::Import failed — either the .p12 is corrupt or APPLE_CERTIFICATE_PASSWORD does not match it."
-            exit 1
-          fi
-      - name: Check API key decodes
-        run: |
-          if printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > /tmp/key.p8 2>/dev/null && head -1 /tmp/key.p8 | grep -q 'BEGIN PRIVATE KEY'; then
-            echo "APPLE_API_KEY_P8: decodes to a PEM private key — OK"
-          else
-            echo "::warning::APPLE_API_KEY_P8 does not decode to a PEM key — notarization will fail (signing may still work)."
-          fi
-
   frontend:
     name: frontend
     runs-on: ubuntu-22.04
