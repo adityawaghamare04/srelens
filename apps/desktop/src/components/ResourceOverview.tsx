@@ -161,7 +161,7 @@ function Chips({ map }: { map?: Record<string, string> }) {
 }
 
 /**
- * A count summary that expands to its full content on click — the Srelens
+ * A count summary that expands to its full content on click — the srelens
  * idiom for long label/annotation/toleration lists that would dominate the
  * panel ("6 Labels ⌄").
  */
@@ -294,7 +294,7 @@ function phaseKind(phase: string): StatusKind {
 }
 
 /* ------------------------------------------------------------------ */
-/* Pod detail (rich Srelens presentation)                              */
+/* Pod detail (rich srelens presentation)                              */
 /* ------------------------------------------------------------------ */
 
 const VOLUME_TYPE_LABELS: Record<string, string> = {
@@ -904,7 +904,7 @@ function WorkloadDetailView({
   const unavailable = num(status.unavailableReplicas);
   const replicaText = `${desired} desired, ${updated} updated, ${total} total, ${available} available, ${unavailable} unavailable`;
 
-  // Srelens shows "Running" once the workload is fully available.
+  // srelens shows "Running" once the workload is fully available.
   const running = desired > 0 && available >= desired;
   const phase = running ? "Running" : "Pending";
 

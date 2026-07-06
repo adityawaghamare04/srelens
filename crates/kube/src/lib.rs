@@ -1,4 +1,4 @@
-//! Kubernetes integration for the Srelens core: kubeconfig discovery, the
+//! Kubernetes integration for the srelens core: kubeconfig discovery, the
 //! cluster model, and kube-related capabilities.
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
@@ -6,7 +6,7 @@ use k8s_openapi::chrono::Utc;
 use kube::core::NamespaceResourceScope;
 use kube::{Api, Client, Resource};
 
-/// Format a duration (seconds) as a compact Srelens age string (5s, 3m,
+/// Format a duration (seconds) as a compact srelens age string (5s, 3m,
 /// 2h, 4d, 1y).
 pub(crate) fn format_age(secs: i64) -> String {
     let s = secs.max(0);

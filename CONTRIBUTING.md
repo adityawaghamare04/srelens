@@ -1,6 +1,6 @@
-# Contributing to SRELens
+# Contributing to srelens
 
-Thanks for your interest! SRELens is in early, active development, so expect fast movement and breaking changes.
+Thanks for your interest! srelens is in early, active development, so expect fast movement and breaking changes.
 
 ## Setup
 

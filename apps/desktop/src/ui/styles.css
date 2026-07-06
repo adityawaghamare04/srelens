@@ -1,7 +1,7 @@
 /* Design-system stylesheet. Imported once via the `ui` barrel. */
 
 :root {
-  /* Srelens dark palette. */
+  /* srelens dark palette. */
   --fl-color-bg: #1e2124;          /* main content background */
   --fl-color-surface: #262b2f;     /* content surfaces, drawer, panels */
   --fl-color-surface-alt: #383c42; /* row hover / selected */

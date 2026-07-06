@@ -10,7 +10,7 @@ import { contextDisplayName, orderContexts, type ContextProfiles } from "../lib/
 const EMPTY_LIST: string[] = [];
 
 /**
- * Far-left vertical strip of Srelens cluster avatars. Click an
+ * Far-left vertical strip of srelens cluster avatars. Click an
  * avatar to enter that cluster.
  */
 export function ClusterHotbar({

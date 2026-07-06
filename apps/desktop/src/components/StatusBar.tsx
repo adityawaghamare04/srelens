@@ -37,7 +37,7 @@ export function StatusBar({
         <span className="tabular-nums">
           {tabCount} {tabCount === 1 ? "tab" : "tabs"}
         </span>
-        <span className="opacity-70">Srelens · Tauri</span>
+        <span className="opacity-70">srelens · Tauri</span>
       </span>
     </footer>
   );

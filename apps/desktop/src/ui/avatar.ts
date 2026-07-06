@@ -1,6 +1,6 @@
 /**
  * Deterministic avatar colour + initials for a cluster name — used by the
- * far-left Srelens cluster hotbar.
+ * far-left srelens cluster hotbar.
  */
 
 // A pleasant, evenly-spread palette for cluster avatars.

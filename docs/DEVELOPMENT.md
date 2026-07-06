@@ -1,6 +1,6 @@
 # Developer guide
 
-This guide covers everything you need to build, test, and extend SRELens.
+This guide covers everything you need to build, test, and extend srelens.
 
 ## Prerequisites
 

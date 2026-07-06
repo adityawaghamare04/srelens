@@ -22,7 +22,7 @@ export const THEME_OPTIONS: ThemeOption[] = [
   },
   {
     id: "srelens",
-    name: "Srelens",
+    name: "srelens",
     description: "Teal infrastructure console",
     preview: "#25c7bd",
   },

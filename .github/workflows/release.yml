@@ -113,9 +113,10 @@ jobs:
     permissions:
       contents: write
     env:
-      # macOS signing + notarization switch on automatically once the Apple
-      # secrets are present; builds stay unsigned until then.
-      ENABLE_MAC_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      # macOS signing + notarization switch on automatically once the FULL
+      # Apple secret set is present; with anything less the build stays
+      # unsigned rather than failing on a partial configuration.
+      ENABLE_MAC_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -203,7 +204,7 @@ jobs:
         shell: bash
         run: |
           echo "REL_TAG=srelens-v${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
-          echo "REL_NAME=SRELens v${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
+          echo "REL_NAME=srelens v${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
 
       - name: Build app & publish release
         uses: tauri-apps/tauri-action@v0
@@ -211,11 +212,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code signing + notarization — inactive until the matching
           # repo secrets are set, so non-mac and unsigned builds are unaffected.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          # Gated on ENABLE_MAC_SIGNING so a partial secret set (e.g. cert
+          # without its password) produces an unsigned build, not a red run.
+          APPLE_CERTIFICATE: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ env.ENABLE_MAC_SIGNING == 'true' && secrets.APPLE_API_KEY || '' }}
           # APPLE_API_KEY_PATH is exported by the prepare step above (macOS only).
         with:
           projectPath: apps/desktop

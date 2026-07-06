@@ -87,7 +87,7 @@ export function LandingPage({
               <img src={srelensMark} alt="" />
             </span>
             <span>
-              <strong>Srelens</strong>
+              <strong>srelens</strong>
               <small>Kubernetes desktop workspace</small>
             </span>
           </div>

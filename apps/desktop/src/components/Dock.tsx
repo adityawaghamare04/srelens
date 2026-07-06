@@ -24,7 +24,7 @@ function sessionLabel(s: DockSession): string {
 }
 
 /**
- * Srelens bottom dock: a resizable panel with a tab per session —
+ * srelens bottom dock: a resizable panel with a tab per session —
  * in-pod shells (kube-rs exec) and pod/workload logs both live here.
  */
 export function Dock({

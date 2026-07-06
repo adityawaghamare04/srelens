@@ -1,5 +1,5 @@
 /**
- * Srelens design system — the reusable component layer.
+ * srelens design system — the reusable component layer.
  *
  * Import primitives from here anywhere in the app:
  *   import { Button, Panel, Table } from "../ui";

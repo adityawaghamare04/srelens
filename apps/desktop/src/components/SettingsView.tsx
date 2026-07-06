@@ -426,7 +426,7 @@ export function SettingsView({
                           aria-label="Pasted kubeconfig name"
                         />
                       </label>
-                      <span>Saved securely in the Srelens app configuration directory.</span>
+                      <span>Saved securely in the srelens app configuration directory.</span>
                     </div>
                     <textarea
                       value={pastedKubeconfig}

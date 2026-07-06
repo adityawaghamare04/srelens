@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/desktop/src/assets/srelens-logo.svg" alt="SRELens" width="420" />
+  <img src="apps/desktop/src/assets/srelens-logo.svg" alt="srelens" width="420" />
 </p>
 
 <p align="center">
@@ -9,9 +9,9 @@
 
 ---
 
-## What is SRELens?
+## What is srelens?
 
-SRELens is a desktop workspace for operating Kubernetes clusters, inspired by
+srelens is a desktop workspace for operating Kubernetes clusters, inspired by
 [Freelens](https://github.com/freelensapp/freelens)/Lens but rebuilt from scratch on a modern stack:
 
 - **Tauri v2 instead of Electron** — system WebView, small binary, low memory footprint.
@@ -91,4 +91,4 @@ docs/                    Project documentation
 
 ## Project status
 
-SRELens is in **early, active development**. The read/browse/operate core described above works end-to-end; extension support, broader resource coverage, and packaging polish are on the roadmap. Expect breaking changes.
+srelens is in **early, active development**. The read/browse/operate core described above works end-to-end; extension support, broader resource coverage, and packaging polish are on the roadmap. Expect breaking changes.

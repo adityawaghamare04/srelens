@@ -1,7 +1,7 @@
 [package]
 name = "srelens-desktop"
 version = "0.1.0"
-description = "Srelens Kubernetes desktop workspace"
+description = "srelens Kubernetes desktop workspace"
 edition = "2021"
 rust-version = "1.77.2"
 
