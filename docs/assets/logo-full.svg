@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" fill="none">
+  <defs>
+    <linearGradient id="lg" x1="8" y1="56" x2="56" y2="8" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset=".55" stop-color="#e457c2"/>
+      <stop offset="1" stop-color="#fb923c"/>
+    </linearGradient>
+    <linearGradient id="lg2" x1="12" y1="32" x2="52" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c4a7ff"/>
+      <stop offset="1" stop-color="#ff8de0"/>
+    </linearGradient>
+    <linearGradient id="lgw" x1="150" y1="32" x2="290" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset=".6" stop-color="#f472d0"/>
+      <stop offset="1" stop-color="#fb923c"/>
+    </linearGradient>
+    <radialGradient id="glass" cx=".38" cy=".32" r=".9">
+      <stop offset="0" stop-color="#241a3d"/>
+      <stop offset="1" stop-color="#0b0816"/>
+    </radialGradient>
+  </defs>
+  <path d="M32 3.5 56.5 17.6v28.3L32 60.5 7.5 45.9V17.6Z"
+        fill="url(#glass)" stroke="url(#lg)" stroke-width="3.2" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="15.5" stroke="url(#lg)" stroke-width="2.6"/>
+  <path d="M14 32h8.5l3-6.5 5 13.5 5.5-19 4.5 12h9.5"
+        stroke="url(#lg2)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="50" cy="32" r="2.6" fill="#ff8de0"/>
+  <text x="72" y="43" font-family="'Space Grotesk','Inter',system-ui,sans-serif" font-size="32" font-weight="700" letter-spacing="-.5">
+    <tspan fill="#f0ecfa">sre</tspan><tspan fill="url(#lgw)">lens</tspan>
+  </text>
+</svg>
