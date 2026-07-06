@@ -15,6 +15,8 @@ import {
   loadContextOrder,
   orderContexts,
   saveContextOrder,
+  loadUpdateChannel,
+  saveUpdateChannel,
 } from "./settings";
 
 beforeEach(() => localStorage.clear());
@@ -69,5 +71,16 @@ describe("settings persistence", () => {
     expect(loadContextOrder()).toEqual(["prod", "dev"]);
     expect(orderContexts([{ name: "dev" }, { name: "new" }, { name: "prod" }], loadContextOrder()))
       .toEqual([{ name: "prod" }, { name: "dev" }, { name: "new" }]);
+  });
+
+  it("persists the update channel and defaults to stable", () => {
+    expect(loadUpdateChannel()).toBe("stable");
+    saveUpdateChannel("dev");
+    expect(loadUpdateChannel()).toBe("dev");
+  });
+
+  it("falls back to stable for unknown stored channels", () => {
+    localStorage.setItem("srelens.updateChannel", "nightly");
+    expect(loadUpdateChannel()).toBe("stable");
   });
 });

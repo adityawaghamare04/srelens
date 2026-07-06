@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Boxes,
   Check,
+  Download,
   LayoutPanelLeft,
   Monitor,
   Moon,
@@ -34,13 +35,18 @@ import { listContexts, type ClusterContext } from "../lib/clusters";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   contextDisplayName,
+  loadUpdateChannel,
+  saveUpdateChannel,
   type ContextLogo,
   type ContextProfiles,
+  type UpdateChannel,
   type WorkspaceLayoutSettings,
   orderContexts,
 } from "../lib/settings";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { pickKubeconfigFiles, savePastedKubeconfig } from "../lib/files";
+import { checkForUpdate, installUpdate, type UpdateMeta } from "../lib/updater";
+import { appVersion, relaunchApp } from "../transport/transport";
 
 const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string; icon: React.ElementType }> = [
   { mode: "dark", label: "Dark", description: "Low-light operational workspace", icon: Moon },
@@ -48,7 +54,21 @@ const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string;
   { mode: "system", label: "System", description: "Follow the OS appearance", icon: Monitor },
 ];
 
-type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts";
+type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts" | "updates";
+
+type UpdatePhase =
+  | { phase: "idle" }
+  | { phase: "checking" }
+  | { phase: "uptodate" }
+  | { phase: "available"; update: UpdateMeta }
+  | { phase: "downloading"; percent: number | null }
+  | { phase: "ready" }
+  | { phase: "error"; message: string };
+
+const UPDATE_CHANNELS: Array<{ id: UpdateChannel; label: string; description: string }> = [
+  { id: "stable", label: "Stable", description: "Released versions" },
+  { id: "dev", label: "Dev", description: "Rolling pre-releases" },
+];
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSection;
@@ -60,6 +80,7 @@ const SETTINGS_SECTIONS: Array<{
   { id: "layout", label: "Layout", description: "Panel dimensions", icon: LayoutPanelLeft },
   { id: "kubernetes", label: "Kubernetes", description: "Workspace defaults", icon: Network },
   { id: "contexts", label: "Contexts", description: "Names, logos and colors", icon: Boxes },
+  { id: "updates", label: "Updates", description: "App version and updates", icon: Download },
 ];
 
 const CONTEXT_COLORS = ["#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#16a34a", "#0891b2", "#475569"];
@@ -105,8 +126,51 @@ export function SettingsView({
   const [pasteKubeconfigOpen, setPasteKubeconfigOpen] = useState(false);
   const [pastedKubeconfig, setPastedKubeconfig] = useState("");
   const [pastedKubeconfigName, setPastedKubeconfigName] = useState("");
+  const [updateState, setUpdateState] = useState<UpdatePhase>({ phase: "idle" });
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
+  const [currentVersion, setCurrentVersion] = useState("");
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    appVersion()
+      .then((version) => {
+        if (active) setCurrentVersion(version);
+      })
+      .catch(() => {
+        /* version display is cosmetic — never block settings on it */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const switchUpdateChannel = (channel: UpdateChannel) => {
+    setUpdateChannel(channel);
+    saveUpdateChannel(channel);
+    setUpdateState({ phase: "idle" });
+  };
+
+  const runUpdateCheck = async () => {
+    setUpdateState({ phase: "checking" });
+    try {
+      const update = await checkForUpdate(updateChannel);
+      setUpdateState(update ? { phase: "available", update } : { phase: "uptodate" });
+    } catch (cause) {
+      setUpdateState({ phase: "error", message: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
+
+  const startInstall = async () => {
+    setUpdateState({ phase: "downloading", percent: null });
+    try {
+      await installUpdate(updateChannel, (percent) => setUpdateState({ phase: "downloading", percent }));
+      setUpdateState({ phase: "ready" });
+    } catch (cause) {
+      setUpdateState({ phase: "error", message: cause instanceof Error ? cause.message : String(cause) });
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -662,6 +726,79 @@ export function SettingsView({
                   )}
                 </div>
               )}
+            </SectionPanel>
+          )}
+
+          {section === "updates" && (
+            <SectionPanel title="Updates" description="Check for and install new versions of srelens.">
+              <div className="fl-settings-update">
+                <div className="fl-settings-update__version">
+                  <small>Current version</small>
+                  <code>{currentVersion || "unknown"}</code>
+                </div>
+
+                <div className="fl-settings-update__channels" role="group" aria-label="Update channel">
+                  {UPDATE_CHANNELS.map(({ id, label, description }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`fl-settings-mode${updateChannel === id ? " fl-settings-mode--active" : ""}`}
+                      onClick={() => switchUpdateChannel(id)}
+                      aria-pressed={updateChannel === id}
+                    >
+                      <span>
+                        <strong>{label}</strong>
+                        <small>{description}</small>
+                      </span>
+                      {updateChannel === id && <Check aria-hidden="true" />}
+                    </button>
+                  ))}
+                </div>
+
+                {(updateState.phase === "idle" ||
+                  updateState.phase === "checking" ||
+                  updateState.phase === "uptodate" ||
+                  updateState.phase === "error") && (
+                  <Button onClick={() => void runUpdateCheck()} disabled={updateState.phase === "checking"}>
+                    {updateState.phase === "checking" ? "Checking…" : "Check for updates"}
+                  </Button>
+                )}
+
+                {updateState.phase === "uptodate" && <p className="fl-settings-update__status">srelens is up to date.</p>}
+                {updateState.phase === "error" && (
+                  <p className="fl-settings-update__status" role="alert">{updateState.message}</p>
+                )}
+
+                {updateState.phase === "available" && (
+                  <div className="fl-settings-update__offer">
+                    <p>
+                      Version <strong>{updateState.update.version}</strong> is available on the {updateChannel}{" "}
+                      channel.
+                    </p>
+                    {updateState.update.notes && (
+                      <pre className="fl-settings-update__notes">{updateState.update.notes}</pre>
+                    )}
+                    <Button onClick={() => void startInstall()}>
+                      <Download data-icon="inline-start" /> Download &amp; install
+                    </Button>
+                  </div>
+                )}
+
+                {updateState.phase === "downloading" && (
+                  <p className="fl-settings-update__status" role="status">
+                    Downloading{updateState.percent != null ? ` — ${updateState.percent}%` : "…"}
+                  </p>
+                )}
+
+                {updateState.phase === "ready" && (
+                  <div className="fl-settings-update__offer">
+                    <p>Update installed. Restart to finish.</p>
+                    <Button onClick={() => void relaunchApp()}>
+                      <RotateCcw data-icon="inline-start" /> Restart srelens
+                    </Button>
+                  </div>
+                )}
+              </div>
             </SectionPanel>
           )}
         </div>

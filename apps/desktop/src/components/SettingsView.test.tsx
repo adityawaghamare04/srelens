@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsView } from "./SettingsView";
 import { DEFAULT_WORKSPACE_LAYOUT } from "../lib/settings";
 
@@ -9,6 +9,18 @@ const fileMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/files", () => fileMocks);
+
+const updaterMocks = vi.hoisted(() => ({
+  checkForUpdate: vi.fn(),
+  installUpdate: vi.fn(),
+}));
+vi.mock("../lib/updater", () => updaterMocks);
+
+const transportMocks = vi.hoisted(() => ({
+  appVersion: vi.fn(async () => "0.1.0"),
+  relaunchApp: vi.fn(async () => {}),
+}));
+vi.mock("../transport/transport", () => transportMocks);
 
 vi.mock("../lib/clusters", () => ({
   listContexts: () =>
@@ -21,6 +33,8 @@ vi.mock("../lib/clusters", () => ({
 }));
 
 describe("SettingsView", () => {
+  beforeEach(() => localStorage.clear());
+
   it("separates settings and edits context identity", async () => {
     const onContextProfilesChange = vi.fn();
     render(
@@ -172,5 +186,120 @@ describe("SettingsView", () => {
     await waitFor(() =>
       expect(onKubeconfigFilesChange).toHaveBeenCalledWith(["/app/kubeconfigs/team.yaml"]),
     );
+  });
+
+  it("checks for updates and reports up to date", async () => {
+    updaterMocks.checkForUpdate.mockResolvedValue(null);
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
+    expect(await screen.findByText("0.1.0")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/up to date/i)).toBeDefined();
+    expect(updaterMocks.checkForUpdate).toHaveBeenCalledWith("stable");
+  });
+
+  it("checks the dev channel when selected and persists the choice", async () => {
+    updaterMocks.checkForUpdate.mockResolvedValue(null);
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Dev\b/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => expect(updaterMocks.checkForUpdate).toHaveBeenCalledWith("dev"));
+    expect(localStorage.getItem("srelens.updateChannel")).toBe("dev");
+  });
+
+  it("downloads an available update and offers a restart", async () => {
+    updaterMocks.checkForUpdate.mockResolvedValue({
+      version: "0.2.0",
+      currentVersion: "0.1.0",
+      notes: "New things",
+    });
+    updaterMocks.installUpdate.mockImplementation(
+      async (_channel: string, onProgress?: (pct: number | null) => void) => {
+        onProgress?.(100);
+      },
+    );
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/0\.2\.0/)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Download & install/ }));
+    await waitFor(() =>
+      expect(updaterMocks.installUpdate).toHaveBeenCalledWith("stable", expect.any(Function)),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Restart srelens/ }));
+    await waitFor(() => expect(transportMocks.relaunchApp).toHaveBeenCalledTimes(1));
+  });
+
+  it("surfaces update check failures", async () => {
+    updaterMocks.checkForUpdate.mockRejectedValue(new Error("endpoint unreachable"));
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/endpoint unreachable/)).toBeDefined();
   });
 });

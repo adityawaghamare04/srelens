@@ -4,6 +4,7 @@ mod exec;
 mod files;
 mod forward;
 mod logs;
+mod updater;
 mod watch;
 
 use bridge::{invoke_capability, AppRegistry};
@@ -12,6 +13,7 @@ use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
 use forward::{start_port_forward, stop_port_forward, ForwardManager};
 use srelens_kube::client_cache::ClientCache;
 use logs::{start_log_stream, stop_log_stream, LogStreamManager};
+use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch, WatchManager};
 
 pub use capabilities::build_registry;
@@ -23,8 +25,13 @@ pub fn run() {
     let cache = ClientCache::new_many(capabilities::default_kubeconfig_paths());
     let registry = capabilities::build_registry_with(cache.clone());
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    builder
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -53,7 +60,9 @@ pub fn run() {
             stop_log_stream,
             save_text_file,
             pick_kubeconfig_files,
-            save_pasted_kubeconfig
+            save_pasted_kubeconfig,
+            update_check,
+            update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
