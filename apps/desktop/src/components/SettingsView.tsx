@@ -35,14 +35,17 @@ import { listContexts, type ClusterContext } from "../lib/clusters";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   contextDisplayName,
+  loadUpdateChannel,
+  saveUpdateChannel,
   type ContextLogo,
   type ContextProfiles,
+  type UpdateChannel,
   type WorkspaceLayoutSettings,
   orderContexts,
 } from "../lib/settings";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { pickKubeconfigFiles, savePastedKubeconfig } from "../lib/files";
-import { checkForUpdate, type AvailableUpdate } from "../lib/updater";
+import { checkForUpdate, installUpdate, type UpdateMeta } from "../lib/updater";
 import { appVersion, relaunchApp } from "../transport/transport";
 
 const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string; icon: React.ElementType }> = [
@@ -57,10 +60,15 @@ type UpdatePhase =
   | { phase: "idle" }
   | { phase: "checking" }
   | { phase: "uptodate" }
-  | { phase: "available"; update: AvailableUpdate }
-  | { phase: "downloading"; update: AvailableUpdate; percent: number | null }
+  | { phase: "available"; update: UpdateMeta }
+  | { phase: "downloading"; percent: number | null }
   | { phase: "ready" }
   | { phase: "error"; message: string };
+
+const UPDATE_CHANNELS: Array<{ id: UpdateChannel; label: string; description: string }> = [
+  { id: "stable", label: "Stable", description: "Released versions" },
+  { id: "dev", label: "Dev", description: "Rolling pre-releases" },
+];
 
 const SETTINGS_SECTIONS: Array<{
   id: SettingsSection;
@@ -119,6 +127,7 @@ export function SettingsView({
   const [pastedKubeconfig, setPastedKubeconfig] = useState("");
   const [pastedKubeconfigName, setPastedKubeconfigName] = useState("");
   const [updateState, setUpdateState] = useState<UpdatePhase>({ phase: "idle" });
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
   const [currentVersion, setCurrentVersion] = useState("");
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
@@ -137,20 +146,26 @@ export function SettingsView({
     };
   }, []);
 
+  const switchUpdateChannel = (channel: UpdateChannel) => {
+    setUpdateChannel(channel);
+    saveUpdateChannel(channel);
+    setUpdateState({ phase: "idle" });
+  };
+
   const runUpdateCheck = async () => {
     setUpdateState({ phase: "checking" });
     try {
-      const update = await checkForUpdate();
+      const update = await checkForUpdate(updateChannel);
       setUpdateState(update ? { phase: "available", update } : { phase: "uptodate" });
     } catch (cause) {
       setUpdateState({ phase: "error", message: cause instanceof Error ? cause.message : String(cause) });
     }
   };
 
-  const installUpdate = async (update: AvailableUpdate) => {
-    setUpdateState({ phase: "downloading", update, percent: null });
+  const startInstall = async () => {
+    setUpdateState({ phase: "downloading", percent: null });
     try {
-      await update.download((percent) => setUpdateState({ phase: "downloading", update, percent }));
+      await installUpdate(updateChannel, (percent) => setUpdateState({ phase: "downloading", percent }));
       setUpdateState({ phase: "ready" });
     } catch (cause) {
       setUpdateState({ phase: "error", message: cause instanceof Error ? cause.message : String(cause) });
@@ -722,6 +737,24 @@ export function SettingsView({
                   <code>{currentVersion || "unknown"}</code>
                 </div>
 
+                <div className="fl-settings-update__channels" role="group" aria-label="Update channel">
+                  {UPDATE_CHANNELS.map(({ id, label, description }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`fl-settings-mode${updateChannel === id ? " fl-settings-mode--active" : ""}`}
+                      onClick={() => switchUpdateChannel(id)}
+                      aria-pressed={updateChannel === id}
+                    >
+                      <span>
+                        <strong>{label}</strong>
+                        <small>{description}</small>
+                      </span>
+                      {updateChannel === id && <Check aria-hidden="true" />}
+                    </button>
+                  ))}
+                </div>
+
                 {(updateState.phase === "idle" ||
                   updateState.phase === "checking" ||
                   updateState.phase === "uptodate" ||
@@ -739,12 +772,13 @@ export function SettingsView({
                 {updateState.phase === "available" && (
                   <div className="fl-settings-update__offer">
                     <p>
-                      Version <strong>{updateState.update.version}</strong> is available.
+                      Version <strong>{updateState.update.version}</strong> is available on the {updateChannel}{" "}
+                      channel.
                     </p>
                     {updateState.update.notes && (
                       <pre className="fl-settings-update__notes">{updateState.update.notes}</pre>
                     )}
-                    <Button onClick={() => void installUpdate(updateState.update)}>
+                    <Button onClick={() => void startInstall()}>
                       <Download data-icon="inline-start" /> Download &amp; install
                     </Button>
                   </div>

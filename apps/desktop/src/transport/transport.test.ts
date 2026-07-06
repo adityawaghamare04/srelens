@@ -1,24 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { invokeMock, listenMock, checkMock, relaunchMock, getVersionMock } = vi.hoisted(() => ({
+const { invokeMock, listenMock, relaunchMock, getVersionMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   listenMock: vi.fn(),
-  checkMock: vi.fn(),
   relaunchMock: vi.fn(),
   getVersionMock: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: getVersionMock }));
-vi.mock("@tauri-apps/plugin-updater", () => ({ check: checkMock }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: relaunchMock }));
 
-import { invokeCapability, invokeCommand, on, checkForAppUpdate, relaunchApp, appVersion } from "./transport";
+import { invokeCapability, invokeCommand, on, relaunchApp, appVersion } from "./transport";
 
 beforeEach(() => {
   invokeMock.mockReset();
   listenMock.mockReset();
-  checkMock.mockReset();
   relaunchMock.mockReset();
   getVersionMock.mockReset();
 });
@@ -49,12 +46,6 @@ describe("transport", () => {
     const out = await invokeCommand<string>("save_text_file", { filename: "a.yaml" });
     expect(invokeMock).toHaveBeenCalledWith("save_text_file", { filename: "a.yaml" });
     expect(out).toBe("ok");
-  });
-
-  it("checkForAppUpdate delegates to the updater plugin", async () => {
-    checkMock.mockResolvedValue(null);
-    expect(await checkForAppUpdate()).toBeNull();
-    expect(checkMock).toHaveBeenCalledTimes(1);
   });
 
   it("relaunchApp delegates to the process plugin", async () => {

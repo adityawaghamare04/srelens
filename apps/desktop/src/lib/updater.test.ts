@@ -1,68 +1,95 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { checkForAppUpdateMock } = vi.hoisted(() => ({
-  checkForAppUpdateMock: vi.fn(),
+const { invokeCommandMock, subscribeMock } = vi.hoisted(() => ({
+  invokeCommandMock: vi.fn(),
+  subscribeMock: vi.fn(),
 }));
 vi.mock("../transport/transport", () => ({
-  checkForAppUpdate: checkForAppUpdateMock,
+  invokeCommand: invokeCommandMock,
+  subscribe: subscribeMock,
 }));
 
-import { checkForUpdate } from "./updater";
+import { checkForUpdate, installUpdate } from "./updater";
 
 beforeEach(() => {
-  checkForAppUpdateMock.mockReset();
+  invokeCommandMock.mockReset();
+  subscribeMock.mockReset();
 });
 
 describe("checkForUpdate", () => {
-  it("returns null when the app is up to date", async () => {
-    checkForAppUpdateMock.mockResolvedValue(null);
-    expect(await checkForUpdate()).toBeNull();
+  it("returns null when the channel is up to date", async () => {
+    invokeCommandMock.mockResolvedValue(null);
+    expect(await checkForUpdate("stable")).toBeNull();
+    expect(invokeCommandMock).toHaveBeenCalledWith("update_check", { channel: "stable" });
   });
 
-  it("maps the update's version and notes", async () => {
-    checkForAppUpdateMock.mockResolvedValue({
+  it("checks the requested channel and maps the metadata", async () => {
+    invokeCommandMock.mockResolvedValue({
       version: "0.2.0",
-      body: "### Features\n- things",
-      downloadAndInstall: vi.fn(),
+      current_version: "0.1.0",
+      notes: "### Features\n- things",
     });
-    const update = await checkForUpdate();
-    expect(update?.version).toBe("0.2.0");
-    expect(update?.notes).toBe("### Features\n- things");
+    const meta = await checkForUpdate("dev");
+    expect(invokeCommandMock).toHaveBeenCalledWith("update_check", { channel: "dev" });
+    expect(meta).toEqual({
+      version: "0.2.0",
+      currentVersion: "0.1.0",
+      notes: "### Features\n- things",
+    });
   });
 
   it("defaults notes to an empty string", async () => {
-    checkForAppUpdateMock.mockResolvedValue({ version: "0.2.0", downloadAndInstall: vi.fn() });
-    expect((await checkForUpdate())?.notes).toBe("");
+    invokeCommandMock.mockResolvedValue({ version: "0.2.0", current_version: "0.1.0", notes: null });
+    expect((await checkForUpdate("stable"))?.notes).toBe("");
   });
+});
 
-  it("reports download percent from Started/Progress/Finished events", async () => {
-    const downloadAndInstall = vi.fn(async (onEvent: (e: unknown) => void) => {
-      onEvent({ event: "Started", data: { contentLength: 200 } });
-      onEvent({ event: "Progress", data: { chunkLength: 50 } });
-      onEvent({ event: "Progress", data: { chunkLength: 150 } });
-      onEvent({ event: "Finished" });
+describe("installUpdate", () => {
+  it("subscribes to progress before starting and reports whole percents", async () => {
+    let emit: ((payload: unknown) => void) | undefined;
+    const dispose = vi.fn();
+    subscribeMock.mockImplementation(async (_ch: string, handler: (p: unknown) => void) => {
+      emit = handler;
+      return dispose;
     });
-    checkForAppUpdateMock.mockResolvedValue({ version: "0.2.0", body: "", downloadAndInstall });
+    invokeCommandMock.mockImplementation(async () => {
+      emit?.({ downloaded: 50, total: 200 });
+      emit?.({ downloaded: 200, total: 200 });
+    });
 
-    const update = await checkForUpdate();
     const seen: Array<number | null> = [];
-    await update?.download((pct) => seen.push(pct));
+    await installUpdate("dev", (pct) => seen.push(pct));
 
-    expect(seen).toEqual([25, 100, 100]);
-    expect(downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(subscribeMock).toHaveBeenCalledWith("update://progress", expect.any(Function));
+    expect(subscribeMock.mock.invocationCallOrder[0]).toBeLessThan(
+      invokeCommandMock.mock.invocationCallOrder[0],
+    );
+    expect(invokeCommandMock).toHaveBeenCalledWith("update_install", { channel: "dev" });
+    expect(seen).toEqual([25, 100]);
+    expect(dispose).toHaveBeenCalled();
   });
 
   it("reports null percent when the total size is unknown", async () => {
-    const downloadAndInstall = vi.fn(async (onEvent: (e: unknown) => void) => {
-      onEvent({ event: "Started", data: {} });
-      onEvent({ event: "Progress", data: { chunkLength: 10 } });
+    let emit: ((payload: unknown) => void) | undefined;
+    subscribeMock.mockImplementation(async (_ch: string, handler: (p: unknown) => void) => {
+      emit = handler;
+      return vi.fn();
     });
-    checkForAppUpdateMock.mockResolvedValue({ version: "0.2.0", body: "", downloadAndInstall });
+    invokeCommandMock.mockImplementation(async () => {
+      emit?.({ downloaded: 10, total: null });
+    });
 
-    const update = await checkForUpdate();
     const seen: Array<number | null> = [];
-    await update?.download((pct) => seen.push(pct));
-
+    await installUpdate("stable", (pct) => seen.push(pct));
     expect(seen).toEqual([null]);
+  });
+
+  it("disposes the progress listener when the install fails", async () => {
+    const dispose = vi.fn();
+    subscribeMock.mockResolvedValue(dispose);
+    invokeCommandMock.mockRejectedValue(new Error("boom"));
+
+    await expect(installUpdate("stable")).rejects.toThrow("boom");
+    expect(dispose).toHaveBeenCalled();
   });
 });

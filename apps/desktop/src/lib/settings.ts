@@ -158,6 +158,28 @@ export function saveContextOrder(order: string[]): void {
   }
 }
 
+/** Which release channel the in-app updater follows. */
+export type UpdateChannel = "stable" | "dev";
+
+const UPDATE_CHANNEL_KEY = "srelens.updateChannel";
+
+export function loadUpdateChannel(): UpdateChannel {
+  try {
+    const value = stored(UPDATE_CHANNEL_KEY);
+    return value === "dev" ? "dev" : "stable";
+  } catch {
+    return "stable";
+  }
+}
+
+export function saveUpdateChannel(channel: UpdateChannel): void {
+  try {
+    localStorage.setItem(UPDATE_CHANNEL_KEY, channel);
+  } catch {
+    // ignore unavailable/quota-exceeded storage
+  }
+}
+
 export function orderContexts<T extends { name: string }>(contexts: T[], order: string[]): T[] {
   const rank = new Map(order.map((name, index) => [name, index]));
   return contexts
