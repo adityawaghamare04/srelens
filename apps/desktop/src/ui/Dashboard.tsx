@@ -1,5 +1,7 @@
 import React from "react";
+import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "./Button";
 
 export type DashboardTone = "primary" | "success" | "warning" | "danger" | "info" | "neutral";
 
@@ -114,6 +116,32 @@ export function EmptyState({ title, description }: { title: React.ReactNode; des
     <div className="fl-empty-state">
       <strong>{title}</strong>
       {description && <p>{description}</p>}
+    </div>
+  );
+}
+
+/** Error card for a failed load — a clear title, an actionable detail, and an optional retry. */
+export function ErrorState({
+  title,
+  detail,
+  onRetry,
+  retryLabel = "Retry",
+}: {
+  title: React.ReactNode;
+  detail?: React.ReactNode;
+  onRetry?: () => void;
+  retryLabel?: string;
+}) {
+  return (
+    <div className="fl-error-state" role="alert">
+      <AlertTriangle className="fl-error-state__icon" aria-hidden />
+      <strong className="fl-error-state__title">{title}</strong>
+      {detail && <p className="fl-error-state__detail">{detail}</p>}
+      {onRetry && (
+        <Button variant="secondary" size="sm" onClick={onRetry}>
+          {retryLabel}
+        </Button>
+      )}
     </div>
   );
 }

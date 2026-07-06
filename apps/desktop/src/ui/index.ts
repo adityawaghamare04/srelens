@@ -43,6 +43,7 @@ export { Drawer } from "./Drawer";
 export type { DrawerProps } from "./Drawer";
 export {
   EmptyState,
+  ErrorState,
   DashboardCard,
   DashboardChip,
   DashboardHero,
