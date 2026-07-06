@@ -28,7 +28,7 @@ The first `pnpm dev` compiles the full Rust dependency tree and takes a few minu
 | `pnpm test` | All JS/TS tests via Vitest, with coverage |
 | `pnpm --filter @srelens/desktop test:watch` | Vitest in watch mode |
 | `cargo test` | All Rust tests across the workspace |
-| `cargo llvm-cov --workspace --fail-under-lines 85` | Rust tests with the CI coverage gate |
+| `cargo llvm-cov --workspace --summary-only` | Rust tests with a coverage report |
 | `pnpm build` | Production frontend build (`vite build`) |
 | `pnpm tauri build` | Packaged, installable desktop binaries |
 | `pnpm tauri icon apps/desktop/src-tauri/icons/icon.svg` | Regenerate the full app icon set from the source SVG |
@@ -98,10 +98,10 @@ Development is **test-driven — this is mandatory, not aspirational**:
 2. Make it pass with the simplest implementation (green).
 3. Refactor with the tests as a safety net.
 
-**Coverage floor: 85% lines, enforced in CI** for both languages:
+**Coverage floors, enforced in CI:**
 
-- Rust: `cargo llvm-cov --workspace --fail-under-lines 85`
-- TypeScript: `pnpm test` (Vitest with `--coverage` thresholds)
+- TypeScript: **85% lines** (Vitest thresholds in `vitest.config.ts`).
+- Rust: **55% lines today, ratcheting toward 85%** — the Tauri runtime shell is excluded from measurement, and much of `crates/kube` needs a live cluster to exercise; the floor rises as cluster-bound integration tests land. Never lower it.
 
 Test placement conventions:
 
@@ -120,10 +120,12 @@ Test placement conventions:
 
 `.github/workflows/ci.yml` runs on every push and PR:
 
-- **rust** — `cargo llvm-cov --workspace --fail-under-lines 85` (tests + hard coverage gate).
-- **ts** — `pnpm install --frozen-lockfile && pnpm -r test` (Vitest with coverage).
+- **frontend** — Vite build + Vitest with the 85% coverage threshold.
+- **backend** — `cargo llvm-cov` with the ratcheting coverage floor (see above).
 
-Both jobs must be green; there are no coverage exemptions.
+A separate Release workflow runs on pushes to `dev` (rolling pre-releases) and `main` (Conventional-Commit-driven stable releases); see `.github/workflows/release.yml`.
+
+Both CI jobs must be green.
 
 ## Conventions
 

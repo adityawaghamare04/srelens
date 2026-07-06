@@ -47,9 +47,8 @@
     <path d="M184 72 V100" stroke="#1769FF" stroke-width="16" stroke-linecap="round"/>
   </g>
 
-  <!-- Wordmark -->
+  <!-- Wordmark: one text run so "srelens" flows without a gap regardless of the viewer's font -->
   <g transform="translate(455 0)">
-    <text x="0" y="320" fill="#24324A" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="210" font-weight="500" letter-spacing="-12">sre</text>
-    <text x="360" y="320" fill="url(#word)" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="210" font-weight="500" letter-spacing="-12">lens</text>
+    <text x="0" y="320" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="210" font-weight="500" letter-spacing="-12"><tspan fill="#24324A">sre</tspan><tspan fill="url(#word)">lens</tspan></text>
   </g>
 </svg>

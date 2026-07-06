@@ -9,6 +9,12 @@ rust-version = "1.77.2"
 name = "srelens_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# The executable is named `srelens` (not the crate name) — it's what macOS
+# shows in the dock for dev builds and what the bundles ship.
+[[bin]]
+name = "srelens"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 

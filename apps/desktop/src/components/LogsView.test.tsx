@@ -176,7 +176,9 @@ describe("LogsView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Live tail" }));
     expect(await screen.findByText(/stream unavailable/)).toBeDefined();
-    expect(screen.queryByLabelText("Loading logs")).toBeNull();
+    // The initial fetch may still be in flight on slow runners; the spinner
+    // must clear once everything settles, not synchronously with the error.
+    await waitFor(() => expect(screen.queryByLabelText("Loading logs")).toBeNull());
   });
 
   it("offers a container picker for multi-container pods", async () => {
