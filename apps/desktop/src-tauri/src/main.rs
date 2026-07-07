@@ -4,6 +4,14 @@
 use std::sync::Arc;
 
 fn main() {
+    // GUI launches (Finder/Dock) inherit launchd's minimal PATH, not the
+    // user's shell PATH — kubeconfig exec plugins (kubectl, kubectl-oidc_login,
+    // cloud CLIs) then fail to spawn with "No such file or directory". Resolve
+    // the login-shell environment before anything creates a kube client.
+    if let Err(e) = fix_path_env::fix() {
+        eprintln!("warning: could not resolve login-shell PATH: {e}");
+    }
+
     // Apply the SRELENS_TIMEOUT_SECS override up front so every mode — GUI, MCP
     // stdio, and MCP HTTP — honors it (the GUI can adjust it further at runtime).
     srelens_kube::connect::init_timeout_from_env();
