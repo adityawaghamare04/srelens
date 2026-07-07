@@ -134,6 +134,10 @@ the repo to hear when signed builds land.
 
 Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
+## License
+
+srelens is open source under the [MIT License](LICENSE).
+
 ---
 
 <p align="center">
