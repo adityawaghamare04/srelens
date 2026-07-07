@@ -134,11 +134,13 @@ packaging polish are on the roadmap. Expect breaking changes.
 
 Signed builds for macOS (Apple Silicon + Intel), Linux (AppImage/deb/rpm), and Windows
 are on the [latest release](https://github.com/srelens/srelens/releases/latest); the app
-updates itself from there. Prefer source? See the [quick start](#quick-start).
+updates itself from there. See the [install guide](docs/INSTALL.md) for per-platform steps,
+or the [quick start](#quick-start) to build from source.
 
 ## Contributing
 
 Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+Please also review our [Code of Conduct](.github/CODE_OF_CONDUCT.md).
 
 ## License
 
