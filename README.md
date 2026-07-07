@@ -19,10 +19,15 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/srelens/srelens/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/srelens/srelens?display_name=release&label=release&color=22c55e"></a>
+  <a href="https://github.com/srelens/srelens/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/srelens/srelens/total?label=downloads&color=3b82f6"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/srelens/srelens?color=675e80"></a>
+</p>
+
+<p align="center">
   <img alt="Rust" src="https://img.shields.io/badge/core-100%25_Rust-8b5cf6">
   <img alt="Tauri v2" src="https://img.shields.io/badge/shell-Tauri_v2-e457c2">
   <img alt="MCP" src="https://img.shields.io/badge/agents-MCP_native-fb923c">
-  <img alt="Status" src="https://img.shields.io/badge/status-v0.1_pre--release-675e80">
 </p>
 
 ---
@@ -127,8 +132,9 @@ srelens is in **early, active development** (v0.1 pre-release). The read/browse/
 core described above works end-to-end; extension support, broader resource coverage, and
 packaging polish are on the roadmap. Expect breaking changes.
 
-Installers aren't published yet — build from source with the quick start above, and star
-the repo to hear when signed builds land.
+Signed builds for macOS (Apple Silicon + Intel), Linux (AppImage/deb/rpm), and Windows
+are on the [latest release](https://github.com/srelens/srelens/releases/latest); the app
+updates itself from there. Prefer source? See the [quick start](#quick-start).
 
 ## Contributing
 
