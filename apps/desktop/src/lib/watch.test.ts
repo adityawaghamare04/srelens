@@ -57,6 +57,29 @@ describe("watchResource", () => {
     expect(invokeCommandMock).toHaveBeenCalledWith("stop_watch", { channel: subscribedChannel });
   });
 
+  it("sanitizes illegal characters in the channel name (Tauri event constraint)", async () => {
+    let subscribedChannel = "";
+    subscribeMock.mockImplementation(async (ch: string) => {
+      subscribedChannel = ch;
+      return vi.fn();
+    });
+    invokeCommandMock.mockResolvedValue(undefined);
+
+    // Context names using the "<user>@<cluster>" convention contain "@", which
+    // Tauri rejects in event names.
+    await watchResource("admin@prod.example.com", "kube-system", "pods", vi.fn());
+
+    expect(subscribedChannel).not.toMatch(/[@.]/);
+    expect(subscribedChannel).toMatch(/^[a-zA-Z0-9/:_-]+$/);
+    // The backend watch is started on the exact sanitized channel we subscribed to.
+    expect(invokeCommandMock).toHaveBeenCalledWith("start_resource_watch", {
+      context: "admin@prod.example.com",
+      namespace: "kube-system",
+      kind: "pods",
+      channel: subscribedChannel,
+    });
+  });
+
   it("disposes the subscription if starting the watch fails", async () => {
     const dispose = vi.fn();
     subscribeMock.mockResolvedValue(dispose);

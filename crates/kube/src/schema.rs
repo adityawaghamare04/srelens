@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 use crate::manifest::parse_api_version;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -106,7 +106,7 @@ pub fn open_api_schema_capability(cache: Arc<ClientCache>) -> Capability {
                 let req = Request::get(&path)
                     .body(Vec::new())
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
-                let doc: Value = tokio::time::timeout(CONNECT_TIMEOUT, client.request(req))
+                let doc: Value = tokio::time::timeout(request_timeout(), client.request(req))
                     .await
                     .map_err(|_| CapabilityError::Handler("openapi fetch timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;

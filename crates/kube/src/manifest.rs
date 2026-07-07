@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ManifestIn {
@@ -75,7 +75,7 @@ pub fn get_object_capability(cache: Arc<ClientCache>) -> Capability {
                 } else {
                     Api::all_with(client, &ar)
                 };
-                let mut obj = tokio::time::timeout(CONNECT_TIMEOUT, api.get(&input.name))
+                let mut obj = tokio::time::timeout(request_timeout(), api.get(&input.name))
                     .await
                     .map_err(|_| CapabilityError::Handler("get object timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -158,7 +158,7 @@ pub fn get_manifest_capability(cache: Arc<ClientCache>) -> Capability {
                 } else {
                     Api::all_with(client, &ar)
                 };
-                let mut obj = tokio::time::timeout(CONNECT_TIMEOUT, api.get(&input.name))
+                let mut obj = tokio::time::timeout(request_timeout(), api.get(&input.name))
                     .await
                     .map_err(|_| CapabilityError::Handler("get manifest timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -216,7 +216,7 @@ pub fn list_resource_capability(cache: Arc<ClientCache>) -> Capability {
                 } else {
                     Api::all_with(client, &ar)
                 };
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("list resource timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -300,7 +300,7 @@ pub fn apply_manifest_capability(cache: Arc<ClientCache>) -> Capability {
                     None => Api::all_with(client, &ar),
                 };
                 let params = PatchParams::apply("srelens").force();
-                tokio::time::timeout(CONNECT_TIMEOUT, api.patch(&name, &params, &Patch::Apply(&value)))
+                tokio::time::timeout(request_timeout(), api.patch(&name, &params, &Patch::Apply(&value)))
                     .await
                     .map_err(|_| CapabilityError::Handler("apply timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -394,7 +394,7 @@ pub fn validate_manifest_capability(cache: Arc<ClientCache>) -> Capability {
                     field_validation: Some(ValidationDirective::Strict),
                 };
                 let result =
-                    tokio::time::timeout(CONNECT_TIMEOUT, api.patch(&name, &params, &Patch::Apply(&value)))
+                    tokio::time::timeout(request_timeout(), api.patch(&name, &params, &Patch::Apply(&value)))
                         .await
                         .map_err(|_| CapabilityError::Handler("validation timed out".into()))?;
                 Ok(match result {

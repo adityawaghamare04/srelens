@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 use crate::manifest::gvk_for;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -42,7 +42,7 @@ pub fn delete_pod_capability(cache: Arc<ClientCache>) -> Capability {
                     .await
                     .map_err(CapabilityError::Handler)?;
                 let api: Api<Pod> = Api::namespaced(client, &input.namespace);
-                tokio::time::timeout(CONNECT_TIMEOUT, api.delete(&input.pod, &DeleteParams::default()))
+                tokio::time::timeout(request_timeout(), api.delete(&input.pod, &DeleteParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("delete pod timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -74,7 +74,7 @@ pub fn evict_pod_capability(cache: Arc<ClientCache>) -> Capability {
             async move {
                 let client = cache.get(&input.context).await.map_err(CapabilityError::Handler)?;
                 let api: Api<Pod> = Api::namespaced(client, &input.namespace);
-                tokio::time::timeout(CONNECT_TIMEOUT, api.evict(&input.pod, &EvictParams::default()))
+                tokio::time::timeout(request_timeout(), api.evict(&input.pod, &EvictParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("evict pod timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -127,7 +127,7 @@ pub fn delete_resource_capability(cache: Arc<ClientCache>) -> Capability {
             async move {
                 let client = cache.get(&input.context).await.map_err(CapabilityError::Handler)?;
                 let api = dynamic_api(client, &input.kind, &input.namespace)?;
-                tokio::time::timeout(CONNECT_TIMEOUT, api.delete(&input.name, &DeleteParams::default()))
+                tokio::time::timeout(request_timeout(), api.delete(&input.name, &DeleteParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("delete timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -164,7 +164,7 @@ pub fn scale_capability(cache: Arc<ClientCache>) -> Capability {
                 let api = dynamic_api(client, &input.kind, &input.namespace)?;
                 let patch = json!({ "spec": { "replicas": input.replicas } });
                 tokio::time::timeout(
-                    CONNECT_TIMEOUT,
+                    request_timeout(),
                     api.patch(&input.name, &PatchParams::default(), &Patch::Merge(&patch)),
                 )
                 .await
@@ -208,7 +208,7 @@ pub fn rollout_restart_capability(cache: Arc<ClientCache>) -> Capability {
                     }}}}
                 });
                 tokio::time::timeout(
-                    CONNECT_TIMEOUT,
+                    request_timeout(),
                     api.patch(&input.name, &PatchParams::default(), &Patch::Merge(&patch)),
                 )
                 .await
@@ -246,7 +246,7 @@ pub fn cordon_node_capability(cache: Arc<ClientCache>) -> Capability {
                 let api: Api<Node> = Api::all(client);
                 let patch = json!({ "spec": { "unschedulable": input.unschedulable } });
                 tokio::time::timeout(
-                    CONNECT_TIMEOUT,
+                    request_timeout(),
                     api.patch(&input.name, &PatchParams::default(), &Patch::Merge(&patch)),
                 )
                 .await
@@ -287,7 +287,7 @@ pub fn drain_node_capability(cache: Arc<ClientCache>) -> Capability {
                 let nodes: Api<Node> = Api::all(client.clone());
                 let patch = json!({ "spec": { "unschedulable": true } });
                 tokio::time::timeout(
-                    CONNECT_TIMEOUT,
+                    request_timeout(),
                     nodes.patch(&input.name, &PatchParams::default(), &Patch::Merge(&patch)),
                 )
                 .await
@@ -297,7 +297,7 @@ pub fn drain_node_capability(cache: Arc<ClientCache>) -> Capability {
                 // 2. Find the pods scheduled on this node.
                 let pods: Api<Pod> = Api::all(client.clone());
                 let lp = ListParams::default().fields(&format!("spec.nodeName={}", input.name));
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, pods.list(&lp))
+                let list = tokio::time::timeout(request_timeout(), pods.list(&lp))
                     .await
                     .map_err(|_| CapabilityError::Handler("list pods timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -325,7 +325,7 @@ pub fn drain_node_capability(cache: Arc<ClientCache>) -> Capability {
                         continue;
                     }
                     let api: Api<Pod> = Api::namespaced(client.clone(), &ns);
-                    match tokio::time::timeout(CONNECT_TIMEOUT, api.evict(&name, &EvictParams::default()))
+                    match tokio::time::timeout(request_timeout(), api.evict(&name, &EvictParams::default()))
                         .await
                     {
                         Ok(Ok(_)) => evicted += 1,

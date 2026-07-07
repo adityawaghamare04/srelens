@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListNodesIn {
@@ -88,7 +88,7 @@ pub fn list_nodes_capability(cache: Arc<ClientCache>) -> Capability {
                     .await
                     .map_err(CapabilityError::Handler)?;
                 let api: Api<Node> = Api::all(client);
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("list nodes timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;

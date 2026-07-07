@@ -4,6 +4,7 @@
 //! by kube-rs from the kubeconfig.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,7 +16,50 @@ use serde::{Deserialize, Serialize};
 
 use crate::client_cache::ClientCache;
 
-pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+/// Default per-request timeout budget (connect + list/get/apply), in seconds.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 8;
+/// Smallest timeout a user may configure, in seconds.
+pub const MIN_TIMEOUT_SECS: u64 = 1;
+/// Largest timeout a user may configure, in seconds.
+pub const MAX_TIMEOUT_SECS: u64 = 30;
+
+/// Environment variable that overrides the default timeout at startup — lets
+/// headless/MCP runs (which have no Settings UI) raise it for large clusters.
+pub const TIMEOUT_ENV: &str = "SRELENS_TIMEOUT_SECS";
+
+/// Runtime-configurable per-request timeout, shared by every capability. Kept
+/// as a process-wide atomic so the Settings UI can adjust it live without
+/// threading a value through the whole capability registry.
+static TIMEOUT_SECS: AtomicU64 = AtomicU64::new(DEFAULT_TIMEOUT_SECS);
+
+/// The current per-request timeout budget.
+pub fn request_timeout() -> Duration {
+    Duration::from_secs(TIMEOUT_SECS.load(Ordering::Relaxed))
+}
+
+/// The current per-request timeout, in seconds.
+pub fn request_timeout_secs() -> u64 {
+    TIMEOUT_SECS.load(Ordering::Relaxed)
+}
+
+/// Set the per-request timeout, clamping to `[MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS]`.
+/// Returns the value actually applied so callers can reflect clamping back to the user.
+pub fn set_request_timeout_secs(secs: u64) -> u64 {
+    let clamped = secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS);
+    TIMEOUT_SECS.store(clamped, Ordering::Relaxed);
+    clamped
+}
+
+/// Apply the `SRELENS_TIMEOUT_SECS` override if present and parseable. Invalid
+/// values are ignored, leaving the default in place. Returns the applied value.
+pub fn init_timeout_from_env() -> u64 {
+    if let Some(raw) = std::env::var_os(TIMEOUT_ENV) {
+        if let Some(secs) = raw.to_str().and_then(|s| s.trim().parse::<u64>().ok()) {
+            return set_request_timeout_secs(secs);
+        }
+    }
+    request_timeout_secs()
+}
 
 /// Build an authenticated kube-rs client for a named kubeconfig context.
 /// Authentication (certs, tokens, exec plugins) is resolved by kube-rs.
@@ -65,7 +109,7 @@ pub struct ClusterInfoOut {
 /// string if the connection/auth/handshake fails (or times out).
 async fn connect_and_version(cache: &ClientCache, context: &str) -> Result<String, String> {
     let client = cache.get(context).await?;
-    let info = tokio::time::timeout(CONNECT_TIMEOUT, client.apiserver_version())
+    let info = tokio::time::timeout(request_timeout(), client.apiserver_version())
         .await
         .map_err(|_| "connection timed out".to_string())?
         .map_err(|e| e.to_string())?;
@@ -110,6 +154,20 @@ mod tests {
     use srelens_capability::Registry;
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn timeout_setter_clamps_to_supported_range() {
+        // Above the max is clamped down.
+        assert_eq!(set_request_timeout_secs(120), MAX_TIMEOUT_SECS);
+        assert_eq!(request_timeout(), Duration::from_secs(MAX_TIMEOUT_SECS));
+        // Zero is clamped up to the minimum.
+        assert_eq!(set_request_timeout_secs(0), MIN_TIMEOUT_SECS);
+        // A value in range is applied verbatim.
+        assert_eq!(set_request_timeout_secs(20), 20);
+        assert_eq!(request_timeout_secs(), 20);
+        // Restore the default so other tests see a known value.
+        set_request_timeout_secs(DEFAULT_TIMEOUT_SECS);
+    }
 
     #[test]
     fn capability_has_expected_id_and_annotations() {

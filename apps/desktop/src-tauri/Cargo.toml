@@ -34,6 +34,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "ma
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# GUI-launched apps on macOS/Linux get launchd's minimal PATH, so kubeconfig
+# exec plugins (kubectl, krew plugins, cloud CLIs) can't be found. This
+# resolves the user's login-shell PATH at startup. No-op on Windows.
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
