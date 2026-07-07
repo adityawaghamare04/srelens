@@ -6,7 +6,39 @@ const WORKSPACE_LAYOUT_KEY = "srelens.workspaceLayout";
 const CONTEXT_PROFILES_KEY = "srelens.contextProfiles";
 const KUBECONFIG_FILES_KEY = "srelens.kubeconfigFiles";
 const CONTEXT_ORDER_KEY = "srelens.contextOrder";
+const REQUEST_TIMEOUT_KEY = "srelens.requestTimeoutSecs";
 const LEGACY_PREFIX = "free" + "lens";
+
+/** Per-request timeout budget (connect + list/get/apply), in seconds. */
+export const REQUEST_TIMEOUT = { MIN: 1, MAX: 30, DEFAULT: 8 } as const;
+
+/** Clamp any value to the supported timeout range; fall back to the default. */
+export function clampTimeoutSecs(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return REQUEST_TIMEOUT.DEFAULT;
+  return Math.round(Math.max(REQUEST_TIMEOUT.MIN, Math.min(REQUEST_TIMEOUT.MAX, n)));
+}
+
+/** The persisted request timeout in seconds, or the default when unset/invalid. */
+export function getRequestTimeoutSecs(): number {
+  try {
+    const raw = stored(REQUEST_TIMEOUT_KEY);
+    return raw === null ? REQUEST_TIMEOUT.DEFAULT : clampTimeoutSecs(JSON.parse(raw));
+  } catch {
+    return REQUEST_TIMEOUT.DEFAULT;
+  }
+}
+
+/** Persist the request timeout (clamped). Returns the clamped value stored. */
+export function setRequestTimeoutSecs(secs: number): number {
+  const clamped = clampTimeoutSecs(secs);
+  try {
+    localStorage.setItem(REQUEST_TIMEOUT_KEY, JSON.stringify(clamped));
+  } catch {
+    // ignore unavailable/quota-exceeded storage
+  }
+  return clamped;
+}
 
 function stored(key: string): string | null {
   return localStorage.getItem(key) ?? localStorage.getItem(key.replace("srelens", LEGACY_PREFIX));

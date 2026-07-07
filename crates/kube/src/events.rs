@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListEventsIn {
@@ -88,7 +88,7 @@ pub fn list_events_capability(cache: Arc<ClientCache>) -> Capability {
                     .map_err(CapabilityError::Handler)?;
                 let api: kube::Api<Event> = crate::scoped_api(client, &input.namespace);
                 let params = event_list_params(&input.object_kind, &input.object_name);
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&params))
+                let list = tokio::time::timeout(request_timeout(), api.list(&params))
                     .await
                     .map_err(|_| CapabilityError::Handler("list events timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;

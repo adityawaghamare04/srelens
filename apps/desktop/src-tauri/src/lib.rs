@@ -4,6 +4,7 @@ mod exec;
 mod files;
 mod forward;
 mod logs;
+mod settings;
 mod updater;
 mod watch;
 
@@ -13,6 +14,7 @@ use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
 use forward::{start_port_forward, stop_port_forward, ForwardManager};
 use srelens_kube::client_cache::ClientCache;
 use logs::{start_log_stream, stop_log_stream, LogStreamManager};
+use settings::{get_request_timeout, set_request_timeout};
 use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch, WatchManager};
 
@@ -20,6 +22,9 @@ pub use capabilities::build_registry;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The SRELENS_TIMEOUT_SECS override is applied in `main()` before dispatch,
+    // so it's live here; the Settings UI can adjust it further at runtime.
+
     // One shared client cache: request/response capabilities AND live watches
     // reuse the same authenticated kube-rs clients.
     let cache = ClientCache::new_many(capabilities::default_kubeconfig_paths());
@@ -62,7 +67,9 @@ pub fn run() {
             pick_kubeconfig_files,
             save_pasted_kubeconfig,
             update_check,
-            update_install
+            update_install,
+            set_request_timeout,
+            get_request_timeout
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

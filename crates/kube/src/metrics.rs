@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 
 /// Parse a Kubernetes CPU quantity to integer millicores.
 pub fn cpu_millicores(s: &str) -> i64 {
@@ -85,7 +85,7 @@ pub fn node_metrics_capability(cache: Arc<ClientCache>) -> Capability {
             async move {
                 let client = cache.get(&input.context).await.map_err(CapabilityError::Handler)?;
                 let api = metrics_api(client, "NodeMetrics", false, "");
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("node metrics timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
@@ -153,7 +153,7 @@ pub fn pod_metrics_capability(cache: Arc<ClientCache>) -> Capability {
             async move {
                 let client = cache.get(&input.context).await.map_err(CapabilityError::Handler)?;
                 let api = metrics_api(client, "PodMetrics", true, &input.namespace);
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("pod metrics timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;

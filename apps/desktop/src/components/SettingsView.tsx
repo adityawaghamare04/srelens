@@ -12,6 +12,7 @@ import {
   PanelRight,
   RotateCcw,
   Sun,
+  Timer,
   Upload,
   FilePlus2,
   X,
@@ -34,7 +35,9 @@ import {
 import { listContexts, type ClusterContext } from "../lib/clusters";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
+  REQUEST_TIMEOUT,
   contextDisplayName,
+  getRequestTimeoutSecs,
   loadUpdateChannel,
   saveUpdateChannel,
   type ContextLogo,
@@ -43,6 +46,7 @@ import {
   type WorkspaceLayoutSettings,
   orderContexts,
 } from "../lib/settings";
+import { updateRequestTimeout } from "../lib/requestTimeout";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { pickKubeconfigFiles, savePastedKubeconfig } from "../lib/files";
 import { checkForUpdate, installUpdate, type UpdateMeta } from "../lib/updater";
@@ -129,6 +133,7 @@ export function SettingsView({
   const [updateState, setUpdateState] = useState<UpdatePhase>({ phase: "idle" });
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
   const [currentVersion, setCurrentVersion] = useState("");
+  const [requestTimeout, setRequestTimeout] = useState(() => getRequestTimeoutSecs());
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
 
@@ -439,6 +444,32 @@ export function SettingsView({
                   aria-label="Default namespace"
                 />
               </label>
+
+              <div className="fl-settings-width-grid">
+                <label className="fl-settings-width-control">
+                  <span className="fl-settings-width-control__header">
+                    <Timer aria-hidden="true" />
+                    <span>
+                      <strong>Request timeout</strong>
+                      <small>How long to wait for a cluster response. Raise it for large clusters.</small>
+                    </span>
+                    <output>{requestTimeout}s</output>
+                  </span>
+                  <input
+                    type="range"
+                    min={REQUEST_TIMEOUT.MIN}
+                    max={REQUEST_TIMEOUT.MAX}
+                    step="1"
+                    value={requestTimeout}
+                    onChange={(event) => {
+                      const secs = Number(event.target.value);
+                      setRequestTimeout(secs);
+                      void updateRequestTimeout(secs);
+                    }}
+                    aria-label="Cluster request timeout in seconds"
+                  />
+                </label>
+              </div>
             </SectionPanel>
           )}
 

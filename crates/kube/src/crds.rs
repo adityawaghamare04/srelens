@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::client_cache::ClientCache;
-use crate::connect::CONNECT_TIMEOUT;
+use crate::connect::request_timeout;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListCrdsIn {
@@ -68,7 +68,7 @@ pub fn list_crds_capability(cache: Arc<ClientCache>) -> Capability {
                     GroupVersionKind::gvk("apiextensions.k8s.io", "v1", "CustomResourceDefinition");
                 let ar = ApiResource::from_gvk(&gvk);
                 let api: Api<DynamicObject> = Api::all_with(client, &ar);
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("list CRDs timed out".into()))?
                     .map_err(handler_err)?;
@@ -160,7 +160,7 @@ pub fn list_custom_resource_capability(cache: Arc<ClientCache>) -> Capability {
                 } else {
                     Api::all_with(client, &ar)
                 };
-                let list = tokio::time::timeout(CONNECT_TIMEOUT, api.list(&ListParams::default()))
+                let list = tokio::time::timeout(request_timeout(), api.list(&ListParams::default()))
                     .await
                     .map_err(|_| CapabilityError::Handler("list custom resource timed out".into()))?
                     .map_err(handler_err)?;
