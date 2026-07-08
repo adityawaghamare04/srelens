@@ -15,6 +15,12 @@ import {
   type ResourceRow,
   type EventSummary,
 } from "../lib/manifest";
+import {
+  type StatefulSetSummary,
+  type DaemonSetSummary,
+  type JobSummary,
+  type CronJobSummary,
+} from "../lib/controllers";
 
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 type PodRow = PodSummary & { cpu?: number; memory?: number };
@@ -183,6 +189,10 @@ const CLUSTER_SCOPED: ResourceKind[] = [
 const TYPED_KINDS: ResourceKind[] = [
   "pods",
   "deployments",
+  "statefulsets",
+  "daemonsets",
+  "jobs",
+  "cronjobs",
   "services",
   "nodes",
   "events",
@@ -232,6 +242,59 @@ const deploymentColumns: Column<DeploymentSummary>[] = [
   { key: "upToDate", header: "Up-to-date" },
   { key: "available", header: "Available" },
   { key: "age", header: "Age", render: (d) => <Muted>{d.age}</Muted> },
+];
+
+const statefulSetColumns: Column<StatefulSetSummary>[] = [
+  { key: "name", header: "StatefulSet", render: (s) => <strong>{s.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (s) => <span className="fl-link">{s.namespace}</span> },
+  { key: "ready", header: "Ready" },
+  { key: "updated", header: "Updated" },
+  { key: "service", header: "Service", render: (s) => <Muted>{s.service || "—"}</Muted> },
+  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+];
+
+const daemonSetColumns: Column<DaemonSetSummary>[] = [
+  { key: "name", header: "DaemonSet", render: (d) => <strong>{d.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (d) => <span className="fl-link">{d.namespace}</span> },
+  { key: "desired", header: "Desired" },
+  { key: "current", header: "Current" },
+  { key: "ready", header: "Ready" },
+  { key: "upToDate", header: "Up-to-date" },
+  { key: "available", header: "Available" },
+  { key: "age", header: "Age", render: (d) => <Muted>{d.age}</Muted> },
+];
+
+const jobColumns: Column<JobSummary>[] = [
+  { key: "name", header: "Job", render: (j) => <strong>{j.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (j) => <span className="fl-link">{j.namespace}</span> },
+  { key: "completions", header: "Completions" },
+  {
+    key: "status",
+    header: "Status",
+    render: (j) => {
+      const [status, kind]: [string, StatusKind] =
+        j.failed > 0 ? ["Failed", "danger"] : j.active > 0 ? ["Active", "warning"] : ["Complete", "success"];
+      return <StatusPill status={status} kind={kind} />;
+    },
+  },
+  { key: "duration", header: "Duration", render: (j) => <Muted>{j.duration || "—"}</Muted> },
+  { key: "owner", header: "Owner", render: (j) => <Muted>{j.owner || "—"}</Muted> },
+  { key: "age", header: "Age", render: (j) => <Muted>{j.age}</Muted> },
+];
+
+const cronJobColumns: Column<CronJobSummary>[] = [
+  { key: "name", header: "CronJob", render: (c) => <strong>{c.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (c) => <span className="fl-link">{c.namespace}</span> },
+  { key: "schedule", header: "Schedule", render: (c) => <Muted>{c.schedule}</Muted> },
+  {
+    key: "suspended",
+    header: "State",
+    render: (c) =>
+      c.suspended ? <StatusPill status="Suspended" kind="neutral" /> : <StatusPill status="Active" kind="success" />,
+  },
+  { key: "active", header: "Active" },
+  { key: "lastSchedule", header: "Last run", render: (c) => <Muted>{c.lastSchedule || "—"}</Muted> },
+  { key: "age", header: "Age", render: (c) => <Muted>{c.age}</Muted> },
 ];
 
 const serviceColumns: Column<ServiceSummary>[] = [
@@ -456,6 +519,14 @@ export function ResourceBrowser({
         return podColumns as Column<{ name: string }>[];
       case "deployments":
         return deploymentColumns as Column<{ name: string }>[];
+      case "statefulsets":
+        return statefulSetColumns as Column<{ name: string }>[];
+      case "daemonsets":
+        return daemonSetColumns as Column<{ name: string }>[];
+      case "jobs":
+        return jobColumns as Column<{ name: string }>[];
+      case "cronjobs":
+        return cronJobColumns as Column<{ name: string }>[];
       case "services":
         return serviceColumns as Column<{ name: string }>[];
       default:

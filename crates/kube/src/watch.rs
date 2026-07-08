@@ -8,16 +8,21 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
+use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{Event as CoreEvent, Pod, Service};
 use kube::runtime::watcher::{Config, Event};
 use kube::Api;
 use serde::de::DeserializeOwned;
 
 use crate::client_cache::ClientCache;
+use crate::cronjobs::{summarise as summarise_cronjob, CronJobSummary};
+use crate::daemonsets::{summarise as summarise_daemonset, DaemonSetSummary};
 use crate::deployments::{summarise as summarise_deployment, DeploymentSummary};
 use crate::events::{summarise as summarise_event, EventSummary};
+use crate::jobs::{summarise as summarise_job, JobSummary};
 use crate::services::{summarise as summarise_service, ServiceSummary};
+use crate::statefulsets::{summarise as summarise_statefulset, StatefulSetSummary};
 use crate::workloads::{summarise_pod, PodSummary};
 
 /// Normalised watch event over summaries (decoupled from kube-rs types so the
@@ -172,6 +177,95 @@ where
         api,
         summarise_deployment,
         |d: &DeploymentSummary| d.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch StatefulSets in a namespace.
+pub async fn watch_statefulsets<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<StatefulSetSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<StatefulSet> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_statefulset,
+        |s: &StatefulSetSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch DaemonSets in a namespace.
+pub async fn watch_daemonsets<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<DaemonSetSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<DaemonSet> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_daemonset,
+        |d: &DaemonSetSummary| d.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Jobs in a namespace.
+pub async fn watch_jobs<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<JobSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Job> = crate::scoped_api(client, &namespace);
+    watch_typed(api, summarise_job, |j: &JobSummary| j.name.clone(), on_update, on_status).await
+}
+
+/// Watch CronJobs in a namespace.
+pub async fn watch_cronjobs<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<CronJobSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<CronJob> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_cronjob,
+        |c: &CronJobSummary| c.name.clone(),
         on_update,
         on_status,
     )
