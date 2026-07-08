@@ -14,6 +14,8 @@ export { tokens } from "./tokens";
 export type { Tokens } from "./tokens";
 export { Button } from "./Button";
 export type { ButtonProps, ButtonVariant } from "./Button";
+export { ColumnPicker } from "./ColumnPicker";
+export type { ColumnOption } from "./ColumnPicker";
 export { TextInput } from "./TextInput";
 export type { TextInputProps } from "./TextInput";
 export { Panel } from "./Panel";

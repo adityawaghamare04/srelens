@@ -171,6 +171,32 @@ export function saveKubeconfigFiles(paths: string[]): void {
   }
 }
 
+const HIDDEN_COLUMNS_KEY = "srelens.hiddenColumns";
+
+/** Column keys the user has hidden for a given table view (keyed by view id). */
+export function loadHiddenColumns(view: string): string[] {
+  try {
+    const parsed = JSON.parse(stored(HIDDEN_COLUMNS_KEY) ?? "{}") as unknown;
+    const map = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const keys = map[view];
+    return Array.isArray(keys) ? keys.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist the hidden column keys for a view, merging into the per-view map. */
+export function saveHiddenColumns(view: string, keys: string[]): void {
+  try {
+    const parsed = JSON.parse(stored(HIDDEN_COLUMNS_KEY) ?? "{}") as unknown;
+    const map = parsed && typeof parsed === "object" ? (parsed as Record<string, string[]>) : {};
+    map[view] = [...new Set(keys)];
+    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(map));
+  } catch {
+    // ignore unavailable/quota-exceeded storage
+  }
+}
+
 export function loadContextOrder(): string[] {
   try {
     const parsed = JSON.parse(stored(CONTEXT_ORDER_KEY) ?? "[]") as unknown;
