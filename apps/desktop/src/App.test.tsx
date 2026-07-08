@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import React from "react";
 
 // Capture the Tauri event handler App registers for the macOS Cmd+W menu item,
@@ -19,6 +19,18 @@ const tauri = vi.hoisted(() => {
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ close: tauri.windowClose }),
+}));
+
+const { checkForUpdateMock, notifyUpdateAvailableMock } = vi.hoisted(() => ({
+  checkForUpdateMock: vi.fn(),
+  notifyUpdateAvailableMock: vi.fn(),
+}));
+vi.mock("./lib/updater", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./lib/updater")>()),
+  checkForUpdate: checkForUpdateMock,
+}));
+vi.mock("./lib/notify", () => ({
+  notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), updateAvailable: notifyUpdateAvailableMock },
 }));
 
 vi.mock("./components/ClusterHotbar", () => ({
@@ -78,7 +90,23 @@ vi.mock("./components/SettingsView", () => ({
 
 import { App } from "./App";
 
+beforeEach(() => {
+  checkForUpdateMock.mockReset();
+  checkForUpdateMock.mockResolvedValue(null); // up to date unless a test says otherwise
+  notifyUpdateAvailableMock.mockReset();
+});
+
 describe("App", () => {
+  it("checks for updates on startup and toasts, linking to the Updates section", async () => {
+    checkForUpdateMock.mockResolvedValue({ version: "0.3.0", currentVersion: "0.2.0", notes: "" });
+    render(<App />);
+    await waitFor(() => expect(notifyUpdateAvailableMock).toHaveBeenCalledWith("0.3.0", expect.any(Function)));
+    // The toast's action opens the Settings tab (deep-linked to Updates).
+    const onView = notifyUpdateAvailableMock.mock.calls[0][1] as () => void;
+    onView();
+    expect(await screen.findByTestId("settings")).toBeDefined();
+  });
+
   it("shows the welcome state until a cluster is opened", () => {
     render(<App />);
     expect(screen.getByText(/pure-Rust Kubernetes UI/)).toBeDefined();
