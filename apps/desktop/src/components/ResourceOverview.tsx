@@ -12,7 +12,7 @@ import {
   type BadgeVariant,
   type Column,
 } from "../ui";
-import { DeployRevisions, ManagedPods } from "./WorkloadRelations";
+import { DeployRevisions, ManagedPods, CronJobJobs } from "./WorkloadRelations";
 import { MetricsPanel } from "./MetricsPanel";
 import { ForwardDialog } from "./ForwardDialog";
 import {
@@ -39,6 +39,20 @@ export function ageFromTimestamp(iso?: string, now: number = Date.now()): string
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   return `${days}d`;
+}
+
+/** Human-readable duration between two ISO timestamps, e.g. "2m 30s". */
+export function durationBetween(startIso?: string, endIso?: string): string {
+  if (!startIso || !endIso) return "—";
+  const secs = Math.max(0, Math.floor((new Date(endIso).getTime() - new Date(startIso).getTime()) / 1000));
+  if (Number.isNaN(secs)) return "—";
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return remSecs ? `${mins}m ${remSecs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
 }
 
 /** Absolute, human-readable timestamp, e.g. "Jun 10, 2026, 12:52:33 PM". */
@@ -956,7 +970,24 @@ function WorkloadDetailView({
                 ""
               ),
             ],
-            ["Strategy Type", str(asRecord(spec.strategy).type) || str(spec.updateStrategy && asRecord(spec.updateStrategy).type)],
+            [
+              "Strategy Type",
+              kind === "Deployment"
+                ? str(asRecord(spec.strategy).type)
+                : updateStrategyText(asRecord(spec.updateStrategy)),
+            ],
+            ...(kind === "StatefulSet"
+              ? ([
+                  ["Service", <span key="svc" className="fl-mono">{str(spec.serviceName)}</span>],
+                  [
+                    "Volume claim templates",
+                    asArray(spec.volumeClaimTemplates)
+                      .map((t) => str(asRecord(asRecord(t).metadata).name))
+                      .filter(Boolean)
+                      .join(", ") || "—",
+                  ],
+                ] as Pair[])
+              : []),
             ["Status", <StatusPill key="st" status={phase} kind={phaseKind(phase)} />],
             ["Conditions", <ConditionBadges key="c" conditions={conditions} />],
           ]}
@@ -983,9 +1014,21 @@ function WorkloadDetailView({
   );
 }
 
+/** "RollingUpdate (partition 2)" / "RollingUpdate (max unavailable 1)" / "OnDelete". */
+function updateStrategyText(strategy: Record<string, unknown>): string {
+  const type = str(strategy.type) || "RollingUpdate";
+  const ru = asRecord(strategy.rollingUpdate);
+  const parts: string[] = [];
+  if (ru.partition != null) parts.push(`partition ${str(ru.partition)}`);
+  if (ru.maxUnavailable != null) parts.push(`max unavailable ${str(ru.maxUnavailable)}`);
+  if (ru.maxSurge != null) parts.push(`max surge ${str(ru.maxSurge)}`);
+  return parts.length ? `${type} (${parts.join(", ")})` : type;
+}
+
 function DaemonSetBody({ obj }: { obj: K8sObject }) {
   const status = asRecord(obj.status);
-  const selector = asRecord(asRecord(asRecord(obj.spec).selector).matchLabels) as Record<string, string>;
+  const spec = asRecord(obj.spec);
+  const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
   return (
     <Section title="Scheduling">
       <KV
@@ -995,6 +1038,7 @@ function DaemonSetBody({ obj }: { obj: K8sObject }) {
           ["Ready", str(status.numberReady)],
           ["Up-to-date", str(status.updatedNumberScheduled)],
           ["Available", str(status.numberAvailable)],
+          ["Update strategy", updateStrategyText(asRecord(spec.updateStrategy))],
           ["Selector", <Chips key="s" map={selector} />],
         ]}
       />
@@ -1110,9 +1154,16 @@ function NodeBody({ obj }: { obj: K8sObject }) {
   );
 }
 
-function JobBody({ obj }: { obj: K8sObject }) {
+function JobBody({ obj, now }: { obj: K8sObject; now: number }) {
   const spec = asRecord(obj.spec);
   const status = asRecord(obj.status);
+  const startTime = str(status.startTime);
+  const completionTime = str(status.completionTime);
+  const duration = completionTime
+    ? durationBetween(startTime, completionTime)
+    : startTime
+      ? `${ageFromTimestamp(startTime, now)} (running)`
+      : "—";
   return (
     <Section title="Job">
       <KV
@@ -1122,16 +1173,34 @@ function JobBody({ obj }: { obj: K8sObject }) {
           ["Succeeded", str(status.succeeded) || "0"],
           ["Failed", str(status.failed) || "0"],
           ["Active", str(status.active) || "0"],
+          ["Started", startTime ? timestampWithAge(startTime, now) : "—"],
+          ["Completed", completionTime ? timestampWithAge(completionTime, now) : "—"],
+          ["Duration", duration],
         ]}
       />
     </Section>
   );
 }
 
-function CronJobBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?: OpenResource }) {
+function CronJobBody({
+  obj,
+  now,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  now: number;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
+  const meta = asRecord(obj.metadata);
   const spec = asRecord(obj.spec);
   const status = asRecord(obj.status);
-  const namespace = str(asRecord(obj.metadata).namespace) || null;
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
+  const lastSchedule = str(status.lastScheduleTime);
+  const successKept = str(spec.successfulJobsHistoryLimit) || "3";
+  const failedKept = str(spec.failedJobsHistoryLimit) || "1";
   const activeJobs = asArray(status.active)
     .map(asRecord)
     .map((job) => ({
@@ -1141,23 +1210,35 @@ function CronJobBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?:
     }))
     .filter((job) => job.name);
   return (
-    <Section title="Schedule">
-      <KV
-        pairs={[
-          ["Schedule", <span className="fl-mono">{str(spec.schedule)}</span>],
-          ["Suspend", spec.suspend === true ? "Yes" : "No"],
-          ["Concurrency policy", str(spec.concurrencyPolicy)],
-          [
-            "Active jobs",
-            activeJobs.length ? (
-              <LinkedResources targets={activeJobs} onOpenResource={onOpenResource} />
-            ) : (
-              "0"
-            ),
-          ],
-        ]}
-      />
-    </Section>
+    <>
+      <Section title="Schedule">
+        <KV
+          pairs={[
+            ["Schedule", <span className="fl-mono">{str(spec.schedule)}</span>],
+            ["Suspend", spec.suspend === true ? "Yes" : "No"],
+            ["Concurrency policy", str(spec.concurrencyPolicy)],
+            ["Last schedule", lastSchedule ? timestampWithAge(lastSchedule, now) : "—"],
+            ["History (kept)", `${successKept} succeeded, ${failedKept} failed`],
+            [
+              "Active jobs",
+              activeJobs.length ? (
+                <LinkedResources targets={activeJobs} onOpenResource={onOpenResource} />
+              ) : (
+                "0"
+              ),
+            ],
+          ]}
+        />
+      </Section>
+      {context && namespace && (
+        <CronJobJobs
+          context={context}
+          namespace={namespace}
+          ownerName={name}
+          onOpenResource={onOpenResource}
+        />
+      )}
+    </>
   );
 }
 
@@ -2075,11 +2156,13 @@ function KindBody({
   kind,
   obj,
   context = "",
+  now = Date.now(),
   onOpenResource,
 }: {
   kind: string;
   obj: K8sObject;
   context?: string;
+  now?: number;
   onOpenResource?: OpenResource;
 }) {
   switch (kind) {
@@ -2090,9 +2173,9 @@ function KindBody({
     case "Node":
       return <NodeBody obj={obj} />;
     case "Job":
-      return <JobBody obj={obj} />;
+      return <JobBody obj={obj} now={now} />;
     case "CronJob":
-      return <CronJobBody obj={obj} onOpenResource={onOpenResource} />;
+      return <CronJobBody obj={obj} now={now} context={context} onOpenResource={onOpenResource} />;
     case "ConfigMap":
       return <ConfigBody obj={obj} />;
     case "Secret":
@@ -2219,7 +2302,7 @@ function GenericDetail({
         <Chips map={meta.annotations as Record<string, string>} />
       </Section>
 
-      <KindBody kind={kind} obj={obj} context={context} onOpenResource={onOpenResource} />
+      <KindBody kind={kind} obj={obj} context={context} now={now} onOpenResource={onOpenResource} />
 
       {context && namespace && Object.keys(podSelector).length > 0 && (
         <ManagedPods

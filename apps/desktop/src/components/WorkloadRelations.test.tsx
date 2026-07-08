@@ -1,7 +1,36 @@
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
-import { DeployRevisions, ManagedPods } from "./WorkloadRelations";
+import { DeployRevisions, ManagedPods, CronJobJobs } from "./WorkloadRelations";
+
+describe("CronJobJobs", () => {
+  it("lists the CronJob's owned jobs newest-first and opens them", async () => {
+    const onOpenResource = vi.fn();
+    const listJobsFn = vi.fn().mockResolvedValue({
+      jobs: [
+        { name: "nightly-2", namespace: "ops", completions: "1/1", active: 0, failed: 0, duration: "2m", owner: "nightly", age: "1h" },
+        { name: "other", namespace: "ops", completions: "1/1", active: 0, failed: 0, duration: "1m", owner: "different", age: "2h" },
+        { name: "nightly-1", namespace: "ops", completions: "0/1", active: 0, failed: 1, duration: "30s", owner: "nightly", age: "1d" },
+      ],
+    });
+    render(
+      <CronJobJobs
+        context="kind-dev"
+        namespace="ops"
+        ownerName="nightly"
+        onOpenResource={onOpenResource}
+        listJobsFn={listJobsFn}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("nightly-2")).toBeDefined());
+    expect(listJobsFn).toHaveBeenCalledWith("kind-dev", "ops");
+    // Only jobs owned by this CronJob; the unrelated "other" is filtered out.
+    expect(screen.queryByText("other")).toBeNull();
+    expect(screen.getByText("nightly-1")).toBeDefined();
+    fireEvent.click(screen.getByText("nightly-2"));
+    expect(onOpenResource).toHaveBeenCalledWith({ kind: "Job", namespace: "ops", name: "nightly-2" });
+  });
+});
 
 describe("DeployRevisions", () => {
   it("renders the deployment's revisions newest-first", async () => {

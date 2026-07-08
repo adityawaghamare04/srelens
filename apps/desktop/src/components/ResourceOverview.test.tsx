@@ -6,6 +6,7 @@ import React from "react";
 vi.mock("./WorkloadRelations", () => ({
   DeployRevisions: () => <div data-testid="deploy-revisions" />,
   ManagedPods: () => <div data-testid="managed-pods" />,
+  CronJobJobs: () => <div data-testid="cronjob-jobs" />,
 }));
 vi.mock("./MetricsPanel", () => ({ MetricsPanel: () => <div data-testid="metrics" /> }));
 
@@ -200,6 +201,78 @@ describe("ObjectDetail (Deployment)", () => {
     expect(screen.getByText("Progressing")).toBeDefined();
     expect(screen.getByText("Available")).toBeDefined();
     expect(screen.getByText("Running")).toBeDefined();
+  });
+});
+
+describe("ObjectDetail (workload kinds)", () => {
+  it("shows Job timing (started, completed, duration)", () => {
+    const job: K8sObject = {
+      kind: "Job",
+      metadata: { name: "backup", namespace: "ops" },
+      spec: { completions: 1 },
+      status: {
+        succeeded: 1,
+        startTime: "2026-01-01T10:00:00Z",
+        completionTime: "2026-01-01T10:02:30Z",
+      },
+    };
+    render(<ObjectDetail kind="Job" obj={job} now={NOW} />);
+    expect(screen.getByText("Started")).toBeDefined();
+    expect(screen.getByText("Completed")).toBeDefined();
+    expect(screen.getByText("Duration")).toBeDefined();
+    // 150s → "2m 30s"
+    expect(screen.getByText("2m 30s")).toBeDefined();
+  });
+
+  it("shows a StatefulSet's service, update strategy, and partition", () => {
+    const sts: K8sObject = {
+      kind: "StatefulSet",
+      metadata: { name: "pg", namespace: "data" },
+      spec: {
+        replicas: 3,
+        serviceName: "pg-headless",
+        selector: { matchLabels: { app: "pg" } },
+        updateStrategy: { type: "RollingUpdate", rollingUpdate: { partition: 2 } },
+        volumeClaimTemplates: [{ metadata: { name: "data" } }, { metadata: { name: "wal" } }],
+      },
+      status: { replicas: 3, readyReplicas: 2, updatedReplicas: 3 },
+    };
+    render(<ObjectDetail kind="StatefulSet" obj={sts} now={NOW} />);
+    expect(screen.getByText("pg-headless")).toBeDefined();
+    expect(screen.getByText("RollingUpdate (partition 2)")).toBeDefined();
+    // volume claim template names
+    expect(screen.getByText("data, wal")).toBeDefined();
+  });
+
+  it("shows a CronJob's history limits and last schedule", () => {
+    const cj: K8sObject = {
+      kind: "CronJob",
+      metadata: { name: "nightly", namespace: "ops" },
+      spec: {
+        schedule: "0 2 * * *",
+        suspend: false,
+        concurrencyPolicy: "Forbid",
+        successfulJobsHistoryLimit: 3,
+        failedJobsHistoryLimit: 1,
+      },
+      status: { lastScheduleTime: "2026-01-01T02:00:00Z" },
+    };
+    render(<ObjectDetail kind="CronJob" obj={cj} now={NOW} />);
+    expect(screen.getByText("History (kept)")).toBeDefined();
+    expect(screen.getByText("3 succeeded, 1 failed")).toBeDefined();
+    expect(screen.getByText("Last schedule")).toBeDefined();
+  });
+
+  it("shows a DaemonSet's update strategy", () => {
+    const ds: K8sObject = {
+      kind: "DaemonSet",
+      metadata: { name: "fluentd", namespace: "logging" },
+      spec: { updateStrategy: { type: "RollingUpdate", rollingUpdate: { maxUnavailable: 1 } } },
+      status: { desiredNumberScheduled: 5, numberReady: 5 },
+    };
+    render(<ObjectDetail kind="DaemonSet" obj={ds} now={NOW} />);
+    expect(screen.getByText("Update strategy")).toBeDefined();
+    expect(screen.getByText("RollingUpdate (max unavailable 1)")).toBeDefined();
   });
 });
 

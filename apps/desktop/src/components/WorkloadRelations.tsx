@@ -6,6 +6,7 @@ import {
   type ReplicaSetSummary,
   type PodSummary,
 } from "../lib/workloads";
+import { listJobs, type JobSummary } from "../lib/controllers";
 import { Spinner, StatusPill, Table, type StatusKind, type Column } from "../ui";
 import type { OpenResource } from "../lib/resourceNavigation";
 
@@ -87,6 +88,76 @@ export function DeployRevisions({
             : undefined
         }
         emptyText="No revisions"
+      />
+    </Section>
+  );
+}
+
+/** "Recent Jobs": the Jobs a CronJob owns (its run history), newest-first. */
+export function CronJobJobs({
+  context,
+  namespace,
+  ownerName,
+  onOpenResource,
+  listJobsFn = listJobs,
+}: {
+  context: string;
+  namespace: string;
+  ownerName: string;
+  onOpenResource?: OpenResource;
+  listJobsFn?: typeof listJobs;
+}) {
+  const [rows, setRows] = useState<JobSummary[] | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setRows(null);
+    setError("");
+    void listJobsFn(context, namespace).then((out) => {
+      if (!active) return;
+      if (out.error) setError(out.error);
+      else setRows((out.jobs ?? []).filter((j) => j.owner === ownerName));
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, ownerName, listJobsFn]);
+
+  if (error) return null; // a missing jobs list shouldn't break the panel
+  if (rows === null)
+    return (
+      <Section title="Recent Jobs">
+        <Spinner label="Loading jobs" />
+      </Section>
+    );
+
+  const columns: Column<JobSummary>[] = [
+    { key: "name", header: "Name", render: (j) => <span className="fl-mono">{j.name}</span> },
+    { key: "completions", header: "Completions", render: (j) => j.completions },
+    {
+      key: "status",
+      header: "Status",
+      render: (j) => {
+        const [status, kind]: [string, StatusKind] =
+          j.failed > 0 ? ["Failed", "danger"] : j.active > 0 ? ["Active", "warning"] : ["Complete", "success"];
+        return <StatusPill status={status} kind={kind} />;
+      },
+    },
+    { key: "duration", header: "Duration", render: (j) => j.duration || "—" },
+    { key: "age", header: "Age", render: (j) => j.age },
+  ];
+
+  return (
+    <Section title="Recent Jobs">
+      <Table
+        columns={columns}
+        data={rows}
+        getRowKey={(j) => j.name}
+        onRowClick={
+          onOpenResource ? (row) => onOpenResource({ kind: "Job", namespace, name: row.name }) : undefined
+        }
+        emptyText="No jobs yet"
       />
     </Section>
   );
