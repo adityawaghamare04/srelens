@@ -13,6 +13,8 @@ use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Event as CoreEvent, LimitRange, Pod, ResourceQuota, Secret, Service,
 };
+use k8s_openapi::api::discovery::v1::EndpointSlice;
+use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use kube::runtime::watcher::{Config, Event};
 use kube::Api;
 use serde::de::DeserializeOwned;
@@ -21,7 +23,10 @@ use crate::client_cache::ClientCache;
 use crate::configmaps::{summarise as summarise_configmap, ConfigMapSummary};
 use crate::cronjobs::{summarise as summarise_cronjob, CronJobSummary};
 use crate::daemonsets::{summarise as summarise_daemonset, DaemonSetSummary};
+use crate::endpointslices::{summarise as summarise_endpointslice, EndpointSliceSummary};
+use crate::ingresses::{summarise as summarise_ingress, IngressSummary};
 use crate::limitranges::{summarise as summarise_limitrange, LimitRangeSummary};
+use crate::networkpolicies::{summarise as summarise_networkpolicy, NetworkPolicySummary};
 use crate::resourcequotas::{summarise as summarise_resourcequota, ResourceQuotaSummary};
 use crate::secrets::{summarise as summarise_secret, SecretSummary};
 use crate::deployments::{summarise as summarise_deployment, DeploymentSummary};
@@ -416,6 +421,78 @@ where
         api,
         summarise_event,
         |e: &EventSummary| e.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Ingresses in a namespace.
+pub async fn watch_ingresses<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<IngressSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Ingress> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_ingress,
+        |i: &IngressSummary| i.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch EndpointSlices in a namespace.
+pub async fn watch_endpointslices<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<EndpointSliceSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<EndpointSlice> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_endpointslice,
+        |e: &EndpointSliceSummary| e.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch NetworkPolicies in a namespace.
+pub async fn watch_networkpolicies<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<NetworkPolicySummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<NetworkPolicy> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_networkpolicy,
+        |n: &NetworkPolicySummary| n.name.clone(),
         on_update,
         on_status,
     )

@@ -53,6 +53,9 @@ vi.mock("../lib/watch", () => ({
     "resourcequotas",
     "limitranges",
     "services",
+    "ingresses",
+    "endpointslices",
+    "networkpolicies",
   ],
 }));
 vi.mock("./PodTerminal", () => ({ PodTerminal: () => <div data-testid="pod-terminal" /> }));
@@ -225,6 +228,54 @@ describe("ResourceBrowser", () => {
     render(<ResourceBrowser context="kind-dev" kind="limitranges" />);
     await waitFor(() => expect(screen.getByText("mem-lr")).toBeDefined());
     expect(screen.getByText("2")).toBeDefined();
+  });
+
+  it("streams ingresses live with class, hosts and address", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([
+        { name: "web", namespace: "default", class: "nginx", hosts: "app.example.com", address: "203.0.113.4", ports: "80, 443", age: "3d" },
+      ]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="ingresses" />);
+    await waitFor(() =>
+      expect(watchResourceMock).toHaveBeenCalledWith(
+        "kind-dev",
+        "",
+        "ingresses",
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    );
+    expect(await screen.findByText("web")).toBeDefined();
+    expect(screen.getByText("app.example.com")).toBeDefined();
+    expect(screen.getByText("203.0.113.4")).toBeDefined();
+  });
+
+  it("streams endpointslices live with ready counts and owning service", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([
+        { name: "web-abc", namespace: "default", addressType: "IPv4", endpoints: "2/3", ports: "8080", service: "web", age: "1h" },
+      ]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="endpointslices" />);
+    await waitFor(() => expect(screen.getByText("web-abc")).toBeDefined());
+    expect(screen.getByText("2/3")).toBeDefined();
+    expect(screen.getByText("web")).toBeDefined();
+  });
+
+  it("streams networkpolicies live with rule counts and pod selector", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([
+        { name: "deny", namespace: "default", podSelector: "app=web", ingress: 1, egress: 2, policyTypes: "Ingress, Egress", age: "5d" },
+      ]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="networkpolicies" />);
+    await waitFor(() => expect(screen.getByText("deny")).toBeDefined());
+    expect(screen.getByText("app=web")).toBeDefined();
+    expect(screen.getByText("Ingress, Egress")).toBeDefined();
   });
 
   it("starts on the provided namespace and reports filter changes", async () => {

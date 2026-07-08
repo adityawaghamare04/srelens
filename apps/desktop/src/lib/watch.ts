@@ -20,6 +20,9 @@ export const WATCHABLE_KINDS = [
   "resourcequotas",
   "limitranges",
   "services",
+  "ingresses",
+  "endpointslices",
+  "networkpolicies",
   "events",
 ] as const;
 
