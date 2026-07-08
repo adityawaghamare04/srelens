@@ -12,6 +12,7 @@
 
 <p align="center">
   <a href="https://srelens.com">Website</a> ·
+  <a href="#install">Install</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#mcp-server">MCP server</a> ·
   <a href="docs/DEVELOPMENT.md">Developer guide</a> ·
@@ -62,6 +63,19 @@ surfaces never drift.
 - **Command palette** — `⌘K` keyboard-first navigation across contexts, resources, and actions.
 - **MCP-native** — every capability is also an MCP tool; enable the server and copy client config from **Settings → MCP** (see below).
 - **Local-first** — talks directly to your API servers with your kubeconfig credentials. No cloud service in between.
+
+## Install
+
+Download the latest build for your platform from the
+[**Releases**](https://github.com/srelens/srelens/releases/latest) page:
+
+- **macOS** — `.dmg` (Apple silicon & Intel)
+- **Linux** — `.AppImage`, `.deb`, or `.rpm`
+- **Windows** — `.msi` installer
+
+See the [installation guide](docs/INSTALL.md) for step-by-step instructions,
+first-launch security prompts, updating, and uninstalling. Prefer to build from
+source? See [Quick start](#quick-start).
 
 ## MCP server
 
