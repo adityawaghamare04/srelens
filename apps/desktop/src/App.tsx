@@ -164,7 +164,7 @@ export function App() {
   // browser-style tab behavior.
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    const unlisten = listen("close-active-tab", () => {
+    const unlistenPromise = listen("close-active-tab", () => {
       const id = activeTabIdRef.current;
       if (id != null) {
         closeView(id);
@@ -173,7 +173,7 @@ export function App() {
       }
     });
     return () => {
-      void unlisten.then((un) => un());
+      void unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
 
