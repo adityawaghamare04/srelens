@@ -167,11 +167,13 @@ export function App() {
     const unlistenPromise = listen("close-active-tab", () => {
       const id = activeTabIdRef.current;
       if (id != null) {
+        const closingLastTab = tabsRef.current.length === 1 && tabsRef.current[0]?.id === id;
         closeView(id);
+        if (closingLastTab) void getCurrentWindow().close();
       } else {
         void getCurrentWindow().close();
       }
-    });
+    }).catch(() => () => {});
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
     };
