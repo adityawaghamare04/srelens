@@ -41,7 +41,11 @@ import {
   loadContextOrder,
   saveContextOrder,
   orderContexts,
+  loadUpdateChannel,
 } from "./lib/settings";
+import { checkForUpdateAndNotify } from "./lib/updateNotifier";
+import { notify } from "./lib/notify";
+import type { SettingsSection } from "./components/SettingsView";
 
 interface ViewTab {
   id: number;
@@ -81,6 +85,10 @@ export function App() {
   activeTabIdRef.current = activeTabId;
   const tabsRef = useRef<ViewTab[]>([]);
   tabsRef.current = tabs;
+  // Deep-link the Settings tab to a section (e.g. from the update toast). The
+  // nonce bumps to remount SettingsView at the requested section when asked.
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>("appearance");
+  const [settingsSectionNonce, setSettingsSectionNonce] = useState(0);
 
   // Persist per-cluster namespace whenever it changes.
   useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
@@ -205,8 +213,14 @@ export function App() {
     setQuery("");
   }
 
-  /** Open the single workspace-level Settings tab. */
-  function openSettings() {
+  /** Open the single workspace-level Settings tab, optionally at a section. */
+  function openSettings(section?: SettingsSection) {
+    if (section) {
+      setSettingsInitialSection(section);
+      // Remount SettingsView so it opens at the requested section even if the
+      // tab is already open on another section.
+      setSettingsSectionNonce((n) => n + 1);
+    }
     const existing = tabs.find((t) => t.kind === "settings" && !t.cluster);
     if (existing) {
       setActiveTabId(existing.id);
@@ -217,6 +231,31 @@ export function App() {
     setActiveTabId(id);
     setQuery("");
   }
+  // Keep a stable handle to openSettings so the update-check effect's toast
+  // action always uses the current tab state, not a stale closure.
+  const openSettingsRef = useRef(openSettings);
+  openSettingsRef.current = openSettings;
+
+  // Automatically check for updates on startup and periodically, surfacing a
+  // small toast (with a link to the Updates section) when one is available —
+  // rather than only when the user opens Settings and clicks "check".
+  const notifiedVersionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const channel = loadUpdateChannel();
+    const run = () =>
+      void checkForUpdateAndNotify(
+        channel,
+        (update) => {
+          notifiedVersionRef.current = update.version;
+          notify.updateAvailable(update.version, () => openSettingsRef.current("updates"));
+        },
+        { alreadyNotified: (v) => notifiedVersionRef.current === v },
+      );
+    run();
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    const timer = setInterval(run, SIX_HOURS);
+    return () => clearInterval(timer);
+  }, []);
 
   /** Open a resource's kind view and deep-link to its detail (from search). */
   function openResource(kind: ResourceKind, namespace: string | null, name: string) {
@@ -374,7 +413,8 @@ export function App() {
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
                   {activeKind === "settings" ? (
                     <SettingsView
-                      key={activeTab.id}
+                      key={`${activeTab.id}:${settingsSectionNonce}`}
+                      initialSection={settingsInitialSection}
                       theme={theme}
                       onThemeNameChange={setThemeName}
                       onThemeModeChange={setThemeMode}

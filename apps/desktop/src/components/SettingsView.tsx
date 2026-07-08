@@ -58,7 +58,7 @@ const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string;
   { mode: "system", label: "System", description: "Follow the OS appearance", icon: Monitor },
 ];
 
-type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts" | "updates";
+export type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts" | "updates";
 
 type UpdatePhase =
   | { phase: "idle" }
@@ -103,6 +103,7 @@ export function SettingsView({
   onKubeconfigFilesChange,
   contextOrder,
   onContextOrderChange,
+  initialSection = "appearance",
 }: {
   theme: Theme;
   onThemeNameChange: (name: ThemeName) => void;
@@ -117,8 +118,10 @@ export function SettingsView({
   onKubeconfigFilesChange: (paths: string[]) => void;
   contextOrder: string[];
   onContextOrderChange: (order: string[]) => void;
+  /** Section to open on mount (e.g. deep-linked from the update toast). */
+  initialSection?: SettingsSection;
 }) {
-  const [section, setSection] = useState<SettingsSection>("appearance");
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [contexts, setContexts] = useState<ClusterContext[] | null>(null);
   const [contextError, setContextError] = useState("");
   const [contextQuery, setContextQuery] = useState("");

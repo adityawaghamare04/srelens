@@ -18,4 +18,15 @@ export const notify = {
   info(message: string, description?: string): void {
     toast(message, description ? { description } : undefined);
   },
+  /**
+   * A newer app version is available. Carries a "View update" action that takes
+   * the user to the Updates section; stays up for a while since it's passive.
+   */
+  updateAvailable(version: string, onView: () => void): void {
+    toast("Update available", {
+      description: `srelens ${version} is ready to install.`,
+      action: { label: "View update", onClick: () => onView() },
+      duration: 12000,
+    });
+  },
 };

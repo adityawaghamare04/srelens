@@ -214,6 +214,30 @@ describe("SettingsView", () => {
     expect(updaterMocks.checkForUpdate).toHaveBeenCalledWith("stable");
   });
 
+  it("opens directly on the section named by initialSection", async () => {
+    updaterMocks.checkForUpdate.mockResolvedValue(null);
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+        initialSection="updates"
+      />,
+    );
+    // The Updates pane is shown without clicking the nav first.
+    expect(await screen.findByRole("button", { name: "Check for updates" })).toBeDefined();
+  });
+
   it("checks the dev channel when selected and persists the choice", async () => {
     updaterMocks.checkForUpdate.mockResolvedValue(null);
     render(
