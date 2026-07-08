@@ -110,6 +110,7 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::nodes::list_nodes_capability(cache.clone()));
     reg.register(srelens_kube::manifest::get_manifest_capability(cache.clone()));
     reg.register(srelens_kube::manifest::get_object_capability(cache.clone()));
+    reg.register(srelens_kube::secrets::get_secret_capability(cache.clone()));
     reg.register(srelens_kube::manifest::apply_manifest_capability(cache.clone()));
     reg.register(srelens_kube::manifest::validate_manifest_capability(cache.clone()));
     reg.register(srelens_kube::schema::open_api_schema_capability(cache.clone()));

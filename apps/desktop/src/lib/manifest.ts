@@ -78,6 +78,30 @@ export async function getObject(
   }
 }
 
+/**
+ * Read a Secret's values via the dedicated, consent-gateable `k8s.getSecret`.
+ * `k8s.getObject` redacts Secret data, so this is the only structured path to
+ * the (base64-encoded) values — fetched lazily, only when the user reveals a
+ * key.
+ */
+export async function getSecret(
+  context: string,
+  namespace: string,
+  name: string,
+  invoke: Invoker = invokeCapability,
+): Promise<{ data?: Record<string, string>; error?: string }> {
+  try {
+    const out = await invoke<{ data: Record<string, string> }>("k8s.getSecret", {
+      context,
+      namespace,
+      name,
+    });
+    return { data: out.data };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 /** Server-side apply a YAML manifest via `k8s.applyManifest`. */
 export async function applyManifest(
   context: string,

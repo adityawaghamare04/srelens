@@ -151,6 +151,7 @@ pub fn cronjob_set_suspend_capability(cache: Arc<ClientCache>) -> Capability {
             read_only: false,
             destructive: false,
             requires_confirm: true,
+            sensitive: false,
         },
         move |input: SetSuspendIn| {
             let cache = cache.clone();
@@ -200,6 +201,7 @@ pub fn cronjob_trigger_now_capability(cache: Arc<ClientCache>) -> Capability {
             read_only: false,
             destructive: false,
             requires_confirm: true,
+            sensitive: false,
         },
         move |input: TriggerNowIn| {
             let cache = cache.clone();
