@@ -4,6 +4,7 @@ mod exec;
 mod files;
 mod forward;
 mod logs;
+mod mcp;
 mod settings;
 mod updater;
 mod watch;
@@ -14,6 +15,10 @@ use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
 use forward::{start_port_forward, stop_port_forward, ForwardManager};
 use srelens_kube::client_cache::ClientCache;
 use logs::{start_log_stream, stop_log_stream, LogStreamManager};
+use mcp::{
+    install_srelens_cli, mcp_http_start, mcp_http_status, mcp_http_stop, srelens_cli_status,
+    McpHttpManager,
+};
 use settings::{get_request_timeout, set_request_timeout};
 use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch, WatchManager};
@@ -166,6 +171,7 @@ pub fn run() {
         .manage(WatchManager::new(cache.clone()))
         .manage(ExecManager::new(cache.clone()))
         .manage(ForwardManager::new(cache.clone()))
+        .manage(McpHttpManager::new(cache.clone()))
         .manage(LogStreamManager::new(cache))
         .invoke_handler(tauri::generate_handler![
             invoke_capability,
@@ -184,7 +190,12 @@ pub fn run() {
             update_check,
             update_install,
             set_request_timeout,
-            get_request_timeout
+            get_request_timeout,
+            mcp_http_start,
+            mcp_http_stop,
+            mcp_http_status,
+            install_srelens_cli,
+            srelens_cli_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

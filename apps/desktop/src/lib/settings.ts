@@ -252,3 +252,38 @@ export function orderContexts<T extends { name: string }>(contexts: T[], order: 
     })
     .map(({ context }) => context);
 }
+
+const MCP_SETTINGS_KEY = "srelens.mcp";
+
+/** In-app MCP HTTP server preferences. */
+export interface McpSettings {
+  /** Run the loopback MCP HTTP server while the app is open. */
+  enabled: boolean;
+  /** Port for the loopback server. */
+  port: number;
+}
+
+export const DEFAULT_MCP_SETTINGS: McpSettings = { enabled: false, port: 8765 };
+
+export function loadMcpSettings(): McpSettings {
+  try {
+    const raw = stored(MCP_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_MCP_SETTINGS };
+    const parsed = JSON.parse(raw) as Partial<McpSettings>;
+    const port = Number(parsed.port);
+    return {
+      enabled: parsed.enabled === true,
+      port: Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_MCP_SETTINGS.port,
+    };
+  } catch {
+    return { ...DEFAULT_MCP_SETTINGS };
+  }
+}
+
+export function saveMcpSettings(settings: McpSettings): void {
+  try {
+    localStorage.setItem(MCP_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // ignore unavailable/quota-exceeded storage
+  }
+}
