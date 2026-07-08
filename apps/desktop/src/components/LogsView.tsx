@@ -41,10 +41,13 @@ export function LogsView({
   context,
   namespace,
   source,
+  initialContainer,
 }: {
   context: string;
   namespace: string;
   source: LogsSource;
+  /** Preselect this container instead of "all" (from a per-container action). */
+  initialContainer?: string;
 }) {
   const srcType = source.type;
   const srcPod = source.type === "pod" ? source.pod : "";
@@ -54,7 +57,7 @@ export function LogsView({
   const [pods, setPods] = useState<string[]>(srcType === "pod" ? [srcPod] : []);
   const [containersByPod, setContainersByPod] = useState<Record<string, string[]>>({});
   const [pod, setPod] = useState<string>(srcType === "pod" ? srcPod : ALL);
-  const [container, setContainer] = useState<string>(ALL);
+  const [container, setContainer] = useState<string>(initialContainer || ALL);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [streamError, setStreamError] = useState("");

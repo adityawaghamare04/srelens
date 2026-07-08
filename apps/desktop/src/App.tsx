@@ -342,6 +342,7 @@ export function App() {
       context: string;
       namespace: string;
       pod?: string;
+      container?: string;
       workload?: { kind: string; name: string };
     },
   ) {

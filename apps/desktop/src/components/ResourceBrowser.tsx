@@ -547,7 +547,7 @@ export function ResourceBrowser({
   query?: string;
   onQueryChange?: (q: string) => void;
   onOpenTerminal?: (s: { context: string; namespace: string; pod: string }) => void;
-  onOpenLogs?: (s: { context: string; namespace: string; pod: string }) => void;
+  onOpenLogs?: (s: { context: string; namespace: string; pod: string; container?: string }) => void;
   onOpenWorkloadLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
   /** Open a "new resource" editor tab, optionally seeded with this kind's template. */
   onOpenNew?: (initialKind?: string) => void;
@@ -966,6 +966,9 @@ export function ResourceBrowser({
             namespace={selectedPod.namespace}
             name={selectedPod.name}
             onOpenResource={onOpenResource}
+            onOpenLogs={(container) =>
+              onOpenLogs?.({ context, namespace: selectedPod.namespace, pod: selectedPod.name, container })
+            }
           />
         )}
         {otherDetail && (

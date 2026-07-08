@@ -38,6 +38,8 @@ import {
   ageFromTimestamp,
   containerLastRestartTime,
   parseQuantity,
+  orderPodConditions,
+  summarizeAffinity,
 } from "./ResourceOverview";
 import type { K8sObject } from "../lib/manifest";
 
@@ -77,6 +79,58 @@ describe("parseQuantity", () => {
   it("returns null for unparseable input", () => {
     expect(parseQuantity("")).toBeNull();
     expect(parseQuantity("abc")).toBeNull();
+  });
+});
+
+describe("orderPodConditions", () => {
+  it("orders lifecycle conditions PodScheduled → Initialized → ContainersReady → Ready", () => {
+    const shuffled = [
+      { type: "Ready", status: "True" },
+      { type: "PodScheduled", status: "True" },
+      { type: "ContainersReady", status: "False" },
+      { type: "Initialized", status: "True" },
+    ];
+    expect(orderPodConditions(shuffled).map((c) => c.type)).toEqual([
+      "PodScheduled",
+      "Initialized",
+      "ContainersReady",
+      "Ready",
+    ]);
+  });
+
+  it("appends unknown condition types after the known lifecycle ones", () => {
+    const conds = [
+      { type: "DisruptionTarget", status: "True" },
+      { type: "Ready", status: "True" },
+      { type: "PodScheduled", status: "True" },
+    ];
+    expect(orderPodConditions(conds).map((c) => c.type)).toEqual([
+      "PodScheduled",
+      "Ready",
+      "DisruptionTarget",
+    ]);
+  });
+});
+
+describe("summarizeAffinity", () => {
+  it("summarizes required and preferred rules per affinity type", () => {
+    const affinity = {
+      nodeAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{}, {}] },
+        preferredDuringSchedulingIgnoredDuringExecution: [{}],
+      },
+      podAntiAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: [{}],
+      },
+    };
+    expect(summarizeAffinity(affinity)).toEqual([
+      "Node affinity: 2 required, 1 preferred",
+      "Pod anti-affinity: 1 required",
+    ]);
+  });
+
+  it("returns an empty list when there is no affinity", () => {
+    expect(summarizeAffinity({})).toEqual([]);
   });
 });
 
@@ -210,6 +264,74 @@ describe("ObjectDetail (Pod)", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Collapse command" }).getAttribute("aria-expanded")).toBe("true");
+  });
+});
+
+describe("ObjectDetail (Pod parity: #13)", () => {
+  const parityPod: K8sObject = {
+    kind: "Pod",
+    metadata: { name: "web-1", namespace: "default" },
+    spec: {
+      nodeName: "node-a",
+      nodeSelector: { "disktype": "ssd" },
+      affinity: {
+        podAntiAffinity: { requiredDuringSchedulingIgnoredDuringExecution: [{}] },
+      },
+      tolerations: [{ key: "dedicated", operator: "Equal", value: "gpu", effect: "NoSchedule" }],
+      containers: [
+        {
+          name: "nginx",
+          image: "nginx:1.27",
+          startupProbe: { httpGet: { path: "/healthz", port: 8080 } },
+        },
+      ],
+      ephemeralContainers: [{ name: "debugger", image: "busybox", targetContainerName: "nginx" }],
+    },
+    status: {
+      phase: "Running",
+      conditions: [
+        { type: "Ready", status: "True", lastTransitionTime: "2025-12-31T00:00:08Z" },
+        { type: "PodScheduled", status: "True", lastTransitionTime: "2025-12-31T00:00:00Z" },
+        { type: "Initialized", status: "True", lastTransitionTime: "2025-12-31T00:00:07Z" },
+        { type: "ContainersReady", status: "True", lastTransitionTime: "2025-12-31T00:00:08Z" },
+      ],
+      containerStatuses: [{ name: "nginx", ready: true, restartCount: 0, state: { running: {} } }],
+      ephemeralContainerStatuses: [{ name: "debugger", state: { running: {} } }],
+    },
+  };
+
+  it("renders the conditions in lifecycle order", () => {
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} />);
+    const order = screen
+      .getAllByText(/PodScheduled|Initialized|ContainersReady|^Ready$/)
+      .map((el) => el.textContent);
+    expect(order).toEqual(["PodScheduled", "Initialized", "ContainersReady", "Ready"]);
+  });
+
+  it("shows a Scheduling section with node selector, affinity and tolerations", () => {
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} />);
+    expect(screen.getByText("Scheduling")).toBeDefined();
+    expect(screen.getByText("disktype")).toBeDefined();
+    expect(screen.getByText("Pod anti-affinity: 1 required")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /1 toleration/ }));
+    expect(screen.getByText("dedicated=gpu → NoSchedule")).toBeDefined();
+  });
+
+  it("renders an ephemeral container with its debug target and a startup probe", () => {
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} />);
+    expect(screen.getByText("Ephemeral Containers")).toBeDefined();
+    expect(screen.getByText("debugger")).toBeDefined();
+    // "Debugging" row surfaces which container it targets.
+    expect(screen.getByText("Debugging")).toBeDefined();
+    // Startup probe row exists on the main container.
+    expect(screen.getByText("Startup")).toBeDefined();
+  });
+
+  it("offers per-container Logs that open scoped to the container", () => {
+    const onOpenLogs = vi.fn();
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} context="kind-dev" onOpenLogs={onOpenLogs} />);
+    fireEvent.click(screen.getByRole("button", { name: "Logs for nginx" }));
+    expect(onOpenLogs).toHaveBeenCalledWith("nginx");
   });
 });
 
