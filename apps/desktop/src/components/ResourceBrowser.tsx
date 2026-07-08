@@ -29,6 +29,13 @@ import {
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 type PodRow = PodSummary & { cpu?: number; memory?: number };
 import { watchResource, WATCHABLE_KINDS, type WatchHandle, type WatchStatus } from "../lib/watch";
+import {
+  parseNamespaceSelection,
+  serializeNamespaceSelection,
+  watchNamespaceForSelection,
+  rowInSelection,
+} from "../lib/namespaces";
+import { NamespaceMultiSelect } from "../ui/NamespaceMultiSelect";
 import { PodActions, ResourceActions, ServiceForwardAction } from "./DetailActions";
 import { NodeCordonAction } from "./NodeCordonAction";
 import { ResourceDetail } from "./ResourceDetail";
@@ -36,7 +43,6 @@ import type { OpenResource } from "../lib/resourceNavigation";
 import {
   Table,
   filterTableData,
-  Combobox,
   Spinner,
   Badge,
   Button,
@@ -418,11 +424,16 @@ export function ResourceBrowser({
 }) {
   const [namespaces, setNamespaces] = useState<string[] | null>(null);
   const [nsError, setNsError] = useState("");
-  const [namespace, setNamespace] = useState(initialNamespace);
-  const changeNamespace = (ns: string) => {
-    setNamespace(ns);
-    onNamespaceChange?.(ns);
+  // Namespace selection is a set (empty = all namespaces), serialized to/from
+  // the persisted comma string. One selected namespace watches that namespace
+  // directly; none or many watch all namespaces, filtered client-side.
+  const [selection, setSelection] = useState(() => parseNamespaceSelection(initialNamespace));
+  const changeNamespaces = (next: string[]) => {
+    setSelection(next);
+    onNamespaceChange?.(serializeNamespaceSelection(next));
   };
+  const watchNamespace = watchNamespaceForSelection(selection);
+  const selectionKey = serializeNamespaceSelection(selection);
   const [res, setRes] = useState<ResourceState>({ rows: [], error: "", loading: false });
   const [watchStatus, setWatchStatus] = useState<WatchStatus>("live");
   const [selectedPod, setSelectedPod] = useState<PodSummary | null>(null);
@@ -458,7 +469,7 @@ export function ResourceBrowser({
     if (namespaced && namespaces === null) return; // wait for the namespace list
     let cancelled = false;
     // Only reset the table for a genuinely new view; a poll keeps current rows.
-    const viewKey = `${context}|${namespace}|${kind}`;
+    const viewKey = `${context}|${watchNamespace}|${kind}`;
     const fresh = viewKeyRef.current !== viewKey;
     viewKeyRef.current = viewKey;
     if (fresh) {
@@ -474,7 +485,7 @@ export function ResourceBrowser({
       let handle: WatchHandle | null = null;
       void watchResource(
         context,
-        namespace,
+        watchNamespace,
         kind,
         (rows) => {
           if (!cancelled) setRes({ rows, error: "", loading: false });
@@ -506,7 +517,7 @@ export function ResourceBrowser({
             }));
             return { rows, error: n.error }; // metrics are best-effort
           })
-        : listResource(context, K8S_KIND[kind], namespace).then((o) => ({
+        : listResource(context, K8S_KIND[kind], watchNamespace).then((o) => ({
             rows: o.items,
             error: o.error,
           }));
@@ -516,7 +527,7 @@ export function ResourceBrowser({
     return () => {
       cancelled = true;
     };
-  }, [context, namespace, kind, namespaced, namespaces, reloadKey]);
+  }, [context, watchNamespace, kind, namespaced, namespaces, reloadKey]);
 
   // Poll non-watchable kinds for a live-updating feel (true watch streams
   // cover pods/deployments/services).
@@ -525,7 +536,7 @@ export function ResourceBrowser({
     if (namespaced && namespaces === null) return;
     const t = setInterval(() => setReloadKey((k) => k + 1), POLL_MS);
     return () => clearInterval(t);
-  }, [kind, namespace, namespaced, namespaces, context]);
+  }, [kind, watchNamespace, namespaced, namespaces, context]);
 
   // Pods stream over watch (no metrics) — poll pod CPU/memory separately and
   // merge by name. Best-effort: a missing metrics-server just leaves "—".
@@ -536,7 +547,7 @@ export function ResourceBrowser({
     }
     let active = true;
     const fetchMetrics = () =>
-      void podMetrics(context, namespace).then((o) => {
+      void podMetrics(context, watchNamespace).then((o) => {
         if (!active) return;
         setPodCpuMem(
           new Map((o.metrics ?? []).map((m) => [m.name, { cpu: m.cpuMillicores, mem: m.memoryMiB }])),
@@ -548,7 +559,7 @@ export function ResourceBrowser({
       active = false;
       clearInterval(t);
     };
-  }, [kind, context, namespace]);
+  }, [kind, context, watchNamespace]);
 
   const columns = useMemo(() => {
     if (kind === "events") return eventColumns as unknown as Column<{ name: string }>[];
@@ -589,7 +600,7 @@ export function ResourceBrowser({
       const rowNs = (row as { namespace?: string }).namespace;
       setOtherDetail({
         kind: K8S_KIND[kind],
-        namespace: namespaced ? rowNs || namespace || null : null,
+        namespace: namespaced ? rowNs || watchNamespace || null : null,
         name: row.name,
       });
     }
@@ -614,14 +625,21 @@ export function ResourceBrowser({
 
   const selectedKey = kind === "pods" ? selectedPod?.name : otherDetail?.name;
 
-  // Merge live pod metrics into the pod rows (other kinds pass through).
+  // Merge live pod metrics into the pod rows, and restrict namespaced rows to
+  // the selected namespaces (when watching all-namespaces for a multi-select).
   const tableRows = useMemo(() => {
-    if (kind !== "pods") return res.rows;
-    return (res.rows as PodSummary[]).map((p) => {
-      const m = podCpuMem.get(p.name);
-      return { ...p, cpu: m?.cpu, memory: m?.mem } as PodRow;
-    });
-  }, [res.rows, kind, podCpuMem]);
+    let rows: Array<{ name: string; namespace?: string }> =
+      kind === "pods"
+        ? (res.rows as PodSummary[]).map((p) => {
+            const m = podCpuMem.get(p.name);
+            return { ...p, cpu: m?.cpu, memory: m?.mem } as PodRow;
+          })
+        : (res.rows as Array<{ name: string; namespace?: string }>);
+    if (namespaced && selection.length > 0) {
+      rows = rows.filter((r) => rowInSelection(r.namespace ?? "", selection));
+    }
+    return rows;
+  }, [res.rows, kind, podCpuMem, namespaced, selectionKey]);
 
   const filtered = useMemo(
     () => filterTableData(tableRows, columns, query, filterColumn),
@@ -694,15 +712,11 @@ export function ResourceBrowser({
               {namespaced && (
                 <div className="fl-resource-toolbar__namespace flex items-center gap-2">
                   <span>Namespace</span>
-                  <Combobox
-                    value={namespace}
-                    onValueChange={changeNamespace}
-                    options={[
-                      { value: "", label: "All namespaces" },
-                      ...namespaces.map((n) => ({ value: n })),
-                    ]}
+                  <NamespaceMultiSelect
+                    namespaces={namespaces ?? []}
+                    selection={selection}
+                    onChange={changeNamespaces}
                     ariaLabel="Namespace"
-                    searchPlaceholder="Search namespaces…"
                     className="min-w-44"
                   />
                 </div>
@@ -758,7 +772,15 @@ export function ResourceBrowser({
                   activeFilterKey={filterColumn}
                   onActiveFilterKeyChange={setFilterColumn}
                   emptyText={
-                    query ? "No matches" : `No ${kind}${namespaced && namespace ? ` in ${namespace}` : ""}`
+                    query
+                      ? "No matches"
+                      : `No ${kind}${
+                          namespaced && selection.length === 1
+                            ? ` in ${selection[0]}`
+                            : namespaced && selection.length > 1
+                              ? ` in ${selection.length} namespaces`
+                              : ""
+                        }`
                   }
                 />
               )}

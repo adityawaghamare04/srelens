@@ -250,18 +250,38 @@ describe("ResourceBrowser", () => {
       ),
     );
 
+    // Selecting a second namespace is additive (multi-select): the serialized
+    // filter now holds both, and the watch widens to all namespaces (filtered
+    // client-side) since more than one is selected.
     await userEvent.click(screen.getByRole("combobox", { name: "Namespace" }));
     await userEvent.click(await screen.findByRole("option", { name: "default" }));
-    expect(onNamespaceChange).toHaveBeenCalledWith("default");
+    expect(onNamespaceChange).toHaveBeenCalledWith("kube-system,default");
     await waitFor(() =>
       expect(watchResourceMock).toHaveBeenCalledWith(
         "kind-dev",
-        "default",
+        "",
         "pods",
         expect.any(Function),
         expect.any(Function),
       ),
     );
+  });
+
+  it("filters rows client-side to the selected namespaces when several are chosen", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default", "kube-system", "ops"] });
+    // Two namespaces selected → watch runs across all namespaces and the rows
+    // are narrowed client-side to the selection.
+    watchResourceMock.mockImplementation(
+      watchWith([
+        { ...pod, name: "web-1", namespace: "default" },
+        { ...pod, name: "dns-1", namespace: "kube-system" },
+        { ...pod, name: "backup-1", namespace: "ops" },
+      ]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="pods" initialNamespace="default,kube-system" />);
+    await waitFor(() => expect(screen.getByText("web-1")).toBeDefined());
+    expect(screen.getByText("dns-1")).toBeDefined();
+    expect(screen.queryByText("backup-1")).toBeNull();
   });
 
   it("opens the pod detail drawer when a pod row is clicked", async () => {
