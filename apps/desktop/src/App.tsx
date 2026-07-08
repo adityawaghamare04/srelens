@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ClusterHotbar } from "./components/ClusterHotbar";
 import { ResourceTabs, type TabDescriptor } from "./components/ResourceTabs";
 import { Sidebar } from "./components/Sidebar";
@@ -73,6 +75,12 @@ export function App() {
   const [defaultNs, setDefaultNs] = useState(getDefaultNamespace);
   const tabIdRef = useRef(1);
   const focusNonce = useRef(0);
+  // Mirror the active tab id into a ref so the (once-registered) Cmd+W menu
+  // event listener always sees the latest value without re-subscribing.
+  const activeTabIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+  }, [activeTabId]);
 
   // Persist per-cluster namespace whenever it changes.
   useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
@@ -148,6 +156,25 @@ export function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // On macOS the native menu routes Cmd+W to a custom "Close" item (see
+  // src-tauri) which emits `close-active-tab`. Close the active tab here, and
+  // only fall back to closing the window when no tabs remain — mirroring
+  // browser-style tab behavior.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const unlisten = listen("close-active-tab", () => {
+      const id = activeTabIdRef.current;
+      if (id != null) {
+        closeView(id);
+      } else {
+        void getCurrentWindow().close();
+      }
+    });
+    return () => {
+      void unlisten.then((un) => un());
+    };
   }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;

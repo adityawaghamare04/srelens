@@ -1,6 +1,25 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import React from "react";
+
+// Capture the Tauri event handler App registers for the macOS Cmd+W menu item,
+// and a stub window so we can assert tab-close vs. window-close behavior.
+const tauri = vi.hoisted(() => {
+  const handlers = new Map<string, (e: { payload: unknown }) => void>();
+  const windowClose = vi.fn();
+  return {
+    handlers,
+    windowClose,
+    listen: vi.fn((name: string, cb: (e: { payload: unknown }) => void) => {
+      handlers.set(name, cb);
+      return Promise.resolve(() => handlers.delete(name));
+    }),
+  };
+});
+vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ close: tauri.windowClose }),
+}));
 
 vi.mock("./components/ClusterHotbar", () => ({
   ClusterHotbar: ({
@@ -123,5 +142,36 @@ describe("App", () => {
     expect(screen.getByTestId("settings").textContent).toBe("workspace settings");
     expect(screen.getByRole("tab", { name: /^Settings$/ })).toBeDefined();
     expect(screen.queryByText("nav-services")).toBeNull();
+  });
+
+  it("close-active-tab (Cmd+W) closes the active tab, not the window", () => {
+    (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
+    tauri.windowClose.mockClear();
+    render(<App />);
+    fireEvent.click(screen.getByText("open-kind-dev"));
+    fireEvent.click(screen.getByText("open-prod"));
+    expect(screen.getByTestId("overview").textContent).toBe("prod");
+
+    const handler = tauri.handlers.get("close-active-tab");
+    expect(handler).toBeDefined();
+    act(() => handler!({ payload: undefined }));
+
+    expect(screen.queryByRole("tab", { name: /Overview · prod/ })).toBeNull();
+    expect(screen.getByTestId("overview").textContent).toBe("kind-dev");
+    expect(tauri.windowClose).not.toHaveBeenCalled();
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+  });
+
+  it("close-active-tab (Cmd+W) closes the window when no tabs remain", () => {
+    (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
+    tauri.windowClose.mockClear();
+    render(<App />);
+
+    const handler = tauri.handlers.get("close-active-tab");
+    expect(handler).toBeDefined();
+    act(() => handler!({ payload: undefined }));
+
+    expect(tauri.windowClose).toHaveBeenCalledTimes(1);
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
   });
 });
