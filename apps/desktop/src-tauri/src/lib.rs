@@ -20,6 +20,36 @@ use watch::{start_resource_watch, stop_watch, WatchManager};
 
 pub use capabilities::build_registry;
 
+/// Size the main window to a comfortable default, clamped to the screen it
+/// opens on: on a large display it stays at the preferred ~16" size (centered),
+/// on a smaller display it shrinks to fit the available work area. A margin
+/// keeps it clear of the menu bar / taskbar / dock.
+#[cfg(desktop)]
+fn size_main_window(app: &tauri::App) {
+    use tauri::{LogicalSize, Manager};
+
+    // Preferred size — the "16-inch" window shown on big screens.
+    const PREF_W: f64 = 1440.0;
+    const PREF_H: f64 = 900.0;
+    // Leave room for OS chrome so the window never sits edge-to-edge.
+    const MARGIN: f64 = 80.0;
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let avail_w = monitor.size().width as f64 / scale - MARGIN;
+    let avail_h = monitor.size().height as f64 / scale - MARGIN;
+
+    let width = PREF_W.min(avail_w).max(640.0);
+    let height = PREF_H.min(avail_h).max(480.0);
+    let _ = window.set_size(LogicalSize::new(width, height));
+    let _ = window.center();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // The SRELENS_TIMEOUT_SECS override is applied in `main()` before dispatch,
@@ -45,6 +75,8 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            #[cfg(desktop)]
+            size_main_window(app);
             Ok(())
         })
         .manage(AppRegistry(registry))
