@@ -113,7 +113,8 @@ export type ResourceKind =
   | "portforwards"
   | "helmreleases"
   | "settings"
-  | "newresource";
+  | "newresource"
+  | "editresource";
 
 export const RESOURCE_LABELS: Record<ResourceKind, string> = {
   overview: "Overview",
@@ -156,6 +157,7 @@ export const RESOURCE_LABELS: Record<ResourceKind, string> = {
   helmreleases: "Helm Releases",
   settings: "Settings",
   newresource: "New Resource",
+  editresource: "Edit Resource",
 };
 
 export const K8S_KIND: Record<ResourceKind, string> = {
@@ -199,6 +201,7 @@ export const K8S_KIND: Record<ResourceKind, string> = {
   helmreleases: "",
   settings: "",
   newresource: "",
+  editresource: "",
 };
 
 const CLUSTER_SCOPED: ResourceKind[] = [
@@ -536,6 +539,7 @@ export function ResourceBrowser({
   onOpenLogs,
   onOpenWorkloadLogs,
   onOpenNew,
+  onOpenEdit,
   onOpenResource,
   focus,
   initialNamespace = "",
@@ -551,6 +555,8 @@ export function ResourceBrowser({
   onOpenWorkloadLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
   /** Open a "new resource" editor tab, optionally seeded with this kind's template. */
   onOpenNew?: (initialKind?: string) => void;
+  /** Open a full-tab editor preloaded with a resource's manifest. */
+  onOpenEdit?: (kind: string, namespace: string | null, name: string) => void;
   onOpenResource?: OpenResource;
   /** Deep-link target (from global search): open this resource's detail once it loads. */
   focus?: { name: string; namespace: string | null; nonce: number };
@@ -827,6 +833,7 @@ export function ResourceBrowser({
       onDeleted={closeDetail}
       onOpenTerminal={onOpenTerminal}
       onOpenLogs={onOpenLogs}
+      onEdit={onOpenEdit ? () => onOpenEdit("Pod", selectedPod.namespace, selectedPod.name) : undefined}
     />
   ) : otherDetail ? (
     <>
@@ -853,6 +860,9 @@ export function ResourceBrowser({
         onDeleted={closeDetail}
         onChanged={() => setDetailReload((k) => k + 1)}
         onOpenLogs={onOpenWorkloadLogs}
+        onEdit={
+          onOpenEdit ? () => onOpenEdit(otherDetail.kind, otherDetail.namespace, otherDetail.name) : undefined
+        }
       />
     </>
   ) : null;

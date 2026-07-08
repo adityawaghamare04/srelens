@@ -15,6 +15,7 @@ import { ClusterOverview } from "./components/ClusterOverview";
 import { PortForwardsView } from "./components/PortForwardsView";
 import { HelmReleasesView } from "./components/HelmReleasesView";
 import { NewResourceEditor } from "./components/NewResourceEditor";
+import { EditResourceTab } from "./components/EditResourceTab";
 import { SettingsView } from "./components/SettingsView";
 import { CommandPalette } from "./components/CommandPalette";
 import { Toaster } from "./components/ui/sonner";
@@ -57,6 +58,8 @@ interface ViewTab {
   focus?: { name: string; namespace: string | null; nonce: number };
   /** For a "new resource" tab: the template kind to start from. */
   create?: { initialKind?: string };
+  /** For an "edit resource" tab: the resource to preload and apply back. */
+  edit?: { kind: string; namespace: string | null; name: string };
   /** Selected namespace filter (empty = all), preserved per tab. */
   namespace?: string;
 }
@@ -291,6 +294,26 @@ export function App() {
     setActiveTabId(id);
   }
 
+  /** Open (or focus) a full-tab editor preloaded with a resource's manifest. */
+  function openEditResource(kind: string, namespace: string | null, name: string) {
+    if (!activeCluster) return;
+    const existing = tabs.find(
+      (t) =>
+        t.kind === "editresource" &&
+        t.cluster === activeCluster &&
+        t.edit?.kind === kind &&
+        (t.edit?.namespace ?? null) === (namespace ?? null) &&
+        t.edit?.name === name,
+    );
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = tabIdRef.current++;
+    setTabs((ts) => [...ts, { id, cluster: activeCluster, kind: "editresource", edit: { kind, namespace, name } }]);
+    setActiveTabId(id);
+  }
+
   /** Open (or focus) a custom-resource view for a cluster + CRD. */
   function openCrdView(cluster: string, crd: CrdRef) {
     const existing = tabs.find((t) => t.cluster === cluster && t.crd?.name === crd.name);
@@ -364,9 +387,11 @@ export function App() {
 
   const tabDescriptors: TabDescriptor[] = tabs.map((t) => ({
     id: t.id,
-    label: t.cluster
-      ? `${t.crd ? t.crd.kind : RESOURCE_LABELS[t.kind]} · ${contextDisplayName(t.cluster, contextProfiles[t.cluster])}`
-      : RESOURCE_LABELS[t.kind],
+    label: t.edit
+      ? `edit: ${t.edit.kind}/${t.edit.name}`
+      : t.cluster
+        ? `${t.crd ? t.crd.kind : RESOURCE_LABELS[t.kind]} · ${contextDisplayName(t.cluster, contextProfiles[t.cluster])}`
+        : RESOURCE_LABELS[t.kind],
   }));
 
   return (
@@ -461,6 +486,14 @@ export function App() {
                       context={activeCluster}
                       initialKind={activeTab.create?.initialKind}
                     />
+                  ) : activeCluster && activeKind === "editresource" && activeTab.edit ? (
+                    <EditResourceTab
+                      key={activeTab.id}
+                      context={activeCluster}
+                      kind={activeTab.edit.kind}
+                      namespace={activeTab.edit.namespace}
+                      name={activeTab.edit.name}
+                    />
                   ) : activeCluster ? (
                     <ResourceBrowser
                       key={activeTab.id}
@@ -470,6 +503,7 @@ export function App() {
                       onQueryChange={setQuery}
                       onOpenTerminal={(s) => openDock("terminal", s)}
                       onOpenLogs={(s) => openDock("logs", s)}
+                      onOpenEdit={openEditResource}
                       onOpenWorkloadLogs={(s) =>
                         openDock("logs", {
                           context: s.context,
