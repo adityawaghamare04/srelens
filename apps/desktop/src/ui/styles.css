@@ -1898,6 +1898,33 @@ body {
 
 /* Metrics panel (live CPU/memory charts). */
 .fl-metrics { margin-bottom: var(--fl-space-xl); }
+.fl-metrics__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fl-space-md);
+}
+.fl-metrics__range {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-md);
+}
+.fl-metrics__range button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: calc(var(--fl-radius-md) - 2px);
+  background: transparent;
+  color: var(--fl-color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.fl-metrics__range button:hover { color: var(--fl-color-text); }
+.fl-metrics__range button.is-active {
+  background: var(--fl-color-surface-alt);
+  color: var(--fl-color-text);
+}
 .fl-metrics__source {
   margin: -6px 0 var(--fl-space-md);
   font-size: 11px;
