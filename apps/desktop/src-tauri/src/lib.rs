@@ -50,6 +50,87 @@ fn size_main_window(app: &tauri::App) {
     let _ = window.center();
 }
 
+/// Menu id for the custom "Close Tab" item. macOS routes Cmd+W to this instead
+/// of the predefined "Close Window", so the frontend can close the active tab.
+#[cfg(target_os = "macos")]
+const CLOSE_TAB_MENU_ID: &str = "close-active-tab";
+
+/// Install a custom macOS application menu.
+///
+/// The default Tauri menu binds Cmd+W to the predefined "Close Window" item,
+/// which closes the whole window natively before the webview ever sees the
+/// keystroke. We rebuild the standard menu (App / Edit / View / Window) so
+/// nothing users expect is lost, but swap the Window submenu's close entry
+/// for a custom item that keeps the Cmd+W accelerator and emits a
+/// `close-active-tab` event. The frontend then closes the active tab, only
+/// falling back to closing the window when no tabs remain.
+#[cfg(target_os = "macos")]
+fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    use tauri::Emitter;
+
+    let handle = app.handle();
+
+    let about = AboutMetadata {
+        name: Some("srelens".into()),
+        version: Some(env!("CARGO_PKG_VERSION").into()),
+        ..Default::default()
+    };
+
+    let app_menu = SubmenuBuilder::new(handle, "srelens")
+        .about(Some(about))
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(handle, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let view_menu = SubmenuBuilder::new(handle, "View").fullscreen().build()?;
+
+    // Custom Close item: keeps the familiar Cmd+W accelerator but routes to our
+    // menu-event handler instead of the native "Close Window".
+    let close_tab = MenuItemBuilder::new("Close")
+        .id(CLOSE_TAB_MENU_ID)
+        .accelerator("CmdOrCtrl+W")
+        .build(handle)?;
+
+    let window_menu = SubmenuBuilder::new(handle, "Window")
+        .minimize()
+        .item(&close_tab)
+        .build()?;
+
+    let menu = MenuBuilder::new(handle)
+        .item(&app_menu)
+        .item(&edit_menu)
+        .item(&view_menu)
+        .item(&window_menu)
+        .build()?;
+
+    app.set_menu(menu)?;
+
+    app.on_menu_event(move |app, event| {
+        if event.id().as_ref() == CLOSE_TAB_MENU_ID {
+            let _ = app.emit("close-active-tab", ());
+        }
+    });
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // The SRELENS_TIMEOUT_SECS override is applied in `main()` before dispatch,
@@ -77,6 +158,8 @@ pub fn run() {
             }
             #[cfg(desktop)]
             size_main_window(app);
+            #[cfg(target_os = "macos")]
+            install_macos_menu(app)?;
             Ok(())
         })
         .manage(AppRegistry(registry))
