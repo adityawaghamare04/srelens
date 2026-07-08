@@ -43,7 +43,9 @@ import {
   saveContextOrder,
   orderContexts,
   loadUpdateChannel,
+  loadMcpSettings,
 } from "./lib/settings";
+import { startMcpHttp } from "./lib/mcp";
 import { checkForUpdateAndNotify } from "./lib/updateNotifier";
 import { notify } from "./lib/notify";
 import type { SettingsSection } from "./components/SettingsView";
@@ -258,6 +260,13 @@ export function App() {
     const SIX_HOURS = 6 * 60 * 60 * 1000;
     const timer = setInterval(run, SIX_HOURS);
     return () => clearInterval(timer);
+  }, []);
+
+  // Start the in-app MCP HTTP server on launch if the user left it enabled, so
+  // agents can connect without opening Settings first.
+  useEffect(() => {
+    const mcp = loadMcpSettings();
+    if (mcp.enabled) void startMcpHttp(mcp.port).catch(() => {});
   }, []);
 
   /** Open a resource's kind view and deep-link to its detail (from search). */
