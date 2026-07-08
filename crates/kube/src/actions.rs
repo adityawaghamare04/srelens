@@ -116,6 +116,66 @@ pub struct ActionOut {
     pub ok: bool,
 }
 
+/// Build the merge-patch body for an in-place ConfigMap/Secret data edit.
+///
+/// ConfigMap values are plain strings under `data`. Secret values go under
+/// `stringData` (write-only) so the apiserver base64-encodes them — the UI
+/// therefore never has to encode, and no existing values are touched beyond the
+/// keys provided (a merge patch only updates the given keys).
+pub(crate) fn build_config_patch(
+    kind: &str,
+    data: &std::collections::BTreeMap<String, String>,
+) -> Result<serde_json::Value, String> {
+    let field = match kind {
+        "ConfigMap" => "data",
+        "Secret" => "stringData",
+        other => return Err(format!("in-place data edit not supported for kind: {other}")),
+    };
+    Ok(json!({ field: data }))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateConfigDataIn {
+    pub context: String,
+    /// "ConfigMap" or "Secret".
+    pub kind: String,
+    pub namespace: String,
+    pub name: String,
+    /// Keys to set to new (plaintext) values; other keys are left untouched.
+    pub data: std::collections::BTreeMap<String, String>,
+}
+
+/// `k8s.updateConfigData` — edit ConfigMap/Secret values in place via a merge
+/// patch. Requires confirmation.
+pub fn update_config_data_capability(cache: Arc<ClientCache>) -> Capability {
+    Capability::typed::<UpdateConfigDataIn, ActionOut, _, _>(
+        "k8s.updateConfigData",
+        "update ConfigMap or Secret values in place (merge patch)",
+        Annotations {
+            read_only: false,
+            destructive: false,
+            requires_confirm: true,
+        },
+        move |input: UpdateConfigDataIn| {
+            let cache = cache.clone();
+            async move {
+                let patch = build_config_patch(&input.kind, &input.data)
+                    .map_err(CapabilityError::Handler)?;
+                let client = cache.get(&input.context).await.map_err(CapabilityError::Handler)?;
+                let api = dynamic_api(client, &input.kind, &input.namespace)?;
+                tokio::time::timeout(
+                    request_timeout(),
+                    api.patch(&input.name, &PatchParams::default(), &Patch::Merge(&patch)),
+                )
+                .await
+                .map_err(|_| CapabilityError::Handler("update config data timed out".into()))?
+                .map_err(|e| CapabilityError::Handler(e.to_string()))?;
+                Ok(ActionOut { name: input.name, ok: true })
+            }
+        },
+    )
+}
+
 /// `k8s.deleteResource` — delete any supported resource. Destructive.
 pub fn delete_resource_capability(cache: Arc<ClientCache>) -> Capability {
     Capability::typed::<DeleteResourceIn, ActionOut, _, _>(
@@ -345,6 +405,31 @@ mod tests {
 
     fn cache() -> Arc<ClientCache> {
         ClientCache::new(PathBuf::from("/x"))
+    }
+
+    #[test]
+    fn config_patch_uses_data_for_configmap_and_stringdata_for_secret() {
+        let mut data = std::collections::BTreeMap::new();
+        data.insert("app.conf".to_string(), "level=debug".to_string());
+        let cm = build_config_patch("ConfigMap", &data).unwrap();
+        assert_eq!(cm, serde_json::json!({ "data": { "app.conf": "level=debug" } }));
+        // Secret uses stringData so the apiserver base64-encodes it; the UI sends plaintext.
+        let sec = build_config_patch("Secret", &data).unwrap();
+        assert_eq!(sec, serde_json::json!({ "stringData": { "app.conf": "level=debug" } }));
+    }
+
+    #[test]
+    fn config_patch_rejects_unsupported_kinds() {
+        let data = std::collections::BTreeMap::new();
+        assert!(build_config_patch("Pod", &data).is_err());
+    }
+
+    #[test]
+    fn update_config_data_requires_confirm() {
+        let cap = update_config_data_capability(cache());
+        assert_eq!(cap.id, "k8s.updateConfigData");
+        assert!(cap.annotations.requires_confirm);
+        assert!(!cap.annotations.read_only);
     }
 
     #[test]

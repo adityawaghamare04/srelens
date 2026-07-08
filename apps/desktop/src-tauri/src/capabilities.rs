@@ -91,6 +91,7 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::actions::delete_resource_capability(cache.clone()));
     reg.register(srelens_kube::actions::scale_capability(cache.clone()));
     reg.register(srelens_kube::actions::rollout_restart_capability(cache.clone()));
+    reg.register(srelens_kube::actions::update_config_data_capability(cache.clone()));
     reg.register(srelens_kube::actions::cordon_node_capability(cache.clone()));
     reg.register(srelens_kube::actions::drain_node_capability(cache.clone()));
     reg.register(srelens_kube::events::list_events_capability(cache.clone()));

@@ -1398,6 +1398,28 @@ body {
   word-break: break-all;
   white-space: pre-wrap;
 }
+.fl-config-editor__value {
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  resize: vertical;
+  border: 1px solid var(--fl-color-border-faint);
+  border-radius: var(--fl-radius-md);
+  background: var(--fl-color-surface);
+  color: var(--fl-color-text);
+  font-family: var(--fl-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.fl-config-editor__value:read-only {
+  border-color: transparent;
+  background: transparent;
+  color: var(--fl-color-text-muted);
+}
+.fl-config-editor__actions {
+  display: flex;
+  gap: 8px;
+}
 /* Monospace inline values (names, images, IPs). */
 .fl-mono {
   font-family: var(--fl-font-mono, ui-monospace, monospace);

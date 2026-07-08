@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
 import { getObject, type K8sObject } from "../lib/manifest";
+import { updateConfigData } from "../lib/actions";
 import {
   Spinner,
   StatusPill,
   Badge,
+  Button,
   Table,
   IconButton,
   type StatusKind,
@@ -1523,10 +1525,20 @@ function DockerSecretBody({ obj }: { obj: K8sObject }) {
   );
 }
 
-function GeneralSecretBody({ obj }: { obj: K8sObject }) {
+function GeneralSecretBody({
+  obj,
+  context = "",
+  onEdited,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onEdited?: () => void;
+}) {
+  const meta = asRecord(obj.metadata);
   const data = asRecord(obj.data) as Record<string, string>;
   const keys = Object.keys(data);
   const totalBytes = Object.values(data).reduce((total, value) => total + decodedByteLength(str(value)), 0);
+  const immutable = obj.immutable === true;
   return (
     <>
       <Section title="Secret summary">
@@ -1535,37 +1547,170 @@ function GeneralSecretBody({ obj }: { obj: K8sObject }) {
             ["Type", str(obj.type) || "Opaque"],
             ["Keys", plural(keys.length, "key")],
             ["Decoded size", formatBytes(totalBytes)],
-            ["Immutable", obj.immutable === true ? "Yes" : "No"],
+            ["Immutable", immutable ? "Yes" : "No"],
           ]}
         />
       </Section>
-      <SecretData data={data} />
+      <Section title={`Data (${plural(keys.length, "key")})`}>
+        {/* Immutable Secrets can't be edited; render read-only by withholding context. */}
+        <ConfigDataEditor
+          context={immutable ? "" : context}
+          kind="Secret"
+          namespace={str(meta.namespace)}
+          name={str(meta.name)}
+          data={data}
+          secret
+          onSaved={onEdited}
+        />
+      </Section>
     </>
   );
 }
 
-function SecretBody({ obj }: { obj: K8sObject }) {
+function SecretBody({
+  obj,
+  context = "",
+  onEdited,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onEdited?: () => void;
+}) {
   const type = str(obj.type) || "Opaque";
   if (type === "kubernetes.io/tls") return <TlsSecretBody obj={obj} />;
   if (type === "kubernetes.io/dockerconfigjson" || type === "kubernetes.io/dockercfg")
     return <DockerSecretBody obj={obj} />;
-  return <GeneralSecretBody obj={obj} />;
+  return <GeneralSecretBody obj={obj} context={context} onEdited={onEdited} />;
 }
 
-function ConfigBody({ obj }: { obj: K8sObject }) {
+/**
+ * Editable key/value data for ConfigMaps and Secrets. Secret values are masked
+ * until the user reveals a key (which decodes it for editing); Save only sends
+ * the keys that actually changed, as plaintext (the backend patches
+ * ConfigMap `data` / Secret `stringData`, so the apiserver handles encoding).
+ * Editing is only enabled when a `context` is available (i.e. the live detail).
+ */
+export function ConfigDataEditor({
+  context,
+  kind,
+  namespace,
+  name,
+  data,
+  secret,
+  onSaved,
+}: {
+  context: string;
+  kind: string;
+  namespace: string;
+  name: string;
+  data: Record<string, string>;
+  secret: boolean;
+  onSaved?: () => void;
+}) {
+  // Original plaintext per key (Secret values decoded once for editing).
+  const initial = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data)) out[k] = secret ? decodeBase64(str(v)) : str(v);
+    return out;
+  }, [data, secret]);
+
+  const [edited, setEdited] = useState<Record<string, string>>({});
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const keys = Object.keys(initial);
+  const valueOf = (k: string) => edited[k] ?? initial[k];
+  const changedKeys = keys.filter((k) => edited[k] !== undefined && edited[k] !== initial[k]);
+  const editable = context !== "";
+
+  async function save() {
+    setBusy(true);
+    setErr("");
+    const patch = Object.fromEntries(changedKeys.map((k) => [k, edited[k]]));
+    const r = await updateConfigData(context, kind, namespace, name, patch);
+    setBusy(false);
+    if (r.error) {
+      setErr(r.error);
+      return;
+    }
+    setEdited({});
+    onSaved?.();
+  }
+
+  if (keys.length === 0) return <span className="fl-detail-empty">No data</span>;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {keys.map((k) => {
+        const shown = !secret || revealed[k];
+        return (
+          <div key={k} className="fl-secret-entry">
+            <div className="fl-secret-entry__header">
+              <span className="fl-mono">{k}</span>
+              {secret && (
+                <button
+                  type="button"
+                  className="fl-secret-entry__toggle"
+                  onClick={() => setRevealed((r) => ({ ...r, [k]: !r[k] }))}
+                >
+                  {revealed[k] ? "Hide" : "Reveal"}
+                </button>
+              )}
+            </div>
+            {shown ? (
+              <textarea
+                className="fl-config-editor__value"
+                aria-label={`Value for ${k}`}
+                value={valueOf(k)}
+                readOnly={!editable}
+                onChange={(e) => setEdited((ed) => ({ ...ed, [k]: e.target.value }))}
+                rows={valueOf(k).split("\n").length > 1 ? 4 : 1}
+              />
+            ) : (
+              <pre className="fl-secret-entry__value">••••••••</pre>
+            )}
+          </div>
+        );
+      })}
+      {editable && changedKeys.length > 0 && (
+        <div className="fl-config-editor__actions">
+          <Button size="sm" onClick={() => void save()} busy={busy}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setEdited({})} disabled={busy}>
+            Reset
+          </Button>
+        </div>
+      )}
+      {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
+    </div>
+  );
+}
+
+function ConfigBody({
+  obj,
+  context = "",
+  onEdited,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onEdited?: () => void;
+}) {
+  const meta = asRecord(obj.metadata);
   const data = asRecord(obj.data) as Record<string, string>;
   const keys = Object.keys(data);
   return (
     <Section title={`Data (${plural(keys.length, "key")})`}>
-      {keys.length === 0 ? (
-        <span className="fl-detail-empty">No data</span>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {keys.map((k) => (
-            <ConfigDataEntry key={k} name={k} value={str(data[k])} secret={false} />
-          ))}
-        </div>
-      )}
+      <ConfigDataEditor
+        context={context}
+        kind="ConfigMap"
+        namespace={str(meta.namespace)}
+        name={str(meta.name)}
+        data={data}
+        secret={false}
+        onSaved={onEdited}
+      />
     </Section>
   );
 }
@@ -2157,12 +2302,14 @@ function KindBody({
   obj,
   context = "",
   now = Date.now(),
+  onEdited,
   onOpenResource,
 }: {
   kind: string;
   obj: K8sObject;
   context?: string;
   now?: number;
+  onEdited?: () => void;
   onOpenResource?: OpenResource;
 }) {
   switch (kind) {
@@ -2177,9 +2324,9 @@ function KindBody({
     case "CronJob":
       return <CronJobBody obj={obj} now={now} context={context} onOpenResource={onOpenResource} />;
     case "ConfigMap":
-      return <ConfigBody obj={obj} />;
+      return <ConfigBody obj={obj} context={context} onEdited={onEdited} />;
     case "Secret":
-      return <SecretBody obj={obj} />;
+      return <SecretBody obj={obj} context={context} onEdited={onEdited} />;
     case "PersistentVolumeClaim":
       return <PvcBody obj={obj} onOpenResource={onOpenResource} />;
     case "PersistentVolume":
@@ -2249,12 +2396,14 @@ function GenericDetail({
   obj,
   now,
   context = "",
+  onEdited,
   onOpenResource,
 }: {
   kind: string;
   obj: K8sObject;
   now: number;
   context?: string;
+  onEdited?: () => void;
   onOpenResource?: OpenResource;
 }) {
   const meta = asRecord(obj.metadata);
@@ -2302,7 +2451,7 @@ function GenericDetail({
         <Chips map={meta.annotations as Record<string, string>} />
       </Section>
 
-      <KindBody kind={kind} obj={obj} context={context} now={now} onOpenResource={onOpenResource} />
+      <KindBody kind={kind} obj={obj} context={context} now={now} onEdited={onEdited} onOpenResource={onOpenResource} />
 
       {context && namespace && Object.keys(podSelector).length > 0 && (
         <ManagedPods
@@ -2324,12 +2473,14 @@ export function ObjectDetail({
   obj,
   now,
   context = "",
+  onEdited,
   onOpenResource,
 }: {
   kind: string;
   obj: K8sObject;
   now: number;
   context?: string;
+  onEdited?: () => void;
   onOpenResource?: OpenResource;
 }) {
   const meta = asRecord(obj.metadata);
@@ -2375,6 +2526,7 @@ export function ObjectDetail({
         obj={obj}
         now={now}
         context={context}
+        onEdited={onEdited}
         onOpenResource={onOpenResource}
       />
     </>
@@ -2410,6 +2562,8 @@ export function ResourceOverview({
 }) {
   const [obj, setObj] = useState<K8sObject | null>(null);
   const [error, setError] = useState("");
+  // Bumped locally after an in-place edit saves, to re-fetch the fresh object.
+  const [editReload, setEditReload] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -2423,7 +2577,7 @@ export function ResourceOverview({
     return () => {
       active = false;
     };
-  }, [context, kind, namespace, name, getObjectFn, reloadKey]);
+  }, [context, kind, namespace, name, getObjectFn, reloadKey, editReload]);
 
   if (error) return <p style={{ color: "var(--fl-color-danger)" }}>Error: {error}</p>;
   if (obj === null) return <Spinner label="Loading details" />;
@@ -2433,6 +2587,7 @@ export function ResourceOverview({
       obj={obj}
       now={Date.now()}
       context={context}
+      onEdited={() => setEditReload((n) => n + 1)}
       onOpenResource={onOpenResource}
     />
   );
