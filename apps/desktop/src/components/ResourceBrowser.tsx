@@ -36,6 +36,13 @@ import {
   type PvSummary,
   type StorageClassSummary,
 } from "../lib/storage";
+import {
+  type ServiceAccountSummary,
+  type RoleSummary,
+  type ClusterRoleSummary,
+  type RoleBindingSummary,
+  type ClusterRoleBindingSummary,
+} from "../lib/rbac";
 
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 type PodRow = PodSummary & { cpu?: number; memory?: number };
@@ -226,6 +233,11 @@ const TYPED_KINDS: ResourceKind[] = [
   "persistentvolumeclaims",
   "persistentvolumes",
   "storageclasses",
+  "serviceaccounts",
+  "roles",
+  "clusterroles",
+  "rolebindings",
+  "clusterrolebindings",
   "nodes",
   "events",
 ];
@@ -426,6 +438,41 @@ const storageClassColumns: Column<StorageClassSummary>[] = [
   { key: "volumeBindingMode", header: "Binding Mode", render: (s) => <Muted>{s.volumeBindingMode || "—"}</Muted> },
   { key: "default", header: "Default", render: (s) => (s.default ? <StatusPill status="Default" kind="success" /> : <Muted>—</Muted>) },
   { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+];
+
+const serviceAccountColumns: Column<ServiceAccountSummary>[] = [
+  { key: "name", header: "Service Account", render: (s) => <strong>{s.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (s) => <span className="fl-link">{s.namespace}</span> },
+  { key: "secrets", header: "Secrets" },
+  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+];
+
+const roleColumns: Column<RoleSummary>[] = [
+  { key: "name", header: "Role", render: (r) => <strong>{r.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (r) => <span className="fl-link">{r.namespace}</span> },
+  { key: "rules", header: "Rules" },
+  { key: "age", header: "Age", render: (r) => <Muted>{r.age}</Muted> },
+];
+
+const clusterRoleColumns: Column<ClusterRoleSummary>[] = [
+  { key: "name", header: "Cluster Role", render: (r) => <strong>{r.name}</strong> },
+  { key: "rules", header: "Rules" },
+  { key: "age", header: "Age", render: (r) => <Muted>{r.age}</Muted> },
+];
+
+const roleBindingColumns: Column<RoleBindingSummary>[] = [
+  { key: "name", header: "Role Binding", render: (b) => <strong>{b.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (b) => <span className="fl-link">{b.namespace}</span> },
+  { key: "role", header: "Role", render: (b) => <span className="fl-link">{b.role}</span> },
+  { key: "subjects", header: "Subjects" },
+  { key: "age", header: "Age", render: (b) => <Muted>{b.age}</Muted> },
+];
+
+const clusterRoleBindingColumns: Column<ClusterRoleBindingSummary>[] = [
+  { key: "name", header: "Cluster Role Binding", render: (b) => <strong>{b.name}</strong> },
+  { key: "role", header: "Role", render: (b) => <span className="fl-link">{b.role}</span> },
+  { key: "subjects", header: "Subjects" },
+  { key: "age", header: "Age", render: (b) => <Muted>{b.age}</Muted> },
 ];
 
 const nodeColumns: Column<NodeRow>[] = [
@@ -690,6 +737,16 @@ export function ResourceBrowser({
         return pvColumns as Column<{ name: string }>[];
       case "storageclasses":
         return storageClassColumns as Column<{ name: string }>[];
+      case "serviceaccounts":
+        return serviceAccountColumns as Column<{ name: string }>[];
+      case "roles":
+        return roleColumns as Column<{ name: string }>[];
+      case "clusterroles":
+        return clusterRoleColumns as Column<{ name: string }>[];
+      case "rolebindings":
+        return roleBindingColumns as Column<{ name: string }>[];
+      case "clusterrolebindings":
+        return clusterRoleBindingColumns as Column<{ name: string }>[];
       default:
         return nodeColumns as Column<{ name: string }>[];
     }

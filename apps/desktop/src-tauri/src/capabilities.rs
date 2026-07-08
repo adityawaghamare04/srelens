@@ -113,6 +113,19 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::storageclasses::list_storageclasses_capability(
         cache.clone(),
     ));
+    reg.register(srelens_kube::serviceaccounts::list_serviceaccounts_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::serviceaccounts::pods_for_service_account_capability(cache.clone()));
+    reg.register(srelens_kube::serviceaccounts::bindings_for_service_account_capability(cache.clone()));
+    reg.register(srelens_kube::roles::list_roles_capability(cache.clone()));
+    reg.register(srelens_kube::roles::list_clusterroles_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::rolebindings::list_rolebindings_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::rolebindings::list_clusterrolebindings_capability(cache.clone()));
     reg.register(srelens_kube::actions::delete_pod_capability(cache.clone()));
     reg.register(srelens_kube::actions::evict_pod_capability(cache.clone()));
     reg.register(srelens_kube::actions::delete_resource_capability(cache.clone()));

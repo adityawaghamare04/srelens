@@ -23,6 +23,14 @@ vi.mock("../lib/storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/storage")>()),
   podsForPvc: podsForPvcMock,
 }));
+const { bindingsForServiceAccountMock, podsForServiceAccountMock } = vi.hoisted(() => ({
+  bindingsForServiceAccountMock: vi.fn(),
+  podsForServiceAccountMock: vi.fn(),
+}));
+vi.mock("../lib/rbac", () => ({
+  bindingsForServiceAccount: bindingsForServiceAccountMock,
+  podsForServiceAccount: podsForServiceAccountMock,
+}));
 
 import {
   ResourceOverview,
@@ -40,6 +48,8 @@ const NOW = Date.parse("2026-01-01T00:00:00Z");
 beforeEach(() => {
   listEndpointSlicesMock.mockResolvedValue({ endpointslices: [] });
   podsForPvcMock.mockResolvedValue({ pods: [] });
+  bindingsForServiceAccountMock.mockResolvedValue({ bindings: [] });
+  podsForServiceAccountMock.mockResolvedValue({ pods: [] });
 });
 const TLS_CERTIFICATE = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPakNDQWlLZ0F3SUJBZ0lVSjVQdnk1NXRIbUhESkd3elhNVld2YnV4ck5nd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01aWGhoYlhCc1pTNTBaWE4wTUI0WERUSTJNRGN3TmpFeE1qazFOVm9YRFRNMgpNRGN3TXpFeE1qazFOVm93RnpFVk1CTUdBMVVFQXd3TVpYaGhiWEJzWlM1MFpYTjBNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFzeFc2aHU0MVVwYittNXpHZm5aZ2tpT0xuaVhYTmhPYzhvTWgKaFZCcDVXL0Y5aXluelBGQjRGM0NOK2VlaEp1aVhYWHVFUWdQUVFqOVIrV3ErYlBUK1JPOHd6cEJqQ1BYaHo1TAp2Z0dzNDR1cXBQQ2JvUXVpV0RYcmZDWWtUT2xyd0tIZWJDcVRRM2FQUk1hUGk0YkhzRHdNdmlUcDRhMERGVTFWCkhGc2RXcHM0Uis3TG1MSXBhU3RUTTV1bU1qSC9FTzJGZ2psQmhYUUVGT1M0UnZ2WGpoV0E1ZGZiMEtwNUVSNFIKZjFGdktCRTNaTzVmbG5ldlFlTGdyMnZZT2Jhalg5OTQ1NVE0L1UwMTJJZG1ldWV4L2Q1ZU5VV0VNelprZzlrUQp1U00vMFpwbkhEVFU4UXZQTHh0Qy9jSlU1ekdKMzM0ZnppTGVmQUlpbDR2NFRvVzBQd0lEQVFBQm8zNHdmREFkCkJnTlZIUTRFRmdRVWxadEVndTl1L3ZTTVptSmNNa2RUcWhWVmJDSXdId1lEVlIwakJCZ3dGb0FVbFp0RWd1OXUKL3ZTTVptSmNNa2RUcWhWVmJDSXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QXBCZ05WSFJFRUlqQWdnZ3hsZUdGdApjR3hsTG5SbGMzU0NFSGQzZHk1bGVHRnRjR3hsTG5SbGMzUXdEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBR2svCnp6cGhUNnRuNCtxUXg5Ly9meWNkSzFtNjg1eW1TRFZqT3ZXeWRQaWg4RzI4OUJkQ1BmYlc4ZVVrOXJqakJVZWcKR1k5OUJMcEhvcW9zZDNVWEhOUDJzWUdnZ0dZOG40QXdSbFFWZi9qajBPenVWUzZpS0FDM1ZXWFBtdGk5Q1JQZwpHVkdaR0VZMWI1SXYwVStaSzBjYlJ6c1NSN0FBN05VWGhTUUg0NjJDQlpJa1JSTXNFcVhSV2huUG5Kd3phLzJJCmJ1REdiTG1WMmhRUTdJeWJtb0FpL1FQVUM5WldrMExOV2pGYlpDa0kvem4wd2QxWVhham1iTHBSV0dsTjR1LzcKL2NDSER6NDNyWTZXeHJNRjVwYkJ5aWcvWk5obUVZK25rSFhwK2ZoRFdZOGV1QVVxT1p4bUQrNFIzL2lPQ2dhYgpsVWMzUnNCdmExVjNSbFB6K0pvPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==";
 
@@ -599,6 +609,29 @@ describe("ObjectDetail (Service)", () => {
     await waitFor(() => expect(listEndpointSlicesMock).toHaveBeenCalledWith("kind-dev", "default"));
     expect(await screen.findByText("EndpointSlice/web-abc")).toBeDefined();
     expect(screen.queryByText("EndpointSlice/api-xyz")).toBeNull();
+  });
+});
+
+describe("ObjectDetail (ServiceAccount)", () => {
+  it("shows the bindings and pods that use the account (what can this SA do?)", async () => {
+    bindingsForServiceAccountMock.mockResolvedValue({
+      bindings: [{ name: "read-pods", namespace: "ci", kind: "RoleBinding", role: "Role/pod-reader" }],
+    });
+    podsForServiceAccountMock.mockResolvedValue({ pods: [{ name: "builder-1", namespace: "ci" }] });
+    const sa: K8sObject = {
+      kind: "ServiceAccount",
+      metadata: { name: "builder", namespace: "ci" },
+    };
+    render(<ObjectDetail kind="ServiceAccount" obj={sa} now={NOW} context="kind-dev" onOpenResource={() => {}} />);
+    await waitFor(() =>
+      expect(bindingsForServiceAccountMock).toHaveBeenCalledWith("kind-dev", "ci", "builder"),
+    );
+    expect(podsForServiceAccountMock).toHaveBeenCalledWith("kind-dev", "ci", "builder");
+    // The binding links to its RoleBinding and shows which role it grants…
+    expect(await screen.findByText("RoleBinding/read-pods")).toBeDefined();
+    expect(screen.getByText("Role/pod-reader")).toBeDefined();
+    // …and the consuming pod is listed.
+    expect(screen.getByText("Pod/builder-1")).toBeDefined();
   });
 });
 

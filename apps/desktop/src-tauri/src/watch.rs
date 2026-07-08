@@ -283,6 +283,71 @@ pub async fn start_resource_watch(
                 )
                 .await
             }
+            "serviceaccounts" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_serviceaccounts(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "roles" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_roles(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "clusterroles" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_clusterroles(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "rolebindings" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_rolebindings(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "clusterrolebindings" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_clusterrolebindings(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
             "events" => {
                 let (a, c) = (app_out.clone(), emit_channel.clone());
                 srelens_kube::watch::watch_events(

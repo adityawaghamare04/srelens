@@ -59,6 +59,11 @@ vi.mock("../lib/watch", () => ({
     "persistentvolumeclaims",
     "persistentvolumes",
     "storageclasses",
+    "serviceaccounts",
+    "roles",
+    "clusterroles",
+    "rolebindings",
+    "clusterrolebindings",
   ],
 }));
 vi.mock("./PodTerminal", () => ({ PodTerminal: () => <div data-testid="pod-terminal" /> }));
@@ -330,6 +335,54 @@ describe("ResourceBrowser", () => {
     expect(screen.getByText("kubernetes.io/aws-ebs")).toBeDefined();
     // "Default" appears as both the column header and the badge on the default class.
     expect(screen.getAllByText("Default").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("streams ServiceAccounts live with a secret count", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["ci"] });
+    watchResourceMock.mockImplementation(watchWith([{ name: "builder", namespace: "ci", secrets: 2, age: "3d" }]));
+    render(<ResourceBrowser context="kind-dev" kind="serviceaccounts" />);
+    await waitFor(() => expect(screen.getByText("builder")).toBeDefined());
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "serviceaccounts", expect.any(Function), expect.any(Function));
+    expect(screen.getByText("2")).toBeDefined();
+  });
+
+  it("streams Roles live with a rule count", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(watchWith([{ name: "pod-reader", namespace: "default", rules: 3, age: "1d" }]));
+    render(<ResourceBrowser context="kind-dev" kind="roles" />);
+    await waitFor(() => expect(screen.getByText("pod-reader")).toBeDefined());
+    expect(screen.getByText("3")).toBeDefined();
+  });
+
+  it("streams cluster ClusterRoles live (no namespace)", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: [] });
+    watchResourceMock.mockImplementation(watchWith([{ name: "view", rules: 10, age: "9d" }]));
+    render(<ResourceBrowser context="kind-dev" kind="clusterroles" />);
+    await waitFor(() =>
+      expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "clusterroles", expect.any(Function), expect.any(Function)),
+    );
+    expect(await screen.findByText("view")).toBeDefined();
+    expect(screen.getByText("10")).toBeDefined();
+  });
+
+  it("streams RoleBindings live with roleRef and subject count", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "read-pods", namespace: "default", role: "Role/pod-reader", subjects: 1, age: "2d" }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="rolebindings" />);
+    await waitFor(() => expect(screen.getByText("read-pods")).toBeDefined());
+    expect(screen.getByText("Role/pod-reader")).toBeDefined();
+  });
+
+  it("streams cluster ClusterRoleBindings live (no namespace)", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: [] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "admin-binding", role: "ClusterRole/cluster-admin", subjects: 0, age: "5d" }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="clusterrolebindings" />);
+    await waitFor(() => expect(screen.getByText("admin-binding")).toBeDefined());
+    expect(screen.getByText("ClusterRole/cluster-admin")).toBeDefined();
   });
 
   it("starts on the provided namespace and reports filter changes", async () => {
