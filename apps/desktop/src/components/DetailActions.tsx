@@ -19,6 +19,7 @@ import {
   cronjobSetSuspend,
   cronjobTriggerNow,
 } from "../lib/actions";
+import { notify } from "../lib/notify";
 import { IconButton, ConfirmDialog, TextInput } from "../ui";
 import { ForwardDialog } from "./ForwardDialog";
 
@@ -56,9 +57,11 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
+      notify.error(`Failed to delete ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
+    notify.success(`Deleted pod ${pod.name}`);
     onDeleted?.();
   }
 
@@ -69,9 +72,11 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
+      notify.error(`Failed to evict ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
+    notify.success(`Evicted pod ${pod.name}`);
     onDeleted?.();
   }
 
@@ -208,10 +213,16 @@ export function ResourceActions({
   async function doSetSuspend() {
     setBusy("suspend");
     setErr("");
+    const resume = cronjobSuspended;
     const r = await cronjobSetSuspend(context, namespace ?? "", name, !cronjobSuspended);
     setBusy("");
-    if (r.error) setErr(r.error);
-    else onChanged?.();
+    if (r.error) {
+      setErr(r.error);
+      notify.error(`Failed to ${resume ? "resume" : "suspend"} ${name}`, r.error);
+      return;
+    }
+    notify.success(`${resume ? "Resumed" : "Suspended"} ${name}`);
+    onChanged?.();
   }
 
   async function doTrigger() {
@@ -221,9 +232,11 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to run ${name}`, r.error);
       return;
     }
     setTriggering(false);
+    notify.success(`Triggered ${name}`, r.jobName ? `Created job ${r.jobName}` : undefined);
     onChanged?.();
   }
 
@@ -234,9 +247,11 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to delete ${name}`, r.error);
       return;
     }
     setConfirmDelete(false);
+    notify.success(`Deleted ${kind} ${name}`);
     onDeleted();
   }
 
@@ -252,9 +267,11 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to scale ${name}`, r.error);
       return;
     }
     setScaling(false);
+    notify.success(`Scaled ${name} to ${n}`);
     onChanged?.();
   }
 
@@ -263,7 +280,12 @@ export function ResourceActions({
     setErr("");
     const r = await rolloutRestart(context, kind, namespace ?? "", name);
     setBusy("");
-    if (!r.error) onChanged?.();
+    if (r.error) {
+      notify.error(`Failed to restart ${name}`, r.error);
+      return;
+    }
+    notify.success(`Rollout restart triggered for ${name}`);
+    onChanged?.();
   }
 
   return (
