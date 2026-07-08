@@ -41,7 +41,7 @@ vi.mock("../lib/manifest", async (importOriginal) => {
 });
 vi.mock("../lib/watch", () => ({
   watchResource: watchResourceMock,
-  WATCHABLE_KINDS: ["pods", "deployments", "services"],
+  WATCHABLE_KINDS: ["pods", "deployments", "statefulsets", "daemonsets", "jobs", "cronjobs", "services"],
 }));
 vi.mock("./PodTerminal", () => ({ PodTerminal: () => <div data-testid="pod-terminal" /> }));
 // CodeMirror needs real layout (unavailable in jsdom); stand in a textarea.
@@ -111,6 +111,46 @@ describe("ResourceBrowser", () => {
 
     await waitFor(() => expect(screen.getByText("web")).toBeDefined());
     expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "deployments", expect.any(Function), expect.any(Function));
+  });
+
+  it("streams statefulsets live with the governing service column", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["data"] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "pg", namespace: "data", ready: "2/3", updated: 3, service: "pg-headless", age: "5d" }]),
+    );
+
+    render(<ResourceBrowser context="kind-dev" kind="statefulsets" />);
+
+    await waitFor(() => expect(screen.getByText("pg")).toBeDefined());
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "statefulsets", expect.any(Function), expect.any(Function));
+    expect(screen.getByText("pg-headless")).toBeDefined();
+  });
+
+  it("streams jobs live and shows a Complete status", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["ops"] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "backup-1", namespace: "ops", completions: "1/1", active: 0, failed: 0, duration: "2m", owner: "backup", age: "3h" }]),
+    );
+
+    render(<ResourceBrowser context="kind-dev" kind="jobs" />);
+
+    await waitFor(() => expect(screen.getByText("backup-1")).toBeDefined());
+    expect(screen.getByText("Complete")).toBeDefined();
+    expect(screen.getByText("backup")).toBeDefined();
+  });
+
+  it("streams cronjobs live and marks suspended ones", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["ops"] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "nightly", namespace: "ops", schedule: "0 2 * * *", suspended: true, active: 0, lastSchedule: "2h", age: "9d" }]),
+    );
+
+    render(<ResourceBrowser context="kind-dev" kind="cronjobs" />);
+
+    await waitFor(() => expect(screen.getByText("nightly")).toBeDefined());
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "cronjobs", expect.any(Function), expect.any(Function));
+    expect(screen.getByText("0 2 * * *")).toBeDefined();
+    expect(screen.getByText("Suspended")).toBeDefined();
   });
 
   it("starts on the provided namespace and reports filter changes", async () => {

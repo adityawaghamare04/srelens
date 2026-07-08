@@ -67,6 +67,16 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::deployments::list_replicasets_capability(
         cache.clone(),
     ));
+    reg.register(srelens_kube::statefulsets::list_statefulsets_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::daemonsets::list_daemonsets_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::jobs::list_jobs_capability(cache.clone()));
+    reg.register(srelens_kube::cronjobs::list_cronjobs_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::services::list_services_capability(
         cache.clone(),
     ));

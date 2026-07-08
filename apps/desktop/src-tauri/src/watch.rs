@@ -88,6 +88,58 @@ pub async fn start_resource_watch(
                 )
                 .await
             }
+            "statefulsets" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_statefulsets(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "daemonsets" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_daemonsets(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "jobs" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_jobs(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "cronjobs" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_cronjobs(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
             "services" => {
                 let (a, c) = (app_out.clone(), emit_channel.clone());
                 srelens_kube::watch::watch_services(
