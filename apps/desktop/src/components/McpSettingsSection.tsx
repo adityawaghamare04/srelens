@@ -158,6 +158,13 @@ export function McpSettingsSection() {
             </span>
           )}
         </div>
+        {cli?.installed && !cli.on_path && (
+          <p className="text-sm text-amber-600 dark:text-amber-500">
+            Its directory isn't on your PATH yet — add it (e.g.{" "}
+            <code className="fl-mono">export PATH="$HOME/.local/bin:$PATH"</code>) so clients can find{" "}
+            <code className="fl-mono">srelens</code>.
+          </p>
+        )}
         {cliMessage && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{cliMessage}</p>}
       </section>
 
