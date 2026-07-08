@@ -10,10 +10,13 @@ export function PodTerminal({
   context,
   namespace,
   pod,
+  container,
 }: {
   context: string;
   namespace: string;
   pod: string;
+  /** Exec into this specific container (for multi-container pods). */
+  container?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -47,6 +50,7 @@ export function PodTerminal({
         pod,
         (chunk) => term.write(chunk),
         (err) => term.write(`\r\n[session ended${err ? `: ${err}` : ""}]\r\n`),
+        container,
       ).then((s) => {
         if (disposed) {
           s.close();
@@ -66,7 +70,7 @@ export function PodTerminal({
       disposed = true;
       cleanup();
     };
-  }, [context, namespace, pod]);
+  }, [context, namespace, pod, container]);
 
   return <div ref={ref} style={{ height: "100%", width: "100%", background: "#000", padding: 6, boxSizing: "border-box" }} />;
 }

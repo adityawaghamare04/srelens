@@ -125,6 +125,7 @@ export function Dock({
               context={active.context}
               namespace={active.namespace}
               pod={active.pod}
+              container={active.container}
             />
           ) : (
             <LogsView

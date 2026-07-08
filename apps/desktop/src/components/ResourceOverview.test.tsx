@@ -333,6 +333,13 @@ describe("ObjectDetail (Pod parity: #13)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Logs for nginx" }));
     expect(onOpenLogs).toHaveBeenCalledWith("nginx");
   });
+
+  it("offers per-container Exec that opens scoped to the container", () => {
+    const onOpenExec = vi.fn();
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} context="kind-dev" onOpenExec={onOpenExec} />);
+    fireEvent.click(screen.getByRole("button", { name: "Exec into nginx" }));
+    expect(onOpenExec).toHaveBeenCalledWith("nginx");
+  });
 });
 
 describe("ObjectDetail (Deployment)", () => {
