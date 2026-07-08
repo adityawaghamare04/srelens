@@ -390,7 +390,19 @@ const networkPolicyColumns: Column<NetworkPolicySummary>[] = [
 
 const nodeColumns: Column<NodeRow>[] = [
   { key: "name", header: "Node", render: (n) => <strong>{n.name}</strong> },
-  { key: "status", header: "Status", render: (n) => <StatusPill status={n.status} kind={phaseKind(n.status)} /> },
+  {
+    key: "status",
+    header: "Status",
+    render: (n) => (
+      <span className="inline-flex items-center gap-1.5">
+        <StatusPill status={n.status} kind={phaseKind(n.status)} />
+        {n.unschedulable && <Badge variant="warning">SchedulingDisabled</Badge>}
+        {n.taints > 0 && (
+          <Badge variant="neutral">{n.taints > 1 ? `Tainted (${n.taints})` : "Tainted"}</Badge>
+        )}
+      </span>
+    ),
+  },
   { key: "roles", header: "Roles" },
   { key: "cpu", header: "CPU", render: (n) => <Muted>{n.cpu != null ? `${n.cpu}m` : "—"}</Muted> },
   { key: "memory", header: "Memory", render: (n) => <Muted>{n.memory != null ? `${n.memory}Mi` : "—"}</Muted> },
