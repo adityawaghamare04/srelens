@@ -44,6 +44,7 @@ import {
   Table,
   filterTableData,
   Spinner,
+  LoadingState,
   Badge,
   Button,
   Drawer,
@@ -743,7 +744,7 @@ export function ResourceBrowser({
                 ) : (
                   <Badge variant="success">live</Badge>
                 ))}
-              {res.loading && <Spinner label="Loading resources" />}
+              {res.loading && filtered.length > 0 && <Spinner label="Loading resources" />}
               <div className="fl-resource-toolbar__search ml-auto w-56">
                 <TextInput
                   value={query}
@@ -762,7 +763,10 @@ export function ResourceBrowser({
 
             <div className="min-h-0 flex-1 overflow-auto">
               {res.error && <p className="px-3 py-2 text-sm text-destructive">Error: {res.error}</p>}
-              {!res.error && (
+              {!res.error && res.loading && filtered.length === 0 && (
+                <LoadingState label={`Loading ${kind}`} />
+              )}
+              {!res.error && !(res.loading && filtered.length === 0) && (
                 <Table
                   columns={columns}
                   data={filtered}
