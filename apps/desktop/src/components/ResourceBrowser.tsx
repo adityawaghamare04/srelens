@@ -391,6 +391,8 @@ export function ResourceBrowser({
   const [selectedPod, setSelectedPod] = useState<PodSummary | null>(null);
   const [otherDetail, setOtherDetail] = useState<OtherDetail | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Bumped after a write action so the open detail overview re-fetches.
+  const [detailReload, setDetailReload] = useState(0);
   const [filterColumn, setFilterColumn] = useState<string | null>(null);
   // Per-pod CPU/memory (millicores / MiB), merged into the pods table.
   const [podCpuMem, setPodCpuMem] = useState<Map<string, { cpu: number; mem: number }>>(new Map());
@@ -620,7 +622,13 @@ export function ResourceBrowser({
         kind={otherDetail.kind}
         namespace={otherDetail.namespace}
         name={otherDetail.name}
+        cronjobSuspended={
+          otherDetail.kind === "CronJob"
+            ? (res.rows as CronJobSummary[]).find((r) => r.name === otherDetail.name)?.suspended
+            : undefined
+        }
         onDeleted={closeDetail}
+        onChanged={() => setDetailReload((k) => k + 1)}
         onOpenLogs={onOpenWorkloadLogs}
       />
     </>
@@ -736,6 +744,7 @@ export function ResourceBrowser({
             kind={otherDetail.kind}
             namespace={otherDetail.namespace}
             name={otherDetail.name}
+            reloadKey={detailReload}
             onOpenResource={onOpenResource}
           />
         )}

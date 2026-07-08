@@ -62,6 +62,42 @@ export function cordonNode(
   return run("k8s.cordonNode", { context, name, unschedulable }, invoke);
 }
 
+/** Suspend or resume a CronJob via `k8s.cronjobSetSuspend`. */
+export function cronjobSetSuspend(
+  context: string,
+  namespace: string,
+  name: string,
+  suspend: boolean,
+  invoke: Invoker = invokeCapability,
+): Promise<ActionResult> {
+  return run("k8s.cronjobSetSuspend", { context, namespace, name, suspend }, invoke);
+}
+
+/**
+ * Run a CronJob immediately via `k8s.cronjobTriggerNow`. The unique Job-name
+ * suffix is generated here (a timestamp) so the backend handler stays
+ * deterministic. Returns the created Job's name.
+ */
+export async function cronjobTriggerNow(
+  context: string,
+  namespace: string,
+  name: string,
+  invoke: Invoker = invokeCapability,
+): Promise<{ jobName?: string; error?: string }> {
+  try {
+    const suffix = String(Date.now());
+    const out = await invoke<{ jobName: string }>("k8s.cronjobTriggerNow", {
+      context,
+      namespace,
+      name,
+      suffix,
+    });
+    return { jobName: out.jobName };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 /** Cordon + evict a node's pods via `k8s.drainNode`. */
 export async function drainNode(
   context: string,

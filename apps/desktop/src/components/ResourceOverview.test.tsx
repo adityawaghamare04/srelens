@@ -460,4 +460,31 @@ describe("ResourceOverview", () => {
     );
     await waitFor(() => expect(screen.getByText(/not found/)).toBeDefined());
   });
+
+  it("re-fetches the object when reloadKey changes (after an action)", async () => {
+    const getObjectFn = vi.fn().mockResolvedValue({ object: podObject });
+    const { rerender } = render(
+      <ResourceOverview
+        context="kind-dev"
+        kind="Pod"
+        namespace="default"
+        name="web-1"
+        getObjectFn={getObjectFn}
+        reloadKey={0}
+      />,
+    );
+    await waitFor(() => expect(getObjectFn).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <ResourceOverview
+        context="kind-dev"
+        kind="Pod"
+        namespace="default"
+        name="web-1"
+        getObjectFn={getObjectFn}
+        reloadKey={1}
+      />,
+    );
+    await waitFor(() => expect(getObjectFn).toHaveBeenCalledTimes(2));
+  });
 });
