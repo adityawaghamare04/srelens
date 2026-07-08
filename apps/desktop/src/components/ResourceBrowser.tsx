@@ -30,6 +30,11 @@ import {
   type EndpointSliceSummary,
   type NetworkPolicySummary,
 } from "../lib/network";
+import {
+  type PvcSummary,
+  type PvSummary,
+  type StorageClassSummary,
+} from "../lib/storage";
 
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 type PodRow = PodSummary & { cpu?: number; memory?: number };
@@ -217,6 +222,9 @@ const TYPED_KINDS: ResourceKind[] = [
   "ingresses",
   "endpointslices",
   "networkpolicies",
+  "persistentvolumeclaims",
+  "persistentvolumes",
+  "storageclasses",
   "nodes",
   "events",
 ];
@@ -386,6 +394,37 @@ const networkPolicyColumns: Column<NetworkPolicySummary>[] = [
   { key: "egress", header: "Egress" },
   { key: "policyTypes", header: "Policy Types", render: (n) => <Muted>{n.policyTypes || "—"}</Muted> },
   { key: "age", header: "Age", render: (n) => <Muted>{n.age}</Muted> },
+];
+
+const pvcColumns: Column<PvcSummary>[] = [
+  { key: "name", header: "Claim", render: (p) => <strong>{p.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (p) => <span className="fl-link">{p.namespace}</span> },
+  { key: "status", header: "Status", render: (p) => <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" ? "Ready" : p.status)} /> },
+  { key: "capacity", header: "Capacity", render: (p) => <Muted>{p.capacity || "—"}</Muted> },
+  { key: "accessModes", header: "Access Modes", render: (p) => <Muted>{p.accessModes || "—"}</Muted> },
+  { key: "storageClass", header: "Storage Class", render: (p) => <span className="fl-link">{p.storageClass || "—"}</span> },
+  { key: "volume", header: "Volume", render: (p) => <span className="fl-link">{p.volume || "—"}</span> },
+  { key: "age", header: "Age", render: (p) => <Muted>{p.age}</Muted> },
+];
+
+const pvColumns: Column<PvSummary>[] = [
+  { key: "name", header: "Volume", render: (p) => <strong>{p.name}</strong> },
+  { key: "capacity", header: "Capacity", render: (p) => <Muted>{p.capacity || "—"}</Muted> },
+  { key: "accessModes", header: "Access Modes", render: (p) => <Muted>{p.accessModes || "—"}</Muted> },
+  { key: "reclaimPolicy", header: "Reclaim", render: (p) => <Muted>{p.reclaimPolicy || "—"}</Muted> },
+  { key: "status", header: "Status", render: (p) => <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" || p.status === "Available" ? "Ready" : p.status)} /> },
+  { key: "claim", header: "Claim", render: (p) => <span className="fl-link">{p.claim || "—"}</span> },
+  { key: "storageClass", header: "Storage Class", render: (p) => <span className="fl-link">{p.storageClass || "—"}</span> },
+  { key: "age", header: "Age", render: (p) => <Muted>{p.age}</Muted> },
+];
+
+const storageClassColumns: Column<StorageClassSummary>[] = [
+  { key: "name", header: "Storage Class", render: (s) => <strong>{s.name}</strong> },
+  { key: "provisioner", header: "Provisioner", render: (s) => <Muted>{s.provisioner}</Muted> },
+  { key: "reclaimPolicy", header: "Reclaim", render: (s) => <Muted>{s.reclaimPolicy || "—"}</Muted> },
+  { key: "volumeBindingMode", header: "Binding Mode", render: (s) => <Muted>{s.volumeBindingMode || "—"}</Muted> },
+  { key: "default", header: "Default", render: (s) => (s.default ? <StatusPill status="Default" kind="success" /> : <Muted>—</Muted>) },
+  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
 ];
 
 const nodeColumns: Column<NodeRow>[] = [
@@ -644,6 +683,12 @@ export function ResourceBrowser({
         return endpointSliceColumns as Column<{ name: string }>[];
       case "networkpolicies":
         return networkPolicyColumns as Column<{ name: string }>[];
+      case "persistentvolumeclaims":
+        return pvcColumns as Column<{ name: string }>[];
+      case "persistentvolumes":
+        return pvColumns as Column<{ name: string }>[];
+      case "storageclasses":
+        return storageClassColumns as Column<{ name: string }>[];
       default:
         return nodeColumns as Column<{ name: string }>[];
     }

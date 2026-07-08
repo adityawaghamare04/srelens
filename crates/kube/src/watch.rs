@@ -11,10 +11,12 @@ use futures::StreamExt;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Event as CoreEvent, LimitRange, Pod, ResourceQuota, Secret, Service,
+    ConfigMap, Event as CoreEvent, LimitRange, PersistentVolume, PersistentVolumeClaim, Pod,
+    ResourceQuota, Secret, Service,
 };
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
+use k8s_openapi::api::storage::v1::StorageClass;
 use kube::runtime::watcher::{Config, Event};
 use kube::Api;
 use serde::de::DeserializeOwned;
@@ -27,6 +29,9 @@ use crate::endpointslices::{summarise as summarise_endpointslice, EndpointSliceS
 use crate::ingresses::{summarise as summarise_ingress, IngressSummary};
 use crate::limitranges::{summarise as summarise_limitrange, LimitRangeSummary};
 use crate::networkpolicies::{summarise as summarise_networkpolicy, NetworkPolicySummary};
+use crate::persistentvolumes::{summarise as summarise_pv, PvSummary};
+use crate::pvcs::{summarise as summarise_pvc, PvcSummary};
+use crate::storageclasses::{summarise as summarise_storageclass, StorageClassSummary};
 use crate::resourcequotas::{summarise as summarise_resourcequota, ResourceQuotaSummary};
 use crate::secrets::{summarise as summarise_secret, SecretSummary};
 use crate::deployments::{summarise as summarise_deployment, DeploymentSummary};
@@ -493,6 +498,78 @@ where
         api,
         summarise_networkpolicy,
         |n: &NetworkPolicySummary| n.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch PersistentVolumeClaims in a namespace.
+pub async fn watch_pvcs<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<PvcSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<PersistentVolumeClaim> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_pvc,
+        |p: &PvcSummary| p.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster PersistentVolumes (cluster-scoped; namespace ignored).
+pub async fn watch_persistentvolumes<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<PvSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<PersistentVolume> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_pv,
+        |p: &PvSummary| p.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster StorageClasses (cluster-scoped; namespace ignored).
+pub async fn watch_storageclasses<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<StorageClassSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<StorageClass> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_storageclass,
+        |s: &StorageClassSummary| s.name.clone(),
         on_update,
         on_status,
     )

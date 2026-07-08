@@ -56,6 +56,9 @@ vi.mock("../lib/watch", () => ({
     "ingresses",
     "endpointslices",
     "networkpolicies",
+    "persistentvolumeclaims",
+    "persistentvolumes",
+    "storageclasses",
   ],
 }));
 vi.mock("./PodTerminal", () => ({ PodTerminal: () => <div data-testid="pod-terminal" /> }));
@@ -276,6 +279,55 @@ describe("ResourceBrowser", () => {
     await waitFor(() => expect(screen.getByText("deny")).toBeDefined());
     expect(screen.getByText("app=web")).toBeDefined();
     expect(screen.getByText("Ingress, Egress")).toBeDefined();
+  });
+
+  it("streams PVCs live with status, capacity and bound volume", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([
+        { name: "data", namespace: "default", status: "Bound", capacity: "10Gi", accessModes: "RWO", storageClass: "standard", volume: "pv-123", age: "3d" },
+      ]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="persistentvolumeclaims" />);
+    await waitFor(() => expect(screen.getByText("data")).toBeDefined());
+    expect(screen.getByText("10Gi")).toBeDefined();
+    expect(screen.getByText("pv-123")).toBeDefined();
+  });
+
+  it("streams cluster PersistentVolumes live (no namespace) with reclaim policy and claim", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: [] });
+    watchResourceMock.mockImplementation(
+      watchWith([
+        { name: "pv-123", capacity: "20Gi", accessModes: "RWO", reclaimPolicy: "Retain", status: "Bound", claim: "default/data", storageClass: "standard", age: "5d" },
+      ]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="persistentvolumes" />);
+    await waitFor(() =>
+      expect(watchResourceMock).toHaveBeenCalledWith(
+        "kind-dev",
+        "",
+        "persistentvolumes",
+        expect.any(Function),
+        expect.any(Function),
+      ),
+    );
+    expect(await screen.findByText("pv-123")).toBeDefined();
+    expect(screen.getByText("Retain")).toBeDefined();
+    expect(screen.getByText("default/data")).toBeDefined();
+  });
+
+  it("streams StorageClasses live and marks the default", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: [] });
+    watchResourceMock.mockImplementation(
+      watchWith([
+        { name: "standard", provisioner: "kubernetes.io/aws-ebs", reclaimPolicy: "Delete", volumeBindingMode: "WaitForFirstConsumer", default: true, age: "9d" },
+      ]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="storageclasses" />);
+    await waitFor(() => expect(screen.getByText("standard")).toBeDefined());
+    expect(screen.getByText("kubernetes.io/aws-ebs")).toBeDefined();
+    // "Default" appears as both the column header and the badge on the default class.
+    expect(screen.getAllByText("Default").length).toBeGreaterThanOrEqual(2);
   });
 
   it("starts on the provided namespace and reports filter changes", async () => {

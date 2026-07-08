@@ -23,6 +23,9 @@ export const WATCHABLE_KINDS = [
   "ingresses",
   "endpointslices",
   "networkpolicies",
+  "persistentvolumeclaims",
+  "persistentvolumes",
+  "storageclasses",
   "events",
 ] as const;
 
