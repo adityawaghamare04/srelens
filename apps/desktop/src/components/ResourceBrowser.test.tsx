@@ -139,6 +139,27 @@ describe("ResourceBrowser", () => {
     expect(screen.getByText("backup")).toBeDefined();
   });
 
+  it("relabels the CronJob detail action when a watch update flips suspend", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["ops"] });
+    let emit!: (rows: unknown) => void;
+    watchResourceMock.mockImplementation((_c: string, _n: string, _k: string, onRows: (r: unknown) => void) => {
+      emit = onRows;
+      onRows([{ name: "nightly", namespace: "ops", schedule: "0 2 * * *", suspended: false, active: 0, lastSchedule: "2h", age: "9d" }]);
+      return Promise.resolve({ stop: vi.fn() });
+    });
+
+    render(<ResourceBrowser context="kind-dev" kind="cronjobs" />);
+    fireEvent.click(await screen.findByText("nightly"));
+
+    // Active CronJob → the action reads "Suspend".
+    expect(await screen.findByRole("button", { name: "Suspend" })).toBeDefined();
+
+    // A live watch update marks it suspended; the still-open detail must follow.
+    emit([{ name: "nightly", namespace: "ops", schedule: "0 2 * * *", suspended: true, active: 0, lastSchedule: "2h", age: "9d" }]);
+    expect(await screen.findByRole("button", { name: "Resume" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull();
+  });
+
   it("streams cronjobs live and marks suspended ones", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["ops"] });
     watchResourceMock.mockImplementation(

@@ -3,13 +3,22 @@ import {
   ArrowLeftRight,
   LogOut,
   Logs,
+  Pause,
+  Play,
   RotateCw,
   Scaling,
   SquareTerminal,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { deletePod, evictPod, type PodSummary } from "../lib/workloads";
-import { deleteResource, scaleResource, rolloutRestart } from "../lib/actions";
+import {
+  deleteResource,
+  scaleResource,
+  rolloutRestart,
+  cronjobSetSuspend,
+  cronjobTriggerNow,
+} from "../lib/actions";
 import { IconButton, ConfirmDialog, TextInput } from "../ui";
 import { ForwardDialog } from "./ForwardDialog";
 
@@ -172,21 +181,51 @@ export function ResourceActions({
   kind,
   namespace,
   name,
+  cronjobSuspended,
   onDeleted,
+  onChanged,
   onOpenLogs,
 }: {
   context: string;
   kind: string;
   namespace: string | null;
   name: string;
+  /** For CronJob details: current suspend state, to label Suspend/Resume. */
+  cronjobSuspended?: boolean;
   onDeleted: () => void;
+  /** Fired after a successful non-delete write action so the detail refreshes. */
+  onChanged?: () => void;
   onOpenLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [scaling, setScaling] = useState(false);
   const [replicas, setReplicas] = useState("");
+  const [triggering, setTriggering] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const isCronJob = kind === "CronJob";
+
+  async function doSetSuspend() {
+    setBusy("suspend");
+    setErr("");
+    const r = await cronjobSetSuspend(context, namespace ?? "", name, !cronjobSuspended);
+    setBusy("");
+    if (r.error) setErr(r.error);
+    else onChanged?.();
+  }
+
+  async function doTrigger() {
+    setBusy("trigger");
+    setErr("");
+    const r = await cronjobTriggerNow(context, namespace ?? "", name);
+    setBusy("");
+    if (r.error) {
+      setErr(r.error);
+      return;
+    }
+    setTriggering(false);
+    onChanged?.();
+  }
 
   async function doDelete() {
     setBusy("delete");
@@ -216,13 +255,15 @@ export function ResourceActions({
       return;
     }
     setScaling(false);
+    onChanged?.();
   }
 
   async function doRestart() {
     setBusy("restart");
     setErr("");
-    await rolloutRestart(context, kind, namespace ?? "", name);
+    const r = await rolloutRestart(context, kind, namespace ?? "", name);
     setBusy("");
+    if (!r.error) onChanged?.();
   }
 
   return (
@@ -245,7 +286,36 @@ export function ResourceActions({
           onClick={() => void doRestart()}
         />
       )}
+      {isCronJob && (
+        <IconButton icon={Zap} label="Run now" onClick={() => setTriggering(true)} />
+      )}
+      {isCronJob && (
+        <IconButton
+          icon={cronjobSuspended ? Play : Pause}
+          label={cronjobSuspended ? "Resume" : "Suspend"}
+          disabled={busy === "suspend"}
+          onClick={() => void doSetSuspend()}
+        />
+      )}
       <IconButton icon={Trash2} label="Delete" danger onClick={() => setConfirmDelete(true)} />
+
+      {triggering && (
+        <ConfirmDialog
+          title="Run CronJob now"
+          message={
+            <>
+              <p style={{ marginTop: 0 }}>
+                Create a one-off Job from <code>{name}</code> and run it immediately.
+              </p>
+              {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
+            </>
+          }
+          confirmLabel="Run"
+          busy={busy === "trigger"}
+          onConfirm={() => void doTrigger()}
+          onCancel={() => setTriggering(false)}
+        />
+      )}
 
       {scaling && (
         <ConfirmDialog

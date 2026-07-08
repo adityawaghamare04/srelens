@@ -2,14 +2,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import React from "react";
 
-const { deletePodMock, evictPodMock, deleteResourceMock, scaleResourceMock, rolloutRestartMock } =
-  vi.hoisted(() => ({
-    deletePodMock: vi.fn(),
-    evictPodMock: vi.fn(),
-    deleteResourceMock: vi.fn(),
-    scaleResourceMock: vi.fn(),
-    rolloutRestartMock: vi.fn(),
-  }));
+const {
+  deletePodMock,
+  evictPodMock,
+  deleteResourceMock,
+  scaleResourceMock,
+  rolloutRestartMock,
+  cronjobSetSuspendMock,
+  cronjobTriggerNowMock,
+} = vi.hoisted(() => ({
+  deletePodMock: vi.fn(),
+  evictPodMock: vi.fn(),
+  deleteResourceMock: vi.fn(),
+  scaleResourceMock: vi.fn(),
+  rolloutRestartMock: vi.fn(),
+  cronjobSetSuspendMock: vi.fn(),
+  cronjobTriggerNowMock: vi.fn(),
+}));
 vi.mock("../lib/workloads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/workloads")>();
   return { ...actual, deletePod: deletePodMock, evictPod: evictPodMock };
@@ -18,6 +27,8 @@ vi.mock("../lib/actions", () => ({
   deleteResource: deleteResourceMock,
   scaleResource: scaleResourceMock,
   rolloutRestart: rolloutRestartMock,
+  cronjobSetSuspend: cronjobSetSuspendMock,
+  cronjobTriggerNow: cronjobTriggerNowMock,
 }));
 
 import { PodActions, ResourceActions } from "./DetailActions";
@@ -38,6 +49,8 @@ beforeEach(() => {
   deleteResourceMock.mockReset();
   scaleResourceMock.mockReset();
   rolloutRestartMock.mockReset();
+  cronjobSetSuspendMock.mockReset();
+  cronjobTriggerNowMock.mockReset();
 });
 
 describe("PodActions", () => {
@@ -130,5 +143,60 @@ describe("ResourceActions", () => {
     expect(screen.queryByRole("button", { name: "Scale" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Restart" })).toBeNull();
     expect(screen.getByRole("button", { name: "Delete" })).toBeDefined();
+  });
+
+  it("triggers a CronJob run now with confirmation", async () => {
+    cronjobTriggerNowMock.mockResolvedValue({ jobName: "nightly-123" });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="CronJob"
+        namespace="ops"
+        name="nightly"
+        onDeleted={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await waitFor(() =>
+      expect(cronjobTriggerNowMock).toHaveBeenCalledWith("kind-dev", "ops", "nightly"),
+    );
+  });
+
+  it("shows Resume for a suspended CronJob and calls setSuspend(false)", async () => {
+    cronjobSetSuspendMock.mockResolvedValue({ ok: true });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="CronJob"
+        namespace="ops"
+        name="nightly"
+        cronjobSuspended
+        onDeleted={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    await waitFor(() =>
+      expect(cronjobSetSuspendMock).toHaveBeenCalledWith("kind-dev", "ops", "nightly", false),
+    );
+  });
+
+  it("shows Suspend for an active CronJob and calls setSuspend(true)", async () => {
+    cronjobSetSuspendMock.mockResolvedValue({ ok: true });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="CronJob"
+        namespace="ops"
+        name="nightly"
+        cronjobSuspended={false}
+        onDeleted={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
+    await waitFor(() =>
+      expect(cronjobSetSuspendMock).toHaveBeenCalledWith("kind-dev", "ops", "nightly", true),
+    );
   });
 });

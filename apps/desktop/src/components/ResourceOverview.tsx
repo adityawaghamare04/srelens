@@ -2313,6 +2313,7 @@ export function ResourceOverview({
   namespace,
   name,
   getObjectFn = getObject,
+  reloadKey = 0,
   onOpenResource,
 }: {
   context: string;
@@ -2320,6 +2321,8 @@ export function ResourceOverview({
   namespace: string | null;
   name: string;
   getObjectFn?: typeof getObject;
+  /** Bumped by the parent after a write action to re-fetch the shown object. */
+  reloadKey?: number;
   onOpenResource?: OpenResource;
 }) {
   const [obj, setObj] = useState<K8sObject | null>(null);
@@ -2337,7 +2340,7 @@ export function ResourceOverview({
     return () => {
       active = false;
     };
-  }, [context, kind, namespace, name, getObjectFn]);
+  }, [context, kind, namespace, name, getObjectFn, reloadKey]);
 
   if (error) return <p style={{ color: "var(--fl-color-danger)" }}>Error: {error}</p>;
   if (obj === null) return <Spinner label="Loading details" />;

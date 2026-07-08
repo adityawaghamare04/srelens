@@ -23,12 +23,15 @@ export function ResourceDetail({
   kind,
   namespace,
   name,
+  reloadKey = 0,
   onOpenResource,
 }: {
   context: string;
   kind: string;
   namespace: string | null;
   name: string;
+  /** Bumped by the parent after a write action to refresh the overview. */
+  reloadKey?: number;
   onOpenResource?: OpenResource;
 }) {
   const [tab, setTab] = useState<DetailTab>("overview");
@@ -43,6 +46,7 @@ export function ResourceDetail({
             kind={kind}
             namespace={namespace}
             name={name}
+            reloadKey={reloadKey}
             onOpenResource={onOpenResource}
           />
         )}
