@@ -266,6 +266,49 @@ function conditionBadgeVariant(c: Condition): BadgeVariant {
   return negative ? "danger" : "success";
 }
 
+// The pod lifecycle, in the order kubelet reports it.
+const POD_CONDITION_ORDER = ["PodScheduled", "Initialized", "ContainersReady", "Ready"];
+
+/**
+ * Sort pod conditions into lifecycle order (PodScheduled → Initialized →
+ * ContainersReady → Ready); any other condition types keep their relative order
+ * after the known lifecycle ones.
+ */
+export function orderPodConditions(conditions: Condition[]): Condition[] {
+  const rank = (type: string) => {
+    const index = POD_CONDITION_ORDER.indexOf(type);
+    return index === -1 ? POD_CONDITION_ORDER.length : index;
+  };
+  return conditions
+    .map((condition, index) => ({ condition, index }))
+    .sort((a, b) => rank(a.condition.type) - rank(b.condition.type) || a.index - b.index)
+    .map(({ condition }) => condition);
+}
+
+/**
+ * One line per affinity type in use, e.g. "Node affinity: 2 required, 1
+ * preferred". `nodeAffinity` counts `nodeSelectorTerms`; pod (anti-)affinity
+ * count their rule arrays directly. Types with no rules are omitted.
+ */
+export function summarizeAffinity(affinity: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const describe = (label: string, rule: Record<string, unknown>, requiredIsTerms: boolean) => {
+    const required = requiredIsTerms
+      ? asArray(asRecord(rule.requiredDuringSchedulingIgnoredDuringExecution).nodeSelectorTerms).length
+      : asArray(rule.requiredDuringSchedulingIgnoredDuringExecution).length;
+    const preferred = asArray(rule.preferredDuringSchedulingIgnoredDuringExecution).length;
+    if (required === 0 && preferred === 0) return;
+    const parts: string[] = [];
+    if (required) parts.push(`${required} required`);
+    if (preferred) parts.push(`${preferred} preferred`);
+    lines.push(`${label}: ${parts.join(", ")}`);
+  };
+  describe("Node affinity", asRecord(affinity.nodeAffinity), true);
+  describe("Pod affinity", asRecord(affinity.podAffinity), false);
+  describe("Pod anti-affinity", asRecord(affinity.podAntiAffinity), false);
+  return lines;
+}
+
 /** Conditions as a row of coloured badges (Pod/Deployment-style). */
 function ConditionBadges({ conditions }: { conditions: Condition[] }) {
   if (conditions.length === 0) return <span className="fl-detail-empty">None</span>;
@@ -447,6 +490,17 @@ function mountText(m: unknown): string {
   return `${str(r.mountPath)}${ro} ← ${str(r.name)}`;
 }
 
+/** A toleration as "key=value → effect" (or "key Exists → effect"). */
+function tolerationText(t: unknown): string {
+  const r = asRecord(t);
+  const key = str(r.key) || "(any taint)";
+  const operator = str(r.operator) || "Equal";
+  const effect = str(r.effect) || "all effects";
+  const secs = r.tolerationSeconds != null ? ` for ${str(r.tolerationSeconds)}s` : "";
+  const left = operator === "Exists" ? `${key} exists` : `${key}=${str(r.value)}`;
+  return `${left} → ${effect}${secs}`;
+}
+
 function PlainChips({ items }: { items: string[] }) {
   return (
     <div className="fl-chips">
@@ -520,11 +574,17 @@ function ContainerCard({
   status,
   forward,
   now,
+  onLogs,
+  onExec,
 }: {
   container: Record<string, unknown>;
   status?: Record<string, unknown>;
   forward?: ForwardTarget;
   now: number;
+  /** Open logs scoped to this container. */
+  onLogs?: () => void;
+  /** Open an exec session in this container. */
+  onExec?: () => void;
 }) {
   const name = str(container.name);
   const st = status ? containerStateText(status) : null;
@@ -536,6 +596,7 @@ function ContainerCard({
   const limits = asRecord(resources.limits);
   const liveness = asRecord(container.livenessProbe);
   const readiness = asRecord(container.readinessProbe);
+  const startup = asRecord(container.startupProbe);
   const command = [...asArray(container.command), ...asArray(container.args)].map(str).join(" ");
   const restartCount = status?.restartCount;
   const lastRestart = containerLastRestartTime(status);
@@ -546,10 +607,27 @@ function ContainerCard({
       <div className="fl-container-card__name">
         <span className={`fl-status__dot fl-status--${st?.kind ?? "neutral"}`} />
         {name}
+        {(onLogs || onExec) && (
+          <span className="ml-auto flex gap-1">
+            {onLogs && (
+              <Button variant="ghost" size="sm" onClick={onLogs} aria-label={`Logs for ${name}`}>
+                Logs
+              </Button>
+            )}
+            {onExec && (
+              <Button variant="ghost" size="sm" onClick={onExec} aria-label={`Exec into ${name}`}>
+                Exec
+              </Button>
+            )}
+          </span>
+        )}
       </div>
       <KV
         pairs={[
           ["Status", st ? <span className={`fl-status--${st.kind} fl-status-text`}>{st.text}</span> : ""],
+          container.targetContainerName
+            ? ["Debugging", <span className="fl-mono">{str(container.targetContainerName)}</span>]
+            : ["", ""],
           ["Restarts", restartCount != null ? str(restartCount) : ""],
           ["Last restart", timestampWithAge(lastRestart, now)],
           ["Running since", timestampWithAge(runningSince, now)],
@@ -588,6 +666,7 @@ function ContainerCard({
           ],
           ["Liveness", Object.keys(liveness).length ? <PlainChips items={probeChips(liveness)} /> : ""],
           ["Readiness", Object.keys(readiness).length ? <PlainChips items={probeChips(readiness)} /> : ""],
+          ["Startup", Object.keys(startup).length ? <PlainChips items={probeChips(startup)} /> : ""],
           ["Command", command ? <CollapsibleText text={command} label="command" muted /> : ""],
           ["Requests", Object.keys(requests).length ? resourceText(requests) : ""],
           ["Limits", Object.keys(limits).length ? resourceText(limits) : ""],
@@ -597,16 +676,54 @@ function ContainerCard({
   );
 }
 
+/**
+ * Pod lifecycle conditions as an ordered timeline. Three aligned columns —
+ * type (with reason), status pill, and the transition time (relative, with the
+ * absolute timestamp on hover) right-aligned so the progression scans top-down.
+ */
+function PodConditionsTimeline({ conditions, now }: { conditions: Condition[]; now: number }) {
+  if (conditions.length === 0) return null;
+  return (
+    <Section title="Conditions">
+      <ol className="grid grid-cols-[auto_auto_1fr] items-center gap-x-4 gap-y-2">
+        {orderPodConditions(conditions).map((condition) => (
+          <li key={condition.type} className="contents">
+            <span className="fl-mono text-sm">
+              {condition.type}
+              {condition.reason && condition.reason !== condition.type && (
+                <span className="text-muted-foreground"> · {condition.reason}</span>
+              )}
+            </span>
+            <StatusPill status={condition.status} kind={conditionKind(condition)} />
+            <span
+              className="text-right text-xs text-muted-foreground tabular-nums"
+              title={condition.lastTransitionTime ? absoluteTimestamp(condition.lastTransitionTime) : undefined}
+            >
+              {condition.lastTransitionTime ? `${ageFromTimestamp(condition.lastTransitionTime, now)} ago` : ""}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </Section>
+  );
+}
+
 function PodDetailView({
   obj,
   now,
   context = "",
   onOpenResource,
+  onOpenLogs,
+  onOpenExec,
 }: {
   obj: K8sObject;
   now: number;
   context?: string;
   onOpenResource?: OpenResource;
+  /** Open logs for a specific container of this pod. */
+  onOpenLogs?: (container: string) => void;
+  /** Open an exec/terminal session in a specific container of this pod. */
+  onOpenExec?: (container: string) => void;
 }) {
   const meta = asRecord(obj.metadata);
   const spec = asRecord(obj.spec);
@@ -617,6 +734,13 @@ function PodDetailView({
   const conditions = asArray(status.conditions) as unknown as Condition[];
   const podIPs = asArray(status.podIPs).map((p) => str(asRecord(p).ip)).filter(Boolean);
   const tolerations = asArray(spec.tolerations);
+  const nodeSelector = (spec.nodeSelector ?? {}) as Record<string, string>;
+  const affinityLines = summarizeAffinity(asRecord(spec.affinity));
+  const hasScheduling =
+    !!spec.nodeName ||
+    Object.keys(nodeSelector).length > 0 ||
+    affinityLines.length > 0 ||
+    tolerations.length > 0;
   const created = str(meta.creationTimestamp);
   const namespace = str(meta.namespace) || null;
   const forward: ForwardTarget | undefined = context
@@ -641,6 +765,10 @@ function PodDetailView({
   const initStatuses = new Map(
     asArray(status.initContainerStatuses).map((s) => [str(asRecord(s).name), asRecord(s)]),
   );
+  const ephemeralStatuses = new Map(
+    asArray(status.ephemeralContainerStatuses).map((s) => [str(asRecord(s).name), asRecord(s)]),
+  );
+  const ephemeralContainers = asArray(spec.ephemeralContainers).map(asRecord);
   const allContainerStatuses = [
     ...asArray(status.initContainerStatuses),
     ...asArray(status.containerStatuses),
@@ -824,11 +952,46 @@ function PodDetailView({
               ),
             ],
             ["QoS Class", str(status.qosClass)],
-            ["Conditions", <ConditionBadges key="c" conditions={conditions} />],
-            ["Tolerations", tolerations.length ? plural(tolerations.length, "toleration") : ""],
           ]}
         />
       </Section>
+
+      <PodConditionsTimeline conditions={conditions} now={now} />
+
+      {hasScheduling && (
+        <Section title="Scheduling">
+          <KV
+            pairs={[
+              [
+                "Node",
+                spec.nodeName ? (
+                  <ResourceLink
+                    target={{ kind: "Node", namespace: null, name: str(spec.nodeName) }}
+                    onOpenResource={onOpenResource}
+                  />
+                ) : (
+                  "Not scheduled"
+                ),
+              ],
+              [
+                "Node selector",
+                Object.keys(nodeSelector).length ? <Chips map={nodeSelector} /> : "",
+              ],
+              ["Affinity", affinityLines.length ? <PlainChips items={affinityLines} /> : ""],
+              [
+                "Tolerations",
+                tolerations.length ? (
+                  <Expandable summary={plural(tolerations.length, "toleration")}>
+                    <PlainChips items={tolerations.map(tolerationText)} />
+                  </Expandable>
+                ) : (
+                  ""
+                ),
+              ],
+            ]}
+          />
+        </Section>
+      )}
 
       {podVolumes.length > 0 && (
         <Section title="Pod Volumes">
@@ -862,18 +1025,38 @@ function PodDetailView({
         ) : (
           asArray(spec.containers).map((c) => {
             const cr = asRecord(c);
+            const cn = str(cr.name);
             return (
               <ContainerCard
-                key={str(cr.name)}
+                key={cn}
                 container={cr}
-                status={containerStatuses.get(str(cr.name))}
+                status={containerStatuses.get(cn)}
                 forward={forward}
                 now={now}
+                onLogs={onOpenLogs ? () => onOpenLogs(cn) : undefined}
+                onExec={onOpenExec ? () => onOpenExec(cn) : undefined}
               />
             );
           })
         )}
       </Section>
+
+      {ephemeralContainers.length > 0 && (
+        <Section title="Ephemeral Containers">
+          {ephemeralContainers.map((cr) => {
+            const cn = str(cr.name);
+            return (
+              <ContainerCard
+                key={cn}
+                container={cr}
+                status={ephemeralStatuses.get(cn)}
+                now={now}
+                onLogs={onOpenLogs ? () => onOpenLogs(cn) : undefined}
+              />
+            );
+          })}
+        </Section>
+      )}
     </div>
   );
 }
@@ -2728,6 +2911,7 @@ export function ObjectDetail({
   context = "",
   onEdited,
   onOpenResource,
+  onOpenLogs,
 }: {
   kind: string;
   obj: K8sObject;
@@ -2735,6 +2919,8 @@ export function ObjectDetail({
   context?: string;
   onEdited?: () => void;
   onOpenResource?: OpenResource;
+  /** Open logs scoped to a container (Pod detail only). */
+  onOpenLogs?: (container: string) => void;
 }) {
   const meta = asRecord(obj.metadata);
   // Metrics chart (Pod/Node) sits above the rest, matching Lens. Needs a
@@ -2758,6 +2944,7 @@ export function ObjectDetail({
           now={now}
           context={context}
           onOpenResource={onOpenResource}
+          onOpenLogs={onOpenLogs}
         />
       </>
     );
@@ -2803,6 +2990,7 @@ export function ResourceOverview({
   getObjectFn = getObject,
   reloadKey = 0,
   onOpenResource,
+  onOpenLogs,
 }: {
   context: string;
   kind: string;
@@ -2812,6 +3000,8 @@ export function ResourceOverview({
   /** Bumped by the parent after a write action to re-fetch the shown object. */
   reloadKey?: number;
   onOpenResource?: OpenResource;
+  /** Open logs scoped to a container (Pod detail only). */
+  onOpenLogs?: (container: string) => void;
 }) {
   const [obj, setObj] = useState<K8sObject | null>(null);
   const [error, setError] = useState("");
@@ -2842,6 +3032,7 @@ export function ResourceOverview({
       context={context}
       onEdited={() => setEditReload((n) => n + 1)}
       onOpenResource={onOpenResource}
+      onOpenLogs={onOpenLogs}
     />
   );
 }

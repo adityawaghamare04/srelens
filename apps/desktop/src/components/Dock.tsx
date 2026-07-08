@@ -12,6 +12,8 @@ export interface DockSession {
   namespace: string;
   /** Present for terminals and single-pod logs. */
   pod?: string;
+  /** Preselect this container in single-pod logs (from a per-container action). */
+  container?: string;
   /** Present for workload (e.g. Deployment) logs that span many pods. */
   workload?: { kind: string; name: string };
 }
@@ -129,6 +131,7 @@ export function Dock({
               key={active.id}
               context={active.context}
               namespace={active.namespace}
+              initialContainer={active.container}
               source={
                 (active.pod
                   ? { type: "pod", pod: active.pod }
