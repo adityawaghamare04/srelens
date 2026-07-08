@@ -52,6 +52,19 @@ until then, verify by matching the file against the release.
 > "Windows protected your PC" prompt. Click **More info → Run anyway** to
 > proceed. Signed installers will remove this step in a future release.
 
+## Connect MCP clients
+
+srelens can act as an MCP server so agents and MCP-enabled editors drive your
+clusters. Open **Settings → MCP** to:
+
+- **Run the MCP server (HTTP)** on a loopback port — it shares your authenticated clusters.
+- **Install the `srelens` CLI** to `~/.local/bin` so clients can spawn `srelens --mcp-stdio`
+  (ensure `~/.local/bin` is on your `PATH`).
+- **Copy client config** for Claude Code, Claude Desktop, Cursor, Codex, Antigravity, and others.
+
+Destructive tools require an explicit `_confirm` — an agent can't delete or drain anything
+without approval.
+
 ## Updating
 
 srelens checks for updates from **Settings → Updates**:

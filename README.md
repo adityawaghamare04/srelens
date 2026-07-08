@@ -60,32 +60,37 @@ surfaces never drift.
 - **Helm** — browse installed releases and inspect release details.
 - **Metrics** — node and pod metrics (metrics-server) with usage overviews and sparklines.
 - **Command palette** — `⌘K` keyboard-first navigation across contexts, resources, and actions.
+- **MCP-native** — every capability is also an MCP tool; enable the server and copy client config from **Settings → MCP** (see below).
 - **Local-first** — talks directly to your API servers with your kubeconfig credentials. No cloud service in between.
 
 ## MCP server
 
-The same binary that runs the GUI can run as an MCP server, exposing the full capability registry:
+srelens is MCP-native — every capability it exposes to the UI is also an MCP tool, so
+agents and MCP-enabled editors can drive your clusters. Set it up in **Settings → MCP**:
+
+- **Run the MCP server (HTTP)** — toggle a loopback server (default `127.0.0.1:8765`) that
+  shares the app's authenticated clusters, so a client sees exactly what you do.
+- **Install the srelens CLI** — adds a `srelens` command to `~/.local/bin` so clients can
+  spawn `srelens --mcp-stdio` (make sure `~/.local/bin` is on your `PATH`).
+- **Client config** — copy ready-made config for Claude Code, Claude Desktop, Cursor,
+  Codex, Antigravity, and generic clients.
+
+Or run the server directly from a terminal:
 
 ```sh
-# stdio transport (for local agents / IDE clients)
-srelens-desktop --mcp-stdio
-
-# HTTP transport (loopback only, default 127.0.0.1:8765)
-srelens-desktop --mcp-http [addr]
+srelens --mcp-stdio                 # stdio (agents / IDE clients spawn this)
+srelens --mcp-http 127.0.0.1:8765   # loopback HTTP
 ```
 
-Destructive tools (delete, drain, apply, …) carry annotations and require an explicit
+Destructive tools (delete, drain, apply, …) are annotated and require an explicit
 `_confirm` argument — an agent can't delete or drain anything without approval.
 
-Example Claude Desktop / MCP client config:
+Example client config (stdio):
 
 ```json
 {
   "mcpServers": {
-    "srelens": {
-      "command": "/path/to/srelens-desktop",
-      "args": ["--mcp-stdio"]
-    }
+    "srelens": { "command": "srelens", "args": ["--mcp-stdio"] }
   }
 }
 ```
