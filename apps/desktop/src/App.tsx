@@ -15,6 +15,7 @@ import { HelmReleasesView } from "./components/HelmReleasesView";
 import { NewResourceEditor } from "./components/NewResourceEditor";
 import { SettingsView } from "./components/SettingsView";
 import { CommandPalette } from "./components/CommandPalette";
+import { Toaster } from "./components/ui/sonner";
 import { Dock, type DockSession, type DockKind } from "./components/Dock";
 import { StatusBar } from "./components/StatusBar";
 import { LandingPage } from "./components/LandingPage";
@@ -462,6 +463,7 @@ export function App() {
         onOpenResource={openResource}
         onOpenCrd={(crd) => activeCluster && openCrdView(activeCluster, crd)}
       />
+      <Toaster position="top-right" richColors closeButton />
     </div>
   );
 }

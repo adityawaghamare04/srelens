@@ -30,6 +30,10 @@ vi.mock("../lib/actions", () => ({
   cronjobSetSuspend: cronjobSetSuspendMock,
   cronjobTriggerNow: cronjobTriggerNowMock,
 }));
+const { notifyMock } = vi.hoisted(() => ({
+  notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+vi.mock("../lib/notify", () => ({ notify: notifyMock }));
 
 import { PodActions, ResourceActions } from "./DetailActions";
 
@@ -51,6 +55,8 @@ beforeEach(() => {
   rolloutRestartMock.mockReset();
   cronjobSetSuspendMock.mockReset();
   cronjobTriggerNowMock.mockReset();
+  notifyMock.success.mockReset();
+  notifyMock.error.mockReset();
 });
 
 describe("PodActions", () => {
@@ -111,6 +117,20 @@ describe("ResourceActions", () => {
     await waitFor(() =>
       expect(scaleResourceMock).toHaveBeenCalledWith("kind-dev", "Deployment", "default", "web", 3),
     );
+    // A success toast confirms the operation.
+    await waitFor(() => expect(notifyMock.success).toHaveBeenCalledWith(expect.stringMatching(/Scaled web to 3/)));
+  });
+
+  it("shows an error toast when an operation fails", async () => {
+    scaleResourceMock.mockResolvedValue({ error: "forbidden" });
+    render(
+      <ResourceActions context="kind-dev" kind="Deployment" namespace="default" name="web" onDeleted={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Scale" }));
+    fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "Scale" }));
+    await waitFor(() => expect(notifyMock.error).toHaveBeenCalledWith(expect.any(String), "forbidden"));
+    expect(notifyMock.success).not.toHaveBeenCalled();
   });
 
   it("triggers a rollout restart", async () => {

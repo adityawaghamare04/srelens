@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { CircleCheck, Undo2, Upload } from "lucide-react";
 import { getManifest, applyManifest, validateManifest } from "../lib/manifest";
+import { notify } from "../lib/notify";
 import { openApiSchema } from "../lib/schema";
 import { Spinner, Button, ConfirmDialog } from "../ui";
 
@@ -62,10 +63,12 @@ export function YamlView({
     setApplying(false);
     if (out.error) {
       setApplyError(out.error);
+      notify.error(`Failed to apply ${name}`, out.error);
       return;
     }
     setConfirming(false);
     setApplied(true);
+    notify.success(`Applied ${name}`);
     load();
   }
 
