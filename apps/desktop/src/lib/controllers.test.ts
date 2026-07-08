@@ -1,5 +1,54 @@
 import { describe, it, expect, vi } from "vitest";
-import { listStatefulSets, listDaemonSets, listJobs, listCronJobs } from "./controllers";
+import {
+  listStatefulSets,
+  listDaemonSets,
+  listJobs,
+  listCronJobs,
+  listConfigMaps,
+  listSecrets,
+  listResourceQuotas,
+  listLimitRanges,
+} from "./controllers";
+
+describe("config resource lists", () => {
+  it("listConfigMaps returns key counts", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      configmaps: [{ name: "web", namespace: "default", keys: 3, age: "2d" }],
+    });
+    const out = await listConfigMaps("kind-dev", "default", invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.listConfigMaps", { context: "kind-dev", namespace: "default" });
+    expect(out.configmaps?.[0].keys).toBe(3);
+  });
+
+  it("listSecrets returns type + key count and never any values", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      secrets: [{ name: "tls", namespace: "default", type: "kubernetes.io/tls", keys: 2, age: "1d" }],
+    });
+    const out = await listSecrets("kind-dev", "default", invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.listSecrets", { context: "kind-dev", namespace: "default" });
+    expect(out.secrets?.[0].type).toBe("kubernetes.io/tls");
+    expect(out.secrets?.[0].keys).toBe(2);
+    expect(Object.keys(out.secrets![0])).not.toContain("data");
+  });
+
+  it("listResourceQuotas returns constrained-resource counts", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      resourcequotas: [{ name: "q", namespace: "team", resources: 3, age: "5d" }],
+    });
+    const out = await listResourceQuotas("kind-dev", "team", invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.listResourceQuotas", { context: "kind-dev", namespace: "team" });
+    expect(out.resourcequotas?.[0].resources).toBe(3);
+  });
+
+  it("listLimitRanges returns limit-entry counts", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      limitranges: [{ name: "lr", namespace: "default", limits: 2, age: "3d" }],
+    });
+    const out = await listLimitRanges("kind-dev", "default", invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.listLimitRanges", { context: "kind-dev", namespace: "default" });
+    expect(out.limitranges?.[0].limits).toBe(2);
+  });
+});
 
 describe("listStatefulSets", () => {
   it("passes context+namespace and returns rows", async () => {

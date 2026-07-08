@@ -140,6 +140,58 @@ pub async fn start_resource_watch(
                 )
                 .await
             }
+            "configmaps" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_configmaps(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "secrets" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_secrets(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "resourcequotas" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_resourcequotas(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "limitranges" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_limitranges(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
             "services" => {
                 let (a, c) = (app_out.clone(), emit_channel.clone());
                 srelens_kube::watch::watch_services(
