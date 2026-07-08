@@ -20,7 +20,12 @@ beforeEach(() => {
   localStorage.clear();
   Object.values(mcp).forEach((m) => m.mockReset());
   mcp.mcpHttpStatus.mockResolvedValue(null);
-  mcp.srelensCliStatus.mockResolvedValue({ installed: false, path: "/usr/local/bin/srelens", links_to: null });
+  mcp.srelensCliStatus.mockResolvedValue({
+    installed: false,
+    path: "/home/u/.local/bin/srelens",
+    links_to: null,
+    on_path: true,
+  });
 });
 
 describe("McpSettingsSection", () => {
@@ -41,14 +46,30 @@ describe("McpSettingsSection", () => {
   });
 
   it("installs the srelens CLI", async () => {
-    mcp.installSrelensCli.mockResolvedValue("/usr/local/bin/srelens");
-    mcp.srelensCliStatus.mockResolvedValue({ installed: true, path: "/usr/local/bin/srelens", links_to: "/x" });
+    mcp.installSrelensCli.mockResolvedValue("/home/u/.local/bin/srelens");
+    mcp.srelensCliStatus.mockResolvedValue({
+      installed: true,
+      path: "/home/u/.local/bin/srelens",
+      links_to: "/x",
+      on_path: true,
+    });
     render(<McpSettingsSection />);
     fireEvent.click(screen.getByRole("button", { name: /Install srelens CLI/ }));
     await waitFor(() => expect(mcp.installSrelensCli).toHaveBeenCalled());
     // After install the button relabels to Reinstall and the path is shown.
     expect(await screen.findByRole("button", { name: /Reinstall srelens CLI/ })).toBeDefined();
     expect(screen.getAllByText(/Installed at/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("warns when the install directory is not on PATH", async () => {
+    mcp.srelensCliStatus.mockResolvedValue({
+      installed: true,
+      path: "/home/u/.local/bin/srelens",
+      links_to: "/x",
+      on_path: false,
+    });
+    render(<McpSettingsSection />);
+    expect(await screen.findByText(/isn't on your PATH/)).toBeDefined();
   });
 
   it("shows the client config for the selected tool and transport", async () => {

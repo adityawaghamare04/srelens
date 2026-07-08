@@ -19,6 +19,8 @@ export interface CliStatus {
   installed: boolean;
   path: string;
   links_to: string | null;
+  /** Whether the install directory is on the current $PATH. */
+  on_path: boolean;
 }
 
 /** Symlink the srelens binary onto PATH; returns the install path. */
