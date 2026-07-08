@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
 import { getObject, getSecret, type K8sObject } from "../lib/manifest";
+import { listEndpointSlices } from "../lib/network";
 import { updateConfigData } from "../lib/actions";
 import {
   Spinner,
@@ -1058,10 +1059,40 @@ interface PortRow {
   servicePort?: number;
 }
 
-function ServiceBody({ obj, context = "" }: { obj: K8sObject; context?: string }) {
+function ServiceBody({
+  obj,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
   const spec = asRecord(obj.spec);
   const meta = asRecord(obj.metadata);
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
   const selector = asRecord(spec.selector) as Record<string, string>;
+
+  // The service's EndpointSlices carry a `kubernetes.io/service-name` label the
+  // backend surfaces as `service`; list them in the namespace and keep ours.
+  // This closes the service → endpointslice → pods navigation chain.
+  const [sliceTargets, setSliceTargets] = useState<ResourceTarget[]>([]);
+  useEffect(() => {
+    setSliceTargets([]);
+    if (!context || !namespace || !name) return;
+    let active = true;
+    void listEndpointSlices(context, namespace).then((r) => {
+      if (!active) return;
+      const mine = (r.endpointslices ?? [])
+        .filter((s) => s.service === name)
+        .map((s): ResourceTarget => ({ kind: "EndpointSlice", namespace, name: s.name }));
+      setSliceTargets(mine);
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
   const ports: PortRow[] = asArray(spec.ports).map((p, i) => {
     const pr = asRecord(p);
     return {
@@ -1109,6 +1140,11 @@ function ServiceBody({ obj, context = "" }: { obj: K8sObject; context?: string }
       {ports.length > 0 && (
         <Section title="Ports">
           <Table columns={portCols} data={ports} getRowKey={(p) => p.key} />
+        </Section>
+      )}
+      {sliceTargets.length > 0 && (
+        <Section title="Endpoint Slices">
+          <LinkedResources targets={sliceTargets} onOpenResource={onOpenResource} />
         </Section>
       )}
     </>
@@ -2427,7 +2463,7 @@ function KindBody({
     case "DaemonSet":
       return <DaemonSetBody obj={obj} />;
     case "Service":
-      return <ServiceBody obj={obj} context={context} />;
+      return <ServiceBody obj={obj} context={context} onOpenResource={onOpenResource} />;
     case "Node":
       return <NodeBody obj={obj} />;
     case "Job":
