@@ -1,6 +1,6 @@
 import React from "react";
 import { CircleStop, Copy } from "lucide-react";
-import { Table, Badge, Button, type Column } from "../ui";
+import { Table, Badge, Button, ColumnPicker, useColumnVisibility, type Column } from "../ui";
 import { useForwards } from "./ForwardsIndicator";
 import { stopPortForward, type ActiveForward } from "../lib/forward";
 
@@ -66,11 +66,19 @@ export function PortForwardsView({ context }: { context?: string }) {
     },
   ];
 
+  const { visibleColumns, columnOptions, hidden, toggle, pinnedKey } = useColumnVisibility(
+    "portforwards",
+    columns,
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 text-sm">
         <span className="font-medium">Port Forwards</span>
         <Badge variant="info">{forwards.length}</Badge>
+        <div className="ml-auto">
+          <ColumnPicker columns={columnOptions} hidden={hidden} onToggle={toggle} pinnedKey={pinnedKey} />
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {forwards.length === 0 ? (
@@ -79,7 +87,7 @@ export function PortForwardsView({ context }: { context?: string }) {
             to start one.
           </div>
         ) : (
-          <Table columns={columns} data={forwards} getRowKey={(f) => String(f.id)} />
+          <Table columns={visibleColumns} data={forwards} getRowKey={(f) => String(f.id)} />
         )}
       </div>
     </div>

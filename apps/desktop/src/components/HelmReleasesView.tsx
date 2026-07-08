@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { listHelmReleases, getHelmRelease, type HelmReleaseSummary, type HelmReleaseDetail } from "../lib/helm";
 import { ageFromTimestamp } from "./ResourceOverview";
-import { Table, Spinner, Badge, StatusPill, Drawer, Tabs, type Column, type StatusKind } from "../ui";
+import { Table, Spinner, Badge, ColumnPicker, useColumnVisibility, StatusPill, Drawer, Tabs, type Column, type StatusKind } from "../ui";
 
 const CodeEditor = lazy(() => import("../ui/CodeEditor").then((m) => ({ default: m.CodeEditor })));
 
@@ -51,6 +51,8 @@ export function HelmReleasesView({
     { key: "updated", header: "Updated", render: (r) => ageFromTimestamp(r.updated, now) },
   ];
 
+  const { visibleColumns, columnOptions, hidden, toggle, pinnedKey } = useColumnVisibility("helmreleases", columns);
+
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -58,6 +60,9 @@ export function HelmReleasesView({
           <span className="font-medium">Helm Releases</span>
           <Badge variant="info">{releases.length}</Badge>
           {loading && <Spinner label="Loading releases" />}
+          <div className="ml-auto">
+            <ColumnPicker columns={columnOptions} hidden={hidden} onToggle={toggle} pinnedKey={pinnedKey} />
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {error ? (
@@ -68,7 +73,7 @@ export function HelmReleasesView({
             </div>
           ) : (
             <Table
-              columns={columns}
+              columns={visibleColumns}
               data={releases}
               getRowKey={(r) => `${r.namespace}/${r.name}`}
               onRowClick={setSelected}

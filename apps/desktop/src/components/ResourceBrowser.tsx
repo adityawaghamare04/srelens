@@ -66,15 +66,14 @@ import {
   Badge,
   Button,
   ColumnPicker,
+  useColumnVisibility,
   Drawer,
   StatusPill,
   TextInput,
   Toolbar,
   type Column,
-  type ColumnOption,
   type StatusKind,
 } from "../ui";
-import { loadHiddenColumns, saveHiddenColumns } from "../lib/settings";
 
 export type ResourceKind =
   | "overview"
@@ -250,9 +249,6 @@ const TYPED_KINDS: ResourceKind[] = [
 const isGeneric = (kind: ResourceKind) => !TYPED_KINDS.includes(kind);
 const isNamespaced = (kind: ResourceKind) => !CLUSTER_SCOPED.includes(kind);
 const isWatchable = (kind: ResourceKind) => (WATCHABLE_KINDS as readonly string[]).includes(kind);
-// Views that let users show/hide columns (persisted per kind). Nodes to start.
-const COLUMN_PICKER_KINDS: ResourceKind[] = ["nodes"];
-const supportsColumnPicker = (kind: ResourceKind) => COLUMN_PICKER_KINDS.includes(kind);
 const POLL_MS = 5000;
 
 function phaseKind(phase: string): StatusKind {
@@ -592,10 +588,6 @@ export function ResourceBrowser({
   // Bumped after a write action so the open detail overview re-fetches.
   const [detailReload, setDetailReload] = useState(0);
   const [filterColumn, setFilterColumn] = useState<string | null>(null);
-  // Hidden table columns for views that support customization, loaded per kind.
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() =>
-    supportsColumnPicker(kind) ? new Set(loadHiddenColumns(kind)) : new Set(),
-  );
   // Per-pod CPU/memory (millicores / MiB), merged into the pods table.
   const [podCpuMem, setPodCpuMem] = useState<Map<string, { cpu: number; mem: number }>>(new Map());
   const viewKeyRef = useRef("");
@@ -603,9 +595,6 @@ export function ResourceBrowser({
   const namespaced = isNamespaced(kind);
 
   useEffect(() => setFilterColumn(null), [kind]);
-  useEffect(() => {
-    setHiddenColumns(supportsColumnPicker(kind) ? new Set(loadHiddenColumns(kind)) : new Set());
-  }, [kind]);
 
   useEffect(() => {
     let active = true;
@@ -771,37 +760,16 @@ export function ResourceBrowser({
     }
   }, [kind]);
 
-  // Column visibility (supported views only). The first column is the row
-  // identifier and is always kept; everything else can be toggled off.
-  const pickerEnabled = supportsColumnPicker(kind);
-  const pinnedColumnKey = columns[0]?.key;
-  const visibleColumns = useMemo(
-    () =>
-      pickerEnabled
-        ? columns.filter((column) => column.key === pinnedColumnKey || !hiddenColumns.has(column.key))
-        : columns,
-    [columns, pickerEnabled, pinnedColumnKey, hiddenColumns],
-  );
-  const columnOptions: ColumnOption[] = useMemo(
-    () =>
-      columns.map((column) => ({
-        key: column.key,
-        label: typeof column.header === "string" ? column.header : column.key,
-      })),
-    [columns],
-  );
-  function toggleColumn(key: string) {
-    if (key === pinnedColumnKey) return;
-    setHiddenColumns((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      saveHiddenColumns(kind, [...next]);
-      return next;
-    });
-    // A hidden column can't stay the active search filter.
-    setFilterColumn((current) => (current === key ? null : current));
-  }
+  // Show/hide columns, persisted per resource kind. The first (identifier)
+  // column is always kept.
+  const { visibleColumns, columnOptions, hidden, toggle: toggleColumn, pinnedKey: pinnedColumnKey } =
+    useColumnVisibility(kind, columns);
+  // A hidden column can't remain the active search filter.
+  useEffect(() => {
+    if (filterColumn && !visibleColumns.some((column) => column.key === filterColumn)) {
+      setFilterColumn(null);
+    }
+  }, [visibleColumns, filterColumn]);
 
   function onRowClick(row: { name: string }) {
     if (kind === "events") return; // events have no manifest detail
@@ -959,17 +927,15 @@ export function ResourceBrowser({
                   <Badge variant="success">live</Badge>
                 ))}
               {res.loading && filtered.length > 0 && <Spinner label="Loading resources" />}
-              {pickerEnabled && (
-                <div className="ml-auto">
-                  <ColumnPicker
-                    columns={columnOptions}
-                    hidden={hiddenColumns}
-                    onToggle={toggleColumn}
-                    pinnedKey={pinnedColumnKey}
-                  />
-                </div>
-              )}
-              <div className={`fl-resource-toolbar__search w-56${pickerEnabled ? "" : " ml-auto"}`}>
+              <div className="ml-auto">
+                <ColumnPicker
+                  columns={columnOptions}
+                  hidden={hidden}
+                  onToggle={toggleColumn}
+                  pinnedKey={pinnedColumnKey}
+                />
+              </div>
+              <div className="fl-resource-toolbar__search w-56">
                 <TextInput
                   value={query}
                   onValueChange={(q) => onQueryChange?.(q)}

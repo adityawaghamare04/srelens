@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { listCustomResource, type CrdRef, type CustomRow } from "../lib/crds";
 import { listNamespaces } from "../lib/workloads";
 import { YamlView } from "./YamlView";
-import { Table, filterTableData, Select, Button, Spinner, Drawer, TextInput, type Column } from "../ui";
+import { Table, filterTableData, Select, Button, ColumnPicker, useColumnVisibility, Spinner, Drawer, TextInput, type Column } from "../ui";
 
 interface Selected {
   name: string;
@@ -70,12 +70,23 @@ export function CustomResourceBrowser({
     { key: "age", header: "Age", render: (r) => <span className="text-muted-foreground">{r.age}</span> },
   ];
 
+  // Show/hide columns, persisted per CRD.
+  const { visibleColumns, columnOptions, hidden, toggle, pinnedKey } = useColumnVisibility(
+    `crd:${crd.group}/${crd.kind}`,
+    columns,
+  );
+  useEffect(() => {
+    if (filterColumn && !visibleColumns.some((column) => column.key === filterColumn)) {
+      setFilterColumn(null);
+    }
+  }, [visibleColumns, filterColumn]);
+
   const filtered = useMemo(
-    () => filterTableData(rows ?? [], columns, query, filterColumn),
-    [columns, filterColumn, query, rows],
+    () => filterTableData(rows ?? [], visibleColumns, query, filterColumn),
+    [visibleColumns, filterColumn, query, rows],
   );
   const filterLabel = filterColumn
-    ? columns.find((column) => column.key === filterColumn)?.header
+    ? visibleColumns.find((column) => column.key === filterColumn)?.header
     : null;
 
   return (
@@ -99,7 +110,10 @@ export function CustomResourceBrowser({
             Refresh
           </Button>
           {rows === null && <Spinner label="Loading resources" />}
-          <div className="ml-auto w-56">
+          <div className="ml-auto">
+            <ColumnPicker columns={columnOptions} hidden={hidden} onToggle={toggle} pinnedKey={pinnedKey} />
+          </div>
+          <div className="w-56">
             <TextInput
               value={query}
               onValueChange={(q) => onQueryChange?.(q)}
@@ -119,7 +133,7 @@ export function CustomResourceBrowser({
           {error && <p className="px-3 py-2 text-sm text-destructive">Error: {error}</p>}
           {!error && (
             <Table
-              columns={columns}
+              columns={visibleColumns}
               data={filtered}
               getRowKey={(r) => r.name}
               selectedKey={selected?.name}

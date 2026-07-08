@@ -122,6 +122,25 @@ describe("ResourceBrowser", () => {
     await waitFor(() => expect(screen.getByText("web-1")).toBeDefined());
     expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "pods", expect.any(Function), expect.any(Function));
     expect(screen.getByText("live")).toBeDefined();
+    // The column picker is now available on every resource table, not just Nodes.
+    expect(screen.getByRole("button", { name: "Choose columns" })).toBeDefined();
+  });
+
+  it("hides a column via the picker on a non-node view and remembers it", async () => {
+    localStorage.clear();
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(watchWith([pod]));
+    const user = userEvent.setup();
+
+    render(<ResourceBrowser context="kind-dev" kind="pods" />);
+    await waitFor(() => expect(screen.getByText("web-1")).toBeDefined());
+    expect(screen.getByRole("columnheader", { name: /Restarts/ })).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "Choose columns" }));
+    await user.click(await screen.findByLabelText("Restarts"));
+
+    await waitFor(() => expect(screen.queryByRole("columnheader", { name: /Restarts/ })).toBeNull());
+    expect(JSON.parse(localStorage.getItem("srelens.hiddenColumns")!)).toEqual({ pods: ["restarts"] });
   });
 
   it("streams deployments live", async () => {

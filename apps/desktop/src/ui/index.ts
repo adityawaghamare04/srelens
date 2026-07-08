@@ -16,6 +16,8 @@ export { Button } from "./Button";
 export type { ButtonProps, ButtonVariant } from "./Button";
 export { ColumnPicker } from "./ColumnPicker";
 export type { ColumnOption } from "./ColumnPicker";
+export { useColumnVisibility } from "./useColumnVisibility";
+export type { ColumnVisibility } from "./useColumnVisibility";
 export { TextInput } from "./TextInput";
 export type { TextInputProps } from "./TextInput";
 export { Panel } from "./Panel";
