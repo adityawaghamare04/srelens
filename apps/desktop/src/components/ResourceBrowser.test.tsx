@@ -551,6 +551,36 @@ describe("ResourceBrowser", () => {
     expect(screen.getByText("Tainted (2)")).toBeDefined();
   });
 
+  it("hides a node column via the column picker and remembers it", async () => {
+    localStorage.clear();
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    listNodesMock.mockResolvedValue({
+      nodes: [{ name: "cp-1", status: "Ready", unschedulable: false, taints: 0, version: "v1.35.0", roles: "control-plane" }],
+    });
+    const user = userEvent.setup();
+    const view = render(<ResourceBrowser context="kind-dev" kind="nodes" />);
+
+    await waitFor(() => expect(screen.getByText("cp-1")).toBeDefined());
+    // Version column starts visible.
+    expect(screen.getByRole("columnheader", { name: /Version/ })).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "Choose columns" }));
+    await user.click(await screen.findByLabelText("Version"));
+
+    // Header is gone…
+    await waitFor(() =>
+      expect(screen.queryByRole("columnheader", { name: /Version/ })).toBeNull(),
+    );
+    // …and the choice is persisted.
+    expect(JSON.parse(localStorage.getItem("srelens.hiddenColumns")!)).toEqual({ nodes: ["version"] });
+
+    // Remounting the nodes view keeps the column hidden.
+    view.unmount();
+    render(<ResourceBrowser context="kind-dev" kind="nodes" />);
+    await waitFor(() => expect(screen.getByText("cp-1")).toBeDefined());
+    expect(screen.queryByRole("columnheader", { name: /Version/ })).toBeNull();
+  });
+
   it("shows a namespace load error and does not watch", async () => {
     listNamespacesMock.mockResolvedValue({ error: "forbidden: namespaces" });
     render(<ResourceBrowser context="kind-dev" kind="pods" />);
