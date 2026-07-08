@@ -4038,7 +4038,7 @@ dependencies = [
 
 [[package]]
 name = "srelens-desktop"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "fix-path-env",
  "log",
