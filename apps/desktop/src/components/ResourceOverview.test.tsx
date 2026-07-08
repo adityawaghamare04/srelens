@@ -11,12 +11,18 @@ vi.mock("./WorkloadRelations", () => ({
 vi.mock("./MetricsPanel", () => ({ MetricsPanel: () => <div data-testid="metrics" /> }));
 const { updateConfigDataMock } = vi.hoisted(() => ({ updateConfigDataMock: vi.fn() }));
 vi.mock("../lib/actions", () => ({ updateConfigData: updateConfigDataMock }));
+const { getSecretMock } = vi.hoisted(() => ({ getSecretMock: vi.fn() }));
+vi.mock("../lib/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/manifest")>()),
+  getSecret: getSecretMock,
+}));
 
 import {
   ResourceOverview,
   ObjectDetail,
   ageFromTimestamp,
   containerLastRestartTime,
+  parseQuantity,
 } from "./ResourceOverview";
 import type { K8sObject } from "../lib/manifest";
 
@@ -34,6 +40,19 @@ describe("ageFromTimestamp", () => {
   it("returns a dash for missing or invalid input", () => {
     expect(ageFromTimestamp(undefined, NOW)).toBe("—");
     expect(ageFromTimestamp("not-a-date", NOW)).toBe("—");
+  });
+});
+
+describe("parseQuantity", () => {
+  it("parses plain, milli, binary, and decimal suffixes", () => {
+    expect(parseQuantity("4")).toBe(4);
+    expect(parseQuantity("500m")).toBe(0.5);
+    expect(parseQuantity("2Gi")).toBe(2 * 2 ** 30);
+    expect(parseQuantity("1G")).toBe(1e9);
+  });
+  it("returns null for unparseable input", () => {
+    expect(parseQuantity("")).toBeNull();
+    expect(parseQuantity("abc")).toBeNull();
   });
 });
 
@@ -290,18 +309,23 @@ describe("ObjectDetail (ConfigMap / Secret)", () => {
     expect((screen.getByLabelText("Value for app.conf") as HTMLTextAreaElement).value).toBe("level=info");
   });
 
-  it("masks Secret values until revealed for editing (base64-decoded)", () => {
+  it("fetches Secret values via getSecret and masks them until revealed", async () => {
+    // getObject redacts Secret data (values blank); getSecret is the gated path.
+    getSecretMock.mockResolvedValue({ data: { token: "aGVsbG8=" } }); // "hello"
     const secret: K8sObject = {
       kind: "Secret",
       metadata: { name: "s", namespace: "default" },
-      data: { token: "aGVsbG8=" }, // "hello"
+      data: { token: "" }, // redacted by getObject — key present, no value
     };
-    render(<ObjectDetail kind="Secret" obj={secret} now={NOW} />);
-    // No editable field is exposed until the user reveals the key.
+    render(<ObjectDetail kind="Secret" obj={secret} now={NOW} context="kind-dev" />);
+    await waitFor(() => expect(getSecretMock).toHaveBeenCalledWith("kind-dev", "default", "s"));
+    // No editable field or plaintext is exposed until the user reveals the key.
     expect(screen.queryByLabelText("Value for token")).toBeNull();
     expect(screen.queryByDisplayValue("hello")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Reveal/ }));
-    expect((screen.getByLabelText("Value for token") as HTMLTextAreaElement).value).toBe("hello");
+    await waitFor(() =>
+      expect((screen.getByLabelText("Value for token") as HTMLTextAreaElement).value).toBe("hello"),
+    );
   });
 
   it("saves an edited ConfigMap value via updateConfigData", async () => {
@@ -387,14 +411,19 @@ describe("ObjectDetail (more kinds)", () => {
     expect(screen.getByText("get, list")).toBeDefined();
   });
 
-  it("renders ResourceQuota used/hard", () => {
+  it("renders ResourceQuota used/hard with a usage bar", () => {
     const rq: K8sObject = {
       kind: "ResourceQuota",
       metadata: { name: "q", namespace: "default" },
-      status: { hard: { "limits.cpu": "4" }, used: { "limits.cpu": "1" } },
+      status: { hard: { "limits.cpu": "4", "requests.memory": "8Gi" }, used: { "limits.cpu": "1", "requests.memory": "2Gi" } },
     };
     render(<ObjectDetail kind="ResourceQuota" obj={rq} now={NOW} />);
     expect(screen.getByText("limits.cpu")).toBeDefined();
+    // 1/4 cpu and 2Gi/8Gi memory → both 25%.
+    const bars = screen.getAllByRole("progressbar");
+    expect(bars).toHaveLength(2);
+    expect(bars[0].getAttribute("aria-valuenow")).toBe("25");
+    expect(bars[1].getAttribute("aria-valuenow")).toBe("25");
   });
 
   it("offers an inline port-forward on Service ports when a context is given", () => {

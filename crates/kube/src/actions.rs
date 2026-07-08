@@ -155,6 +155,7 @@ pub fn update_config_data_capability(cache: Arc<ClientCache>) -> Capability {
             read_only: false,
             destructive: false,
             requires_confirm: true,
+            sensitive: false,
         },
         move |input: UpdateConfigDataIn| {
             let cache = cache.clone();
@@ -216,6 +217,7 @@ pub fn scale_capability(cache: Arc<ClientCache>) -> Capability {
             read_only: false,
             destructive: false,
             requires_confirm: true,
+            sensitive: false,
         },
         move |input: ScaleIn| {
             let cache = cache.clone();
@@ -255,6 +257,7 @@ pub fn rollout_restart_capability(cache: Arc<ClientCache>) -> Capability {
             read_only: false,
             destructive: false,
             requires_confirm: true,
+            sensitive: false,
         },
         move |input: RestartIn| {
             let cache = cache.clone();
@@ -298,6 +301,7 @@ pub fn cordon_node_capability(cache: Arc<ClientCache>) -> Capability {
             read_only: false,
             destructive: false,
             requires_confirm: true,
+            sensitive: false,
         },
         move |input: CordonIn| {
             let cache = cache.clone();

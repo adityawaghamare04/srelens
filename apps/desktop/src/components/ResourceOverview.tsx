@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
-import { getObject, type K8sObject } from "../lib/manifest";
+import { getObject, getSecret, type K8sObject } from "../lib/manifest";
 import { updateConfigData } from "../lib/actions";
 import {
   Spinner,
@@ -1389,8 +1389,7 @@ function privateKeyType(pem: string): string {
   return pem ? "Unrecognized format" : "Missing";
 }
 
-function TlsSecretBody({ obj }: { obj: K8sObject }) {
-  const data = asRecord(obj.data) as Record<string, string>;
+function TlsSecretBody({ data }: { data: Record<string, string> }) {
   const certificate = decodeBase64(str(data["tls.crt"]));
   const privateKey = decodeBase64(str(data["tls.key"]));
   const certificateCount = certificate.match(/-----BEGIN CERTIFICATE-----/g)?.length ?? 0;
@@ -1494,9 +1493,7 @@ function dockerRegistries(data: Record<string, string>, type: string): DockerReg
   }
 }
 
-function DockerSecretBody({ obj }: { obj: K8sObject }) {
-  const data = asRecord(obj.data) as Record<string, string>;
-  const type = str(obj.type);
+function DockerSecretBody({ data, type }: { data: Record<string, string>; type: string }) {
   const configKey = type === "kubernetes.io/dockercfg" ? ".dockercfg" : ".dockerconfigjson";
   const registries = dockerRegistries(data, type);
   const columns: Column<DockerRegistryRow>[] = [
@@ -1525,19 +1522,47 @@ function DockerSecretBody({ obj }: { obj: K8sObject }) {
   );
 }
 
+/**
+ * Fetch a Secret's real (base64) values via the gated `getSecret`. `getObject`
+ * redacts Secret data, so this is how the detail views get the actual values.
+ * Falls back to the redacted keys (blank values) while loading or when there's
+ * no context (a static preview). Values sit in memory but stay masked in the
+ * DOM until the user reveals a key.
+ */
+function useSecretData(
+  context: string,
+  namespace: string,
+  name: string,
+  redacted: Record<string, string>,
+): Record<string, string> {
+  const [data, setData] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    setData(null);
+    if (!context) return;
+    let active = true;
+    void getSecret(context, namespace, name).then((r) => {
+      if (active && r.data) setData(r.data);
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
+  return data ?? redacted;
+}
+
 function GeneralSecretBody({
   obj,
+  data,
   context = "",
   onEdited,
 }: {
   obj: K8sObject;
+  data: Record<string, string>;
   context?: string;
   onEdited?: () => void;
 }) {
   const meta = asRecord(obj.metadata);
-  const data = asRecord(obj.data) as Record<string, string>;
   const keys = Object.keys(data);
-  const totalBytes = Object.values(data).reduce((total, value) => total + decodedByteLength(str(value)), 0);
   const immutable = obj.immutable === true;
   return (
     <>
@@ -1546,7 +1571,6 @@ function GeneralSecretBody({
           pairs={[
             ["Type", str(obj.type) || "Opaque"],
             ["Keys", plural(keys.length, "key")],
-            ["Decoded size", formatBytes(totalBytes)],
             ["Immutable", immutable ? "Yes" : "No"],
           ]}
         />
@@ -1576,11 +1600,14 @@ function SecretBody({
   context?: string;
   onEdited?: () => void;
 }) {
+  const meta = asRecord(obj.metadata);
   const type = str(obj.type) || "Opaque";
-  if (type === "kubernetes.io/tls") return <TlsSecretBody obj={obj} />;
+  const redacted = asRecord(obj.data) as Record<string, string>;
+  const data = useSecretData(context, str(meta.namespace), str(meta.name), redacted);
+  if (type === "kubernetes.io/tls") return <TlsSecretBody data={data} />;
   if (type === "kubernetes.io/dockerconfigjson" || type === "kubernetes.io/dockercfg")
-    return <DockerSecretBody obj={obj} />;
-  return <GeneralSecretBody obj={obj} context={context} onEdited={onEdited} />;
+    return <DockerSecretBody data={data} type={type} />;
+  return <GeneralSecretBody obj={obj} data={data} context={context} onEdited={onEdited} />;
 }
 
 /**
@@ -1603,26 +1630,53 @@ export function ConfigDataEditor({
   kind: string;
   namespace: string;
   name: string;
+  /** Plaintext-or-base64 values by key. For Secrets these are the real values
+   * fetched via the gated `getSecret` (see SecretBody); base64 here. */
   data: Record<string, string>;
   secret: boolean;
   onSaved?: () => void;
 }) {
-  // Original plaintext per key (Secret values decoded once for editing).
-  const initial = useMemo(() => {
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(data)) out[k] = secret ? decodeBase64(str(v)) : str(v);
-    return out;
-  }, [data, secret]);
-
+  // Baseline plaintext per key (Secret values decoded for editing).
+  const [baseline, setBaseline] = useState<Record<string, string>>({});
   const [edited, setEdited] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
 
-  const keys = Object.keys(initial);
-  const valueOf = (k: string) => edited[k] ?? initial[k];
-  const changedKeys = keys.filter((k) => edited[k] !== undefined && edited[k] !== initial[k]);
+  const keys = Object.keys(data);
+
+  // Baseline follows the data (Secret values arrive asynchronously via the
+  // gated fetch); updating it here must NOT clobber the user's reveal/edit
+  // state, so those reset only when the target object itself changes.
+  useEffect(() => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data)) out[k] = secret ? decodeBase64(str(v)) : str(v);
+    setBaseline(out);
+  }, [data, secret]);
+
+  useEffect(() => {
+    setEdited({});
+    setRevealed({});
+  }, [context, kind, namespace, name]);
+
+  const valueOf = (k: string) => edited[k] ?? baseline[k] ?? "";
+  const changedKeys = keys.filter((k) => edited[k] !== undefined && edited[k] !== (baseline[k] ?? ""));
   const editable = context !== "";
+
+  function reveal(k: string) {
+    setRevealed((r) => ({ ...r, [k]: !r[k] }));
+  }
+
+  async function copy(k: string) {
+    try {
+      await navigator.clipboard?.writeText(valueOf(k));
+      setCopied(k);
+      setTimeout(() => setCopied((c) => (c === k ? null : c)), 1500);
+    } catch {
+      /* clipboard unavailable — ignore */
+    }
+  }
 
   async function save() {
     setBusy(true);
@@ -1648,15 +1702,27 @@ export function ConfigDataEditor({
           <div key={k} className="fl-secret-entry">
             <div className="fl-secret-entry__header">
               <span className="fl-mono">{k}</span>
-              {secret && (
-                <button
-                  type="button"
-                  className="fl-secret-entry__toggle"
-                  onClick={() => setRevealed((r) => ({ ...r, [k]: !r[k] }))}
-                >
-                  {revealed[k] ? "Hide" : "Reveal"}
-                </button>
-              )}
+              <span className="fl-config-editor__key-actions">
+                {shown && (
+                  <button
+                    type="button"
+                    className="fl-secret-entry__toggle"
+                    aria-label={`Copy value for ${k}`}
+                    onClick={() => void copy(k)}
+                  >
+                    {copied === k ? "Copied" : "Copy"}
+                  </button>
+                )}
+                {secret && (
+                  <button
+                    type="button"
+                    className="fl-secret-entry__toggle"
+                    onClick={() => void reveal(k)}
+                  >
+                    {revealed[k] ? "Hide" : "Reveal"}
+                  </button>
+                )}
+              </span>
             </div>
             {shown ? (
               <textarea
@@ -1926,6 +1992,29 @@ interface QuotaRow {
   hard: string;
 }
 
+/** Parse a Kubernetes quantity (e.g. "500m", "2Gi", "4") to a base-unit number. */
+export function parseQuantity(q: string): number | null {
+  const m = /^([0-9.]+)\s*([a-zA-Z]*)$/.exec((q ?? "").trim());
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (Number.isNaN(n)) return null;
+  const unit = m[2];
+  const binary: Record<string, number> = { Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60 };
+  const decimal: Record<string, number> = { k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18 };
+  if (unit === "") return n;
+  if (unit === "m") return n / 1000;
+  if (binary[unit]) return n * binary[unit];
+  if (decimal[unit]) return n * decimal[unit];
+  return n; // unknown unit — same on both sides, so the ratio still holds
+}
+
+function usagePercent(used: string, hard: string): number | null {
+  const u = parseQuantity(used);
+  const h = parseQuantity(hard);
+  if (u == null || h == null || h === 0) return null;
+  return Math.round((u / h) * 100);
+}
+
 function ResourceQuotaBody({ obj }: { obj: K8sObject }) {
   const status = asRecord(obj.status);
   const hard = asRecord(status.hard);
@@ -1940,6 +2029,28 @@ function ResourceQuotaBody({ obj }: { obj: K8sObject }) {
     { key: "resource", header: "Resource", render: (r) => <span className="fl-mono">{r.resource}</span> },
     { key: "used", header: "Used", render: (r) => r.used },
     { key: "hard", header: "Hard", render: (r) => r.hard },
+    {
+      key: "usage",
+      header: "Usage",
+      render: (r) => {
+        const pct = usagePercent(r.used, r.hard);
+        if (pct == null) return <span className="fl-detail-empty">—</span>;
+        const kind: StatusKind = pct >= 90 ? "danger" : pct >= 75 ? "warning" : "success";
+        return (
+          <div
+            className={`fl-usage-bar fl-usage-bar--${kind}`}
+            role="progressbar"
+            aria-label={`${r.resource} usage`}
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="fl-usage-bar__fill" style={{ width: `${Math.min(100, pct)}%` }} />
+            <span className="fl-usage-bar__label">{pct}%</span>
+          </div>
+        );
+      },
+    },
   ];
   return (
     <Section title="Quota">
