@@ -4,6 +4,7 @@ import {
   LogOut,
   Logs,
   Pause,
+  Pencil,
   Play,
   RotateCw,
   Scaling,
@@ -37,12 +38,14 @@ export function PodActions({
   onDeleted,
   onOpenTerminal,
   onOpenLogs,
+  onEdit,
 }: {
   context: string;
   pod: PodSummary;
   onDeleted?: () => void;
   onOpenTerminal?: Opener;
   onOpenLogs?: Opener;
+  onEdit?: () => void;
 }) {
   const [dialog, setDialog] = useState<"delete" | "evict" | "forward" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,6 +87,7 @@ export function PodActions({
     <>
       <IconButton icon={Logs} label="Logs" onClick={() => onOpenLogs?.(target)} />
       <IconButton icon={SquareTerminal} label="Shell" onClick={() => onOpenTerminal?.(target)} />
+      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
       <IconButton icon={ArrowLeftRight} label="Forward" onClick={() => setDialog("forward")} />
       <IconButton
         icon={LogOut}
@@ -190,6 +194,7 @@ export function ResourceActions({
   onDeleted,
   onChanged,
   onOpenLogs,
+  onEdit,
 }: {
   context: string;
   kind: string;
@@ -201,6 +206,7 @@ export function ResourceActions({
   /** Fired after a successful non-delete write action so the detail refreshes. */
   onChanged?: () => void;
   onOpenLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
+  onEdit?: () => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [scaling, setScaling] = useState(false);
@@ -297,6 +303,7 @@ export function ResourceActions({
           onClick={() => onOpenLogs({ context, namespace: namespace ?? "", kind, name })}
         />
       )}
+      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
       {SCALABLE.includes(kind) && (
         <IconButton icon={Scaling} label="Scale" onClick={() => setScaling(true)} />
       )}

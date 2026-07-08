@@ -509,6 +509,18 @@ describe("ResourceBrowser", () => {
     );
   });
 
+  it("opens an edit tab from the detail Edit action", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "default", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    const onOpenEdit = vi.fn();
+    render(<ResourceBrowser context="kind-dev" kind="deployments" onOpenEdit={onOpenEdit} />);
+    fireEvent.click(await screen.findByText("web"));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(onOpenEdit).toHaveBeenCalledWith("Deployment", "default", "web");
+  });
+
   it("lists a generic kind (endpoints) via listResource", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
     listResourceMock.mockResolvedValue({ items: [{ name: "ep-1", namespace: "default" }] });

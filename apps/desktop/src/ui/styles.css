@@ -970,42 +970,8 @@ body {
 }
 
 /* Cluster tabs (multi-cluster) */
-.fl-ctabs {
-  display: flex;
-  background: var(--fl-color-hotbar);
-  border-bottom: 1px solid var(--fl-color-border);
-  min-height: 34px;
-  overflow-x: auto;
-}
-.fl-ctabs::-webkit-scrollbar { height: 0; }
-.fl-ctab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  cursor: pointer;
-  color: var(--fl-color-text-muted);
-  border-right: 1px solid var(--fl-color-border);
-  font-size: 13px;
-  white-space: nowrap;
-}
-.fl-ctab--active {
-  background: var(--fl-color-bg);
-  color: var(--fl-color-text);
-}
-.fl-ctab__close {
-  background: transparent;
-  border: none;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.5;
-  font-size: 11px;
-}
-.fl-ctab__close:hover { opacity: 1; }
-.fl-ctab__close svg {
-  width: 12px;
-  height: 12px;
-}
+/* .fl-ctabs / .fl-ctab live in one consolidated block further down (search
+   ".fl-ctabs {"). The earlier duplicate was removed. */
 
 /* Top bar */
 .fl-topbar {
@@ -3181,12 +3147,22 @@ body {
   border-bottom-style: solid;
   border-bottom-width: 1px;
 }
+/* Thin, unobtrusive horizontal scrollbar so an overflowing strip stays usable. */
 .fl-ctabs::-webkit-scrollbar {
-  height: 0;
+  height: 6px;
+}
+.fl-ctabs::-webkit-scrollbar-thumb {
+  background: var(--fl-color-border);
+  border-radius: 3px;
+}
+.fl-ctabs::-webkit-scrollbar-track {
+  background: transparent;
 }
 .fl-ctab {
   display: inline-flex;
-  min-width: 0;
+  /* Keep each tab at its label width and let the strip overflow (scroll)
+     instead of squishing tabs below their text. */
+  flex: 0 0 auto;
   max-width: 360px;
   align-items: center;
   gap: 8px;
@@ -3231,6 +3207,10 @@ body {
 .fl-ctab__close:hover {
   background: var(--fl-color-surface-alt);
   opacity: 1;
+}
+.fl-ctab__close svg {
+  width: 14px;
+  height: 14px;
 }
 .fl-tabs {
   min-height: 42px;

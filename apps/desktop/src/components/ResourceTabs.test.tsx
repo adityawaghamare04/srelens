@@ -1,7 +1,15 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import React from "react";
 import { ResourceTabs } from "./ResourceTabs";
+
+// jsdom stubs scrollIntoView on HTMLElement.prototype; replace it with a spy so
+// the active-tab effect is observable.
+const scrollIntoView = vi.fn();
+beforeEach(() => {
+  scrollIntoView.mockClear();
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
+});
 
 const tabs = [
   { id: 1, label: "Pods · dev" },
@@ -38,6 +46,11 @@ describe("ResourceTabs", () => {
 
     fireEvent.click(screen.getByText("Close to the Right"));
     expect(h.onCloseToRight).toHaveBeenCalledWith(2);
+  });
+
+  it("scrolls the active tab into view", () => {
+    setup(); // activeId=2
+    expect(scrollIntoView).toHaveBeenCalled();
   });
 
   it("disables Close to the Right on the last tab", async () => {

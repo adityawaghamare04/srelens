@@ -69,10 +69,12 @@ vi.mock("./components/ResourceBrowser", () => ({
     context,
     kind,
     onOpenResource,
+    onOpenEdit,
   }: {
     context: string;
     kind: string;
     onOpenResource?: (target: { kind: string; namespace: string | null; name: string }) => void;
+    onOpenEdit?: (kind: string, namespace: string | null, name: string) => void;
   }) => (
     <div data-testid="browser">
       {context}:{kind}
@@ -81,11 +83,19 @@ vi.mock("./components/ResourceBrowser", () => ({
       >
         linked-pod
       </button>
+      <button onClick={() => onOpenEdit?.("Deployment", "default", "web")}>edit-web</button>
     </div>
   ),
 }));
 vi.mock("./components/SettingsView", () => ({
   SettingsView: () => <div data-testid="settings">workspace settings</div>,
+}));
+vi.mock("./components/EditResourceTab", () => ({
+  EditResourceTab: ({ kind, name }: { kind: string; name: string }) => (
+    <div data-testid="edit-tab">
+      {kind}/{name}
+    </div>
+  ),
 }));
 
 import { App } from "./App";
@@ -139,6 +149,20 @@ describe("App", () => {
     fireEvent.click(screen.getByText("nav-services"));
     fireEvent.click(screen.getByText("linked-pod"));
     expect(screen.getByTestId("browser").textContent).toContain("kind-dev:pods");
+  });
+
+  it("opens an edit tab from a resource and de-dupes re-edits", () => {
+    render(<App />);
+    fireEvent.click(screen.getByText("open-kind-dev"));
+    fireEvent.click(screen.getByText("nav-services"));
+    fireEvent.click(screen.getByText("edit-web"));
+    expect(screen.getByTestId("edit-tab").textContent).toBe("Deployment/web");
+    expect(screen.getByRole("tab", { name: /edit: Deployment\/web/ })).toBeDefined();
+
+    // Re-edit the same resource from the services tab → focuses, doesn't duplicate.
+    fireEvent.click(screen.getByRole("tab", { name: /Services/ }));
+    fireEvent.click(screen.getByText("edit-web"));
+    expect(screen.getAllByRole("tab", { name: /edit: Deployment\/web/ })).toHaveLength(1);
   });
 
   it("opens views across multiple clusters and closes tabs", () => {
