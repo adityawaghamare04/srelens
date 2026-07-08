@@ -2,7 +2,12 @@ import { invokeCapability, type Invoker } from "../transport/transport";
 
 export interface NodeSummary {
   name: string;
+  /** Readiness: "Ready", "NotReady", or "Unknown". */
   status: string;
+  /** Cordoned (`spec.unschedulable`) — surfaced as "SchedulingDisabled". */
+  unschedulable: boolean;
+  /** Number of taints, excluding the auto-added unschedulable taint. */
+  taints: number;
   version: string;
   roles: string;
   age: string;

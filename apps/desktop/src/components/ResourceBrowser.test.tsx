@@ -364,13 +364,33 @@ describe("ResourceBrowser", () => {
   it("lists cluster-scoped nodes without a namespace selector", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
     listNodesMock.mockResolvedValue({
-      nodes: [{ name: "cp-1", status: "Ready", version: "v1.35.0", roles: "control-plane" }],
+      nodes: [
+        { name: "cp-1", status: "Ready", unschedulable: false, taints: 0, version: "v1.35.0", roles: "control-plane" },
+      ],
     });
     render(<ResourceBrowser context="kind-dev" kind="nodes" />);
 
     await waitFor(() => expect(screen.getByText("cp-1")).toBeDefined());
     expect(listNodesMock).toHaveBeenCalledWith("kind-dev");
     expect(screen.queryByLabelText("Namespace")).toBeNull();
+    // A healthy, schedulable node shows no cordon/taint chips.
+    expect(screen.queryByText("SchedulingDisabled")).toBeNull();
+    expect(screen.queryByText(/Tainted/)).toBeNull();
+  });
+
+  it("flags cordoned and tainted nodes alongside readiness", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    listNodesMock.mockResolvedValue({
+      nodes: [
+        { name: "worker-1", status: "Ready", unschedulable: true, taints: 2, version: "v1.35.0", roles: "<none>" },
+      ],
+    });
+    render(<ResourceBrowser context="kind-dev" kind="nodes" />);
+
+    await waitFor(() => expect(screen.getByText("worker-1")).toBeDefined());
+    expect(screen.getByText("Ready")).toBeDefined();
+    expect(screen.getByText("SchedulingDisabled")).toBeDefined();
+    expect(screen.getByText("Tainted (2)")).toBeDefined();
   });
 
   it("shows a namespace load error and does not watch", async () => {
