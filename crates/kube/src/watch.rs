@@ -10,14 +10,20 @@ use std::sync::Arc;
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
-use k8s_openapi::api::core::v1::{Event as CoreEvent, Pod, Service};
+use k8s_openapi::api::core::v1::{
+    ConfigMap, Event as CoreEvent, LimitRange, Pod, ResourceQuota, Secret, Service,
+};
 use kube::runtime::watcher::{Config, Event};
 use kube::Api;
 use serde::de::DeserializeOwned;
 
 use crate::client_cache::ClientCache;
+use crate::configmaps::{summarise as summarise_configmap, ConfigMapSummary};
 use crate::cronjobs::{summarise as summarise_cronjob, CronJobSummary};
 use crate::daemonsets::{summarise as summarise_daemonset, DaemonSetSummary};
+use crate::limitranges::{summarise as summarise_limitrange, LimitRangeSummary};
+use crate::resourcequotas::{summarise as summarise_resourcequota, ResourceQuotaSummary};
+use crate::secrets::{summarise as summarise_secret, SecretSummary};
 use crate::deployments::{summarise as summarise_deployment, DeploymentSummary};
 use crate::events::{summarise as summarise_event, EventSummary};
 use crate::jobs::{summarise as summarise_job, JobSummary};
@@ -266,6 +272,102 @@ where
         api,
         summarise_cronjob,
         |c: &CronJobSummary| c.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch ConfigMaps in a namespace.
+pub async fn watch_configmaps<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ConfigMapSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ConfigMap> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_configmap,
+        |c: &ConfigMapSummary| c.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Secrets in a namespace (type + key count only — no values).
+pub async fn watch_secrets<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<SecretSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Secret> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_secret,
+        |s: &SecretSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch ResourceQuotas in a namespace.
+pub async fn watch_resourcequotas<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ResourceQuotaSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ResourceQuota> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_resourcequota,
+        |r: &ResourceQuotaSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch LimitRanges in a namespace.
+pub async fn watch_limitranges<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<LimitRangeSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<LimitRange> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_limitrange,
+        |l: &LimitRangeSummary| l.name.clone(),
         on_update,
         on_status,
     )

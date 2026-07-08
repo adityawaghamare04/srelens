@@ -15,6 +15,10 @@ export const WATCHABLE_KINDS = [
   "daemonsets",
   "jobs",
   "cronjobs",
+  "configmaps",
+  "secrets",
+  "resourcequotas",
+  "limitranges",
   "services",
   "events",
 ] as const;

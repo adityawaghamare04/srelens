@@ -20,6 +20,10 @@ import {
   type DaemonSetSummary,
   type JobSummary,
   type CronJobSummary,
+  type ConfigMapSummary,
+  type SecretSummary,
+  type ResourceQuotaSummary,
+  type LimitRangeSummary,
 } from "../lib/controllers";
 
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
@@ -193,6 +197,10 @@ const TYPED_KINDS: ResourceKind[] = [
   "daemonsets",
   "jobs",
   "cronjobs",
+  "configmaps",
+  "secrets",
+  "resourcequotas",
+  "limitranges",
   "services",
   "nodes",
   "events",
@@ -295,6 +303,35 @@ const cronJobColumns: Column<CronJobSummary>[] = [
   { key: "active", header: "Active" },
   { key: "lastSchedule", header: "Last run", render: (c) => <Muted>{c.lastSchedule || "—"}</Muted> },
   { key: "age", header: "Age", render: (c) => <Muted>{c.age}</Muted> },
+];
+
+const configMapColumns: Column<ConfigMapSummary>[] = [
+  { key: "name", header: "ConfigMap", render: (c) => <strong>{c.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (c) => <span className="fl-link">{c.namespace}</span> },
+  { key: "keys", header: "Keys" },
+  { key: "age", header: "Age", render: (c) => <Muted>{c.age}</Muted> },
+];
+
+const secretColumns: Column<SecretSummary>[] = [
+  { key: "name", header: "Secret", render: (s) => <strong>{s.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (s) => <span className="fl-link">{s.namespace}</span> },
+  { key: "type", header: "Type", render: (s) => <Muted>{s.type}</Muted> },
+  { key: "keys", header: "Keys" },
+  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+];
+
+const resourceQuotaColumns: Column<ResourceQuotaSummary>[] = [
+  { key: "name", header: "Resource Quota", render: (q) => <strong>{q.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (q) => <span className="fl-link">{q.namespace}</span> },
+  { key: "resources", header: "Resources" },
+  { key: "age", header: "Age", render: (q) => <Muted>{q.age}</Muted> },
+];
+
+const limitRangeColumns: Column<LimitRangeSummary>[] = [
+  { key: "name", header: "Limit Range", render: (l) => <strong>{l.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (l) => <span className="fl-link">{l.namespace}</span> },
+  { key: "limits", header: "Limits" },
+  { key: "age", header: "Age", render: (l) => <Muted>{l.age}</Muted> },
 ];
 
 const serviceColumns: Column<ServiceSummary>[] = [
@@ -529,6 +566,14 @@ export function ResourceBrowser({
         return jobColumns as Column<{ name: string }>[];
       case "cronjobs":
         return cronJobColumns as Column<{ name: string }>[];
+      case "configmaps":
+        return configMapColumns as Column<{ name: string }>[];
+      case "secrets":
+        return secretColumns as Column<{ name: string }>[];
+      case "resourcequotas":
+        return resourceQuotaColumns as Column<{ name: string }>[];
+      case "limitranges":
+        return limitRangeColumns as Column<{ name: string }>[];
       case "services":
         return serviceColumns as Column<{ name: string }>[];
       default:

@@ -41,7 +41,19 @@ vi.mock("../lib/manifest", async (importOriginal) => {
 });
 vi.mock("../lib/watch", () => ({
   watchResource: watchResourceMock,
-  WATCHABLE_KINDS: ["pods", "deployments", "statefulsets", "daemonsets", "jobs", "cronjobs", "services"],
+  WATCHABLE_KINDS: [
+    "pods",
+    "deployments",
+    "statefulsets",
+    "daemonsets",
+    "jobs",
+    "cronjobs",
+    "configmaps",
+    "secrets",
+    "resourcequotas",
+    "limitranges",
+    "services",
+  ],
 }));
 vi.mock("./PodTerminal", () => ({ PodTerminal: () => <div data-testid="pod-terminal" /> }));
 // CodeMirror needs real layout (unavailable in jsdom); stand in a textarea.
@@ -174,6 +186,47 @@ describe("ResourceBrowser", () => {
     expect(screen.getByText("Suspended")).toBeDefined();
   });
 
+  it("streams configmaps live with a key count", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web-config", namespace: "default", keys: 3, age: "2d" }]),
+    );
+
+    render(<ResourceBrowser context="kind-dev" kind="configmaps" />);
+
+    await waitFor(() => expect(screen.getByText("web-config")).toBeDefined());
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "configmaps", expect.any(Function), expect.any(Function));
+    expect(screen.getByText("3")).toBeDefined();
+  });
+
+  it("streams secrets showing type + key count but never any values", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web-tls", namespace: "default", type: "kubernetes.io/tls", keys: 2, age: "1d" }]),
+    );
+
+    const { container } = render(<ResourceBrowser context="kind-dev" kind="secrets" />);
+
+    await waitFor(() => expect(screen.getByText("web-tls")).toBeDefined());
+    expect(screen.getByText("kubernetes.io/tls")).toBeDefined();
+    // The list shows only metadata — no data/value columns exist to leak material.
+    expect(container.textContent).not.toContain("tls.crt");
+  });
+
+  it("streams resourcequotas and limitranges with typed counts", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["team"] });
+    watchResourceMock.mockImplementation(watchWith([{ name: "team-q", namespace: "team", resources: 4, age: "5d" }]));
+    const { unmount } = render(<ResourceBrowser context="kind-dev" kind="resourcequotas" />);
+    await waitFor(() => expect(screen.getByText("team-q")).toBeDefined());
+    expect(screen.getByText("4")).toBeDefined();
+    unmount();
+
+    watchResourceMock.mockImplementation(watchWith([{ name: "mem-lr", namespace: "team", limits: 2, age: "3d" }]));
+    render(<ResourceBrowser context="kind-dev" kind="limitranges" />);
+    await waitFor(() => expect(screen.getByText("mem-lr")).toBeDefined());
+    expect(screen.getByText("2")).toBeDefined();
+  });
+
   it("starts on the provided namespace and reports filter changes", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default", "kube-system"] });
     watchResourceMock.mockImplementation(watchWith([pod]));
@@ -269,13 +322,13 @@ describe("ResourceBrowser", () => {
     );
   });
 
-  it("lists a generic kind (configmaps) via listResource", async () => {
+  it("lists a generic kind (endpoints) via listResource", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
-    listResourceMock.mockResolvedValue({ items: [{ name: "cm-1", namespace: "default" }] });
-    render(<ResourceBrowser context="kind-dev" kind="configmaps" />);
+    listResourceMock.mockResolvedValue({ items: [{ name: "ep-1", namespace: "default" }] });
+    render(<ResourceBrowser context="kind-dev" kind="endpoints" />);
 
-    await waitFor(() => expect(screen.getByText("cm-1")).toBeDefined());
-    expect(listResourceMock).toHaveBeenCalledWith("kind-dev", "ConfigMap", "");
+    await waitFor(() => expect(screen.getByText("ep-1")).toBeDefined());
+    expect(listResourceMock).toHaveBeenCalledWith("kind-dev", "Endpoints", "");
     expect(watchResourceMock).not.toHaveBeenCalled();
   });
 

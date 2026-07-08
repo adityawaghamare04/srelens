@@ -83,6 +83,16 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::cronjobs::cronjob_trigger_now_capability(
         cache.clone(),
     ));
+    reg.register(srelens_kube::configmaps::list_configmaps_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::secrets::list_secrets_capability(cache.clone()));
+    reg.register(srelens_kube::resourcequotas::list_resourcequotas_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::limitranges::list_limitranges_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::services::list_services_capability(
         cache.clone(),
     ));
