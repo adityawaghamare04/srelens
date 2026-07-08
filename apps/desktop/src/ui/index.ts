@@ -22,6 +22,8 @@ export { Badge } from "./Badge";
 export type { BadgeProps, BadgeVariant } from "./Badge";
 export { Spinner } from "./Spinner";
 export type { SpinnerProps } from "./Spinner";
+export { LoadingState } from "./LoadingState";
+export type { LoadingStateProps } from "./LoadingState";
 export { Table, filterTableData } from "./Table";
 export type { Column, TableProps } from "./Table";
 export { Select } from "./Select";

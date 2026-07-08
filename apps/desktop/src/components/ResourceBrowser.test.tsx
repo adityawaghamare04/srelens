@@ -267,6 +267,15 @@ describe("ResourceBrowser", () => {
     );
   });
 
+  it("shows a loading indicator while the first fetch is still in flight", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    // A watch that never delivers a snapshot keeps the browser in its loading
+    // state, so the content area should show the loading placeholder.
+    watchResourceMock.mockImplementation(() => new Promise(() => {}));
+    render(<ResourceBrowser context="kind-dev" kind="pods" />);
+    expect(await screen.findByText("Loading pods")).toBeDefined();
+  });
+
   it("filters rows client-side to the selected namespaces when several are chosen", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default", "kube-system", "ops"] });
     // Two namespaces selected → watch runs across all namespaces and the rows
