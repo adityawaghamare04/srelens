@@ -11,6 +11,8 @@ vi.mock("./WorkloadRelations", () => ({
 vi.mock("./MetricsPanel", () => ({ MetricsPanel: () => <div data-testid="metrics" /> }));
 const { updateConfigDataMock } = vi.hoisted(() => ({ updateConfigDataMock: vi.fn() }));
 vi.mock("../lib/actions", () => ({ updateConfigData: updateConfigDataMock }));
+const { notifyMock } = vi.hoisted(() => ({ notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
+vi.mock("../lib/notify", () => ({ notify: notifyMock }));
 
 import {
   ResourceOverview,
@@ -318,6 +320,10 @@ describe("ObjectDetail (ConfigMap / Secret)", () => {
       expect(updateConfigDataMock).toHaveBeenCalledWith("kind-dev", "ConfigMap", "default", "web-config", {
         "app.conf": "level=debug",
       }),
+    );
+    // A success toast confirms the edit.
+    await waitFor(() =>
+      expect(notifyMock.success).toHaveBeenCalledWith("Updated web-config", expect.stringContaining("1 key")),
     );
   });
 

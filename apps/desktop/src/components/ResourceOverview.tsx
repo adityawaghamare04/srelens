@@ -3,6 +3,7 @@ import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
 import { getObject, type K8sObject } from "../lib/manifest";
 import { updateConfigData } from "../lib/actions";
+import { notify } from "../lib/notify";
 import {
   Spinner,
   StatusPill,
@@ -1632,9 +1633,11 @@ export function ConfigDataEditor({
     setBusy(false);
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to update ${name}`, r.error);
       return;
     }
     setEdited({});
+    notify.success(`Updated ${name}`, `${changedKeys.length} key${changedKeys.length === 1 ? "" : "s"} changed`);
     onSaved?.();
   }
 
