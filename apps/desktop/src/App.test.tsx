@@ -162,10 +162,11 @@ describe("App", () => {
     delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
   });
 
-  it("close-active-tab (Cmd+W) closes the window when no tabs remain", () => {
+  it("close-active-tab (Cmd+W) closes the window when the last tab is closed", () => {
     (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
     tauri.windowClose.mockClear();
     render(<App />);
+    fireEvent.click(screen.getByText("open-kind-dev"));
 
     const handler = tauri.handlers.get("close-active-tab");
     expect(handler).toBeDefined();
