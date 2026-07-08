@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeftRight, ChevronDown, ChevronUp, ScrollText, SquareTerminal } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
 import { getObject, getSecret, type K8sObject } from "../lib/manifest";
 import { listEndpointSlices } from "../lib/network";
@@ -608,17 +608,9 @@ function ContainerCard({
         <span className={`fl-status__dot fl-status--${st?.kind ?? "neutral"}`} />
         {name}
         {(onLogs || onExec) && (
-          <span className="ml-auto flex gap-1">
-            {onLogs && (
-              <Button variant="ghost" size="sm" onClick={onLogs} aria-label={`Logs for ${name}`}>
-                Logs
-              </Button>
-            )}
-            {onExec && (
-              <Button variant="ghost" size="sm" onClick={onExec} aria-label={`Exec into ${name}`}>
-                Exec
-              </Button>
-            )}
+          <span className="ml-auto flex gap-0.5">
+            {onLogs && <IconButton icon={ScrollText} label={`Logs for ${name}`} onClick={onLogs} />}
+            {onExec && <IconButton icon={SquareTerminal} label={`Exec into ${name}`} onClick={onExec} />}
           </span>
         )}
       </div>
@@ -2912,6 +2904,7 @@ export function ObjectDetail({
   onEdited,
   onOpenResource,
   onOpenLogs,
+  onOpenExec,
 }: {
   kind: string;
   obj: K8sObject;
@@ -2921,6 +2914,8 @@ export function ObjectDetail({
   onOpenResource?: OpenResource;
   /** Open logs scoped to a container (Pod detail only). */
   onOpenLogs?: (container: string) => void;
+  /** Open an exec session in a container (Pod detail only). */
+  onOpenExec?: (container: string) => void;
 }) {
   const meta = asRecord(obj.metadata);
   // Metrics chart (Pod/Node) sits above the rest, matching Lens. Needs a
@@ -2945,6 +2940,7 @@ export function ObjectDetail({
           context={context}
           onOpenResource={onOpenResource}
           onOpenLogs={onOpenLogs}
+          onOpenExec={onOpenExec}
         />
       </>
     );
@@ -2991,6 +2987,7 @@ export function ResourceOverview({
   reloadKey = 0,
   onOpenResource,
   onOpenLogs,
+  onOpenExec,
 }: {
   context: string;
   kind: string;
@@ -3002,6 +2999,8 @@ export function ResourceOverview({
   onOpenResource?: OpenResource;
   /** Open logs scoped to a container (Pod detail only). */
   onOpenLogs?: (container: string) => void;
+  /** Open an exec session in a container (Pod detail only). */
+  onOpenExec?: (container: string) => void;
 }) {
   const [obj, setObj] = useState<K8sObject | null>(null);
   const [error, setError] = useState("");
@@ -3033,6 +3032,7 @@ export function ResourceOverview({
       onEdited={() => setEditReload((n) => n + 1)}
       onOpenResource={onOpenResource}
       onOpenLogs={onOpenLogs}
+      onOpenExec={onOpenExec}
     />
   );
 }

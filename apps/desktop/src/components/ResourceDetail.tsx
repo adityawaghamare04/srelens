@@ -26,6 +26,7 @@ export function ResourceDetail({
   reloadKey = 0,
   onOpenResource,
   onOpenLogs,
+  onOpenExec,
 }: {
   context: string;
   kind: string;
@@ -36,6 +37,8 @@ export function ResourceDetail({
   onOpenResource?: OpenResource;
   /** Open logs scoped to a container (Pod detail only). */
   onOpenLogs?: (container: string) => void;
+  /** Open an exec session in a container (Pod detail only). */
+  onOpenExec?: (container: string) => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("overview");
 
@@ -52,6 +55,7 @@ export function ResourceDetail({
             reloadKey={reloadKey}
             onOpenResource={onOpenResource}
             onOpenLogs={onOpenLogs}
+            onOpenExec={onOpenExec}
           />
         )}
         {tab === "yaml" && (

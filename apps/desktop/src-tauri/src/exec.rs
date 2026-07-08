@@ -40,6 +40,7 @@ pub async fn start_pod_exec(
     context: String,
     namespace: String,
     pod: String,
+    container: Option<String>,
     shell: Option<String>,
     app: AppHandle,
     manager: State<'_, ExecManager>,
@@ -57,6 +58,7 @@ pub async fn start_pod_exec(
             context,
             namespace,
             pod,
+            container,
             shell,
             move |chunk| {
                 let _ = app_out.emit(&out_channel, chunk);

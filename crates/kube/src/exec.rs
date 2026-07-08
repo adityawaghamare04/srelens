@@ -23,11 +23,13 @@ pub fn shell_command(requested: Option<&str>) -> Vec<String> {
 /// Open an interactive exec session. `on_output` receives stdout chunks
 /// (lossy UTF-8); `input_rx` yields stdin keystrokes. Runs until either side
 /// closes or the task is aborted.
+#[allow(clippy::too_many_arguments)]
 pub async fn exec_shell<F>(
     cache: Arc<ClientCache>,
     context: String,
     namespace: String,
     pod: String,
+    container: Option<String>,
     shell: Option<String>,
     mut on_output: F,
     mut input_rx: Receiver<String>,
@@ -37,11 +39,16 @@ where
 {
     let client = cache.get(&context).await?;
     let api: Api<Pod> = Api::namespaced(client, &namespace);
-    let params = AttachParams::default()
+    let mut params = AttachParams::default()
         .stdin(true)
         .stdout(true)
         .stderr(false)
         .tty(true);
+    // Target a specific container when asked (multi-container / sidecar pods);
+    // otherwise the API defaults to the pod's first container.
+    if let Some(container) = container.filter(|c| !c.is_empty()) {
+        params = params.container(container);
+    }
 
     let command = shell_command(shell.as_deref());
     let mut attached = api
