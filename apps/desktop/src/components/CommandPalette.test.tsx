@@ -65,6 +65,21 @@ describe("CommandPalette", () => {
     expect(await screen.findByText("Recent")).toBeDefined();
   });
 
+  it("can navigate to the workload controller views", async () => {
+    const { onOpenView } = setup();
+    const search = screen.getByPlaceholderText(/Search resources/);
+    for (const [label, kind] of [
+      ["StatefulSets", "statefulsets"],
+      ["DaemonSets", "daemonsets"],
+      ["CronJobs", "cronjobs"],
+    ] as const) {
+      await userEvent.clear(search);
+      await userEvent.type(search, label);
+      await userEvent.click(await screen.findByText(label));
+      expect(onOpenView).toHaveBeenCalledWith(kind);
+    }
+  });
+
   it("searches resources by name and deep-links to the selected one", async () => {
     const { onOpenResource } = setup();
     await waitFor(() => expect(listResourceMock).toHaveBeenCalled());
