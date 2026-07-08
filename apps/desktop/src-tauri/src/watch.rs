@@ -205,6 +205,45 @@ pub async fn start_resource_watch(
                 )
                 .await
             }
+            "ingresses" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_ingresses(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "endpointslices" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_endpointslices(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "networkpolicies" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_networkpolicies(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
             "events" => {
                 let (a, c) = (app_out.clone(), emit_channel.clone());
                 srelens_kube::watch::watch_events(

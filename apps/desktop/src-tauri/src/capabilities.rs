@@ -96,6 +96,15 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::services::list_services_capability(
         cache.clone(),
     ));
+    reg.register(srelens_kube::ingresses::list_ingresses_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::endpointslices::list_endpointslices_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::networkpolicies::list_networkpolicies_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::actions::delete_pod_capability(cache.clone()));
     reg.register(srelens_kube::actions::evict_pod_capability(cache.clone()));
     reg.register(srelens_kube::actions::delete_resource_capability(cache.clone()));

@@ -25,6 +25,11 @@ import {
   type ResourceQuotaSummary,
   type LimitRangeSummary,
 } from "../lib/controllers";
+import {
+  type IngressSummary,
+  type EndpointSliceSummary,
+  type NetworkPolicySummary,
+} from "../lib/network";
 
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 type PodRow = PodSummary & { cpu?: number; memory?: number };
@@ -209,6 +214,9 @@ const TYPED_KINDS: ResourceKind[] = [
   "resourcequotas",
   "limitranges",
   "services",
+  "ingresses",
+  "endpointslices",
+  "networkpolicies",
   "nodes",
   "events",
 ];
@@ -348,6 +356,36 @@ const serviceColumns: Column<ServiceSummary>[] = [
   { key: "clusterIP", header: "Cluster IP", render: (s) => <Muted>{s.clusterIP}</Muted> },
   { key: "ports", header: "Ports" },
   { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+];
+
+const ingressColumns: Column<IngressSummary>[] = [
+  { key: "name", header: "Ingress", render: (i) => <strong>{i.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (i) => <span className="fl-link">{i.namespace}</span> },
+  { key: "class", header: "Class", render: (i) => <Muted>{i.class}</Muted> },
+  { key: "hosts", header: "Hosts", render: (i) => <Muted>{i.hosts || "*"}</Muted> },
+  { key: "address", header: "Address", render: (i) => <Muted>{i.address || "—"}</Muted> },
+  { key: "ports", header: "Ports", render: (i) => <Muted>{i.ports}</Muted> },
+  { key: "age", header: "Age", render: (i) => <Muted>{i.age}</Muted> },
+];
+
+const endpointSliceColumns: Column<EndpointSliceSummary>[] = [
+  { key: "name", header: "Endpoint Slice", render: (e) => <strong>{e.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (e) => <span className="fl-link">{e.namespace}</span> },
+  { key: "addressType", header: "Address Type", render: (e) => <Muted>{e.addressType}</Muted> },
+  { key: "endpoints", header: "Endpoints", render: (e) => <Muted>{e.endpoints}</Muted> },
+  { key: "ports", header: "Ports", render: (e) => <Muted>{e.ports || "—"}</Muted> },
+  { key: "service", header: "Service", render: (e) => <span className="fl-link">{e.service || "—"}</span> },
+  { key: "age", header: "Age", render: (e) => <Muted>{e.age}</Muted> },
+];
+
+const networkPolicyColumns: Column<NetworkPolicySummary>[] = [
+  { key: "name", header: "Network Policy", render: (n) => <strong>{n.name}</strong> },
+  { key: "namespace", header: "Namespace", render: (n) => <span className="fl-link">{n.namespace}</span> },
+  { key: "podSelector", header: "Pod Selector", render: (n) => <Muted>{n.podSelector}</Muted> },
+  { key: "ingress", header: "Ingress" },
+  { key: "egress", header: "Egress" },
+  { key: "policyTypes", header: "Policy Types", render: (n) => <Muted>{n.policyTypes || "—"}</Muted> },
+  { key: "age", header: "Age", render: (n) => <Muted>{n.age}</Muted> },
 ];
 
 const nodeColumns: Column<NodeRow>[] = [
@@ -588,6 +626,12 @@ export function ResourceBrowser({
         return limitRangeColumns as Column<{ name: string }>[];
       case "services":
         return serviceColumns as Column<{ name: string }>[];
+      case "ingresses":
+        return ingressColumns as Column<{ name: string }>[];
+      case "endpointslices":
+        return endpointSliceColumns as Column<{ name: string }>[];
+      case "networkpolicies":
+        return networkPolicyColumns as Column<{ name: string }>[];
       default:
         return nodeColumns as Column<{ name: string }>[];
     }
