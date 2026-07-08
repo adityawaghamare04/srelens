@@ -3,6 +3,7 @@ import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
 import { getObject, getSecret, type K8sObject } from "../lib/manifest";
 import { listEndpointSlices } from "../lib/network";
+import { podsForPvc, formatStorageSize } from "../lib/storage";
 import { updateConfigData } from "../lib/actions";
 import {
   Spinner,
@@ -1817,42 +1818,77 @@ function ConfigBody({
   );
 }
 
-function PvcBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?: OpenResource }) {
+function PvcBody({
+  obj,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
   const spec = asRecord(obj.spec);
   const status = asRecord(obj.status);
+  const meta = asRecord(obj.metadata);
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
   const phase = str(status.phase);
+
+  // Pods that mount this claim — the backend scans pod volumes for the claim
+  // name; completes the PVC → consuming pods navigation.
+  const [podTargets, setPodTargets] = useState<ResourceTarget[]>([]);
+  useEffect(() => {
+    setPodTargets([]);
+    if (!context || !namespace || !name) return;
+    let active = true;
+    void podsForPvc(context, namespace, name).then((r) => {
+      if (!active) return;
+      setPodTargets((r.pods ?? []).map((p) => ({ kind: "Pod", namespace, name: p.name })));
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
+
   return (
-    <Section title="Volume">
-      <KV
-        pairs={[
-          ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
-          ["Capacity", str(asRecord(status.capacity).storage)],
-          ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
-          [
-            "Storage class",
-            spec.storageClassName ? (
-              <ResourceLink
-                target={{ kind: "StorageClass", namespace: null, name: str(spec.storageClassName) }}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-          [
-            "Volume",
-            spec.volumeName ? (
-              <ResourceLink
-                target={{ kind: "PersistentVolume", namespace: null, name: str(spec.volumeName) }}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-        ]}
-      />
-    </Section>
+    <>
+      <Section title="Volume">
+        <KV
+          pairs={[
+            ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
+            ["Capacity", formatStorageSize(str(asRecord(status.capacity).storage))],
+            ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
+            [
+              "Storage class",
+              spec.storageClassName ? (
+                <ResourceLink
+                  target={{ kind: "StorageClass", namespace: null, name: str(spec.storageClassName) }}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+            [
+              "Volume",
+              spec.volumeName ? (
+                <ResourceLink
+                  target={{ kind: "PersistentVolume", namespace: null, name: str(spec.volumeName) }}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+          ]}
+        />
+      </Section>
+      {podTargets.length > 0 && (
+        <Section title="Consumed by">
+          <LinkedResources targets={podTargets} onOpenResource={onOpenResource} />
+        </Section>
+      )}
+    </>
   );
 }
 
@@ -1873,7 +1909,7 @@ function PersistentVolumeBody({
       <KV
         pairs={[
           ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
-          ["Capacity", str(asRecord(spec.capacity).storage)],
+          ["Capacity", formatStorageSize(str(asRecord(spec.capacity).storage))],
           ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
           ["Reclaim policy", str(spec.persistentVolumeReclaimPolicy)],
           ["Volume mode", str(spec.volumeMode)],
@@ -2475,7 +2511,7 @@ function KindBody({
     case "Secret":
       return <SecretBody obj={obj} context={context} onEdited={onEdited} />;
     case "PersistentVolumeClaim":
-      return <PvcBody obj={obj} onOpenResource={onOpenResource} />;
+      return <PvcBody obj={obj} context={context} onOpenResource={onOpenResource} />;
     case "PersistentVolume":
       return <PersistentVolumeBody obj={obj} onOpenResource={onOpenResource} />;
     case "Ingress":

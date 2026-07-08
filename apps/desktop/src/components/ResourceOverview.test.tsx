@@ -18,6 +18,11 @@ vi.mock("../lib/manifest", async (importOriginal) => ({
 }));
 const { listEndpointSlicesMock } = vi.hoisted(() => ({ listEndpointSlicesMock: vi.fn() }));
 vi.mock("../lib/network", () => ({ listEndpointSlices: listEndpointSlicesMock }));
+const { podsForPvcMock } = vi.hoisted(() => ({ podsForPvcMock: vi.fn() }));
+vi.mock("../lib/storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/storage")>()),
+  podsForPvc: podsForPvcMock,
+}));
 
 import {
   ResourceOverview,
@@ -30,10 +35,11 @@ import type { K8sObject } from "../lib/manifest";
 
 const NOW = Date.parse("2026-01-01T00:00:00Z");
 
-// Service detail lists its EndpointSlices; default to none so tests that render
-// a Service without exercising that link don't hit an unmocked call.
+// Service/PVC details fetch related resources; default to none so tests that
+// render them without exercising those links don't hit an unmocked call.
 beforeEach(() => {
   listEndpointSlicesMock.mockResolvedValue({ endpointslices: [] });
+  podsForPvcMock.mockResolvedValue({ pods: [] });
 });
 const TLS_CERTIFICATE = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPakNDQWlLZ0F3SUJBZ0lVSjVQdnk1NXRIbUhESkd3elhNVld2YnV4ck5nd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01aWGhoYlhCc1pTNTBaWE4wTUI0WERUSTJNRGN3TmpFeE1qazFOVm9YRFRNMgpNRGN3TXpFeE1qazFOVm93RnpFVk1CTUdBMVVFQXd3TVpYaGhiWEJzWlM1MFpYTjBNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFzeFc2aHU0MVVwYittNXpHZm5aZ2tpT0xuaVhYTmhPYzhvTWgKaFZCcDVXL0Y5aXluelBGQjRGM0NOK2VlaEp1aVhYWHVFUWdQUVFqOVIrV3ErYlBUK1JPOHd6cEJqQ1BYaHo1TAp2Z0dzNDR1cXBQQ2JvUXVpV0RYcmZDWWtUT2xyd0tIZWJDcVRRM2FQUk1hUGk0YkhzRHdNdmlUcDRhMERGVTFWCkhGc2RXcHM0Uis3TG1MSXBhU3RUTTV1bU1qSC9FTzJGZ2psQmhYUUVGT1M0UnZ2WGpoV0E1ZGZiMEtwNUVSNFIKZjFGdktCRTNaTzVmbG5ldlFlTGdyMnZZT2Jhalg5OTQ1NVE0L1UwMTJJZG1ldWV4L2Q1ZU5VV0VNelprZzlrUQp1U00vMFpwbkhEVFU4UXZQTHh0Qy9jSlU1ekdKMzM0ZnppTGVmQUlpbDR2NFRvVzBQd0lEQVFBQm8zNHdmREFkCkJnTlZIUTRFRmdRVWxadEVndTl1L3ZTTVptSmNNa2RUcWhWVmJDSXdId1lEVlIwakJCZ3dGb0FVbFp0RWd1OXUKL3ZTTVptSmNNa2RUcWhWVmJDSXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QXBCZ05WSFJFRUlqQWdnZ3hsZUdGdApjR3hsTG5SbGMzU0NFSGQzZHk1bGVHRnRjR3hsTG5SbGMzUXdEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBR2svCnp6cGhUNnRuNCtxUXg5Ly9meWNkSzFtNjg1eW1TRFZqT3ZXeWRQaWg4RzI4OUJkQ1BmYlc4ZVVrOXJqakJVZWcKR1k5OUJMcEhvcW9zZDNVWEhOUDJzWUdnZ0dZOG40QXdSbFFWZi9qajBPenVWUzZpS0FDM1ZXWFBtdGk5Q1JQZwpHVkdaR0VZMWI1SXYwVStaSzBjYlJ6c1NSN0FBN05VWGhTUUg0NjJDQlpJa1JSTXNFcVhSV2huUG5Kd3phLzJJCmJ1REdiTG1WMmhRUTdJeWJtb0FpL1FQVUM5WldrMExOV2pGYlpDa0kvem4wd2QxWVhham1iTHBSV0dsTjR1LzcKL2NDSER6NDNyWTZXeHJNRjVwYkJ5aWcvWk5obUVZK25rSFhwK2ZoRFdZOGV1QVVxT1p4bUQrNFIzL2lPQ2dhYgpsVWMzUnNCdmExVjNSbFB6K0pvPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==";
 
@@ -539,6 +545,21 @@ describe("ObjectDetail (storage links)", () => {
       namespace: "default",
       name: "data",
     });
+  });
+
+  it("lists the pods consuming a claim (PVC → consuming pods)", async () => {
+    podsForPvcMock.mockResolvedValue({ pods: [{ name: "web-1", namespace: "default" }] });
+    const pvc: K8sObject = {
+      kind: "PersistentVolumeClaim",
+      metadata: { name: "data", namespace: "default" },
+      spec: { volumeName: "pv-data", storageClassName: "fast", accessModes: ["ReadWriteOnce"] },
+      status: { phase: "Bound", capacity: { storage: "10Gi" } },
+    };
+    render(
+      <ObjectDetail kind="PersistentVolumeClaim" obj={pvc} now={NOW} context="kind-dev" onOpenResource={() => {}} />,
+    );
+    await waitFor(() => expect(podsForPvcMock).toHaveBeenCalledWith("kind-dev", "default", "data"));
+    expect(await screen.findByText("Pod/web-1")).toBeDefined();
   });
 });
 
