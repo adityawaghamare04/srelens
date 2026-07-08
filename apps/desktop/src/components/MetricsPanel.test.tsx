@@ -56,4 +56,56 @@ describe("MetricsPanel", () => {
     );
     await waitFor(() => expect(screen.getByText(/No metrics available/)).toBeDefined());
   });
+
+  it("aggregates a workload's pods by summing their usage", async () => {
+    const podsForSelectorFn = vi.fn().mockResolvedValue({
+      pods: [{ name: "web-1" }, { name: "web-2" }],
+    });
+    const podMetricsFn = vi.fn().mockResolvedValue({
+      metrics: [
+        { name: "web-1", namespace: "default", cpuMillicores: 250, memoryMiB: 64 },
+        { name: "web-2", namespace: "default", cpuMillicores: 250, memoryMiB: 64 },
+        { name: "other-9", namespace: "default", cpuMillicores: 999, memoryMiB: 999 },
+      ],
+    });
+    render(
+      <MetricsPanel
+        kind="Deployment"
+        context="kind-dev"
+        namespace="default"
+        name="web"
+        selector={{ app: "web" }}
+        intervalMs={100000}
+        podMetricsFn={podMetricsFn}
+        podsForSelectorFn={podsForSelectorFn}
+      />,
+    );
+    // 250 + 250 millicores = 0.500 cores; 64 + 64 = 128 MiB. The unrelated pod is excluded.
+    await waitFor(() => expect(screen.getByText("0.500 cores")).toBeDefined());
+    expect(screen.getByText("128 MiB")).toBeDefined();
+    expect(podsForSelectorFn).toHaveBeenCalledWith("kind-dev", "default", { app: "web" });
+    expect(screen.getByText(/Aggregated across pods/)).toBeDefined();
+  });
+
+  it("offers a time-range filter", async () => {
+    const nodeMetricsFn = vi.fn().mockResolvedValue({
+      metrics: [{ name: "node-a", cpuMillicores: 1000, memoryMiB: 2048 }],
+    });
+    render(
+      <MetricsPanel
+        kind="Node"
+        context="kind-dev"
+        namespace={null}
+        name="node-a"
+        intervalMs={100000}
+        nodeMetricsFn={nodeMetricsFn}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("1.000 cores")).toBeDefined());
+    // The four ranges are present; 5m is the default active one.
+    for (const label of ["5m", "10m", "30m", "1h"]) {
+      expect(screen.getByRole("button", { name: label })).toBeDefined();
+    }
+    expect(screen.getByRole("button", { name: "5m" }).getAttribute("aria-pressed")).toBe("true");
+  });
 });

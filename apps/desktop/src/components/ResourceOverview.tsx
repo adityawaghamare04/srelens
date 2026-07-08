@@ -2918,8 +2918,14 @@ export function ObjectDetail({
   onOpenExec?: (container: string) => void;
 }) {
   const meta = asRecord(obj.metadata);
-  // Metrics chart (Pod/Node) sits above the rest, matching Lens. Needs a
-  // context to poll; in tests without one it's simply omitted.
+  // Metrics chart sits above the rest, matching Lens. Pods and Nodes read their
+  // own usage; workload controllers aggregate the usage of their pods (matched
+  // by the controller's label selector). Needs a context to poll; in tests
+  // without one it's simply omitted.
+  const WORKLOAD_METRIC_KINDS = ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"];
+  const workloadSelector = asRecord(asRecord(obj.spec).selector).matchLabels as
+    | Record<string, string>
+    | undefined;
   const metrics =
     context && (kind === "Pod" || kind === "Node") ? (
       <MetricsPanel
@@ -2927,6 +2933,14 @@ export function ObjectDetail({
         context={context}
         namespace={str(meta.namespace) || null}
         name={str(meta.name)}
+      />
+    ) : context && WORKLOAD_METRIC_KINDS.includes(kind) && workloadSelector ? (
+      <MetricsPanel
+        kind={kind as "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" | "Job"}
+        context={context}
+        namespace={str(meta.namespace) || null}
+        name={str(meta.name)}
+        selector={workloadSelector}
       />
     ) : null;
 
@@ -2946,13 +2960,16 @@ export function ObjectDetail({
     );
   if (kind === "Deployment" || kind === "StatefulSet" || kind === "ReplicaSet")
     return (
-      <WorkloadDetailView
-        kind={kind}
-        obj={obj}
-        now={now}
-        context={context}
-        onOpenResource={onOpenResource}
-      />
+      <>
+        {metrics}
+        <WorkloadDetailView
+          kind={kind}
+          obj={obj}
+          now={now}
+          context={context}
+          onOpenResource={onOpenResource}
+        />
+      </>
     );
   return (
     <>
