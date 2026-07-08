@@ -78,9 +78,9 @@ export function App() {
   // Mirror the active tab id into a ref so the (once-registered) Cmd+W menu
   // event listener always sees the latest value without re-subscribing.
   const activeTabIdRef = useRef<number | null>(null);
-  useEffect(() => {
-    activeTabIdRef.current = activeTabId;
-  }, [activeTabId]);
+  activeTabIdRef.current = activeTabId;
+  const tabsRef = useRef<ViewTab[]>([]);
+  tabsRef.current = tabs;
 
   // Persist per-cluster namespace whenever it changes.
   useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
