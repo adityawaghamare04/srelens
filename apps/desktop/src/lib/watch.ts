@@ -8,7 +8,31 @@ export interface WatchHandle {
 export type WatchStatus = "live" | "reconnecting";
 
 /** Resource kinds that support live watching. */
-export const WATCHABLE_KINDS = ["pods", "deployments", "services", "events"] as const;
+export const WATCHABLE_KINDS = [
+  "pods",
+  "deployments",
+  "statefulsets",
+  "daemonsets",
+  "jobs",
+  "cronjobs",
+  "configmaps",
+  "secrets",
+  "resourcequotas",
+  "limitranges",
+  "services",
+  "ingresses",
+  "endpointslices",
+  "networkpolicies",
+  "persistentvolumeclaims",
+  "persistentvolumes",
+  "storageclasses",
+  "serviceaccounts",
+  "roles",
+  "clusterroles",
+  "rolebindings",
+  "clusterrolebindings",
+  "events",
+] as const;
 
 // Monotonic id so each watch gets a unique channel (avoids cross-view mixups).
 let watchSeq = 0;

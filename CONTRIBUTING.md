@@ -2,6 +2,8 @@
 
 Thanks for your interest! srelens is in early, active development, so expect fast movement and breaking changes.
 
+By participating, you agree to abide by our [Code of Conduct](.github/CODE_OF_CONDUCT.md).
+
 ## Setup
 
 Follow the [developer guide](docs/DEVELOPMENT.md) — it covers prerequisites, running the app, architecture, and the capability-registry pattern that almost every change touches.

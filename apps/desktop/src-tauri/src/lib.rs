@@ -4,6 +4,7 @@ mod exec;
 mod files;
 mod forward;
 mod logs;
+mod mcp;
 mod settings;
 mod updater;
 mod watch;
@@ -14,11 +15,126 @@ use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
 use forward::{start_port_forward, stop_port_forward, ForwardManager};
 use srelens_kube::client_cache::ClientCache;
 use logs::{start_log_stream, stop_log_stream, LogStreamManager};
+use mcp::{
+    install_srelens_cli, mcp_http_start, mcp_http_status, mcp_http_stop, srelens_cli_status,
+    McpHttpManager,
+};
 use settings::{get_request_timeout, set_request_timeout};
 use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch, WatchManager};
 
 pub use capabilities::build_registry;
+
+/// Size the main window to a comfortable default, clamped to the screen it
+/// opens on: on a large display it stays at the preferred ~16" size (centered),
+/// on a smaller display it shrinks to fit the available work area. A margin
+/// keeps it clear of the menu bar / taskbar / dock.
+#[cfg(desktop)]
+fn size_main_window(app: &tauri::App) {
+    use tauri::{LogicalSize, Manager};
+
+    // Preferred size — the "16-inch" window shown on big screens.
+    const PREF_W: f64 = 1440.0;
+    const PREF_H: f64 = 900.0;
+    // Leave room for OS chrome so the window never sits edge-to-edge.
+    const MARGIN: f64 = 80.0;
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(Some(monitor)) = window.current_monitor() else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let avail_w = monitor.size().width as f64 / scale - MARGIN;
+    let avail_h = monitor.size().height as f64 / scale - MARGIN;
+
+    let width = PREF_W.min(avail_w).max(640.0);
+    let height = PREF_H.min(avail_h).max(480.0);
+    let _ = window.set_size(LogicalSize::new(width, height));
+    let _ = window.center();
+}
+
+/// Menu id for the custom "Close Tab" item. macOS routes Cmd+W to this instead
+/// of the predefined "Close Window", so the frontend can close the active tab.
+#[cfg(target_os = "macos")]
+const CLOSE_TAB_MENU_ID: &str = "close-active-tab";
+
+/// Install a custom macOS application menu.
+///
+/// The default Tauri menu binds Cmd+W to the predefined "Close Window" item,
+/// which closes the whole window natively before the webview ever sees the
+/// keystroke. We rebuild the standard menu (App / Edit / View / Window) so
+/// nothing users expect is lost, but swap the Window submenu's close entry
+/// for a custom item that keeps the Cmd+W accelerator and emits a
+/// `close-active-tab` event. The frontend then closes the active tab, only
+/// falling back to closing the window when no tabs remain.
+#[cfg(target_os = "macos")]
+fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{AboutMetadata, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    use tauri::Emitter;
+
+    let handle = app.handle();
+
+    let about = AboutMetadata {
+        name: Some("srelens".into()),
+        version: Some(env!("CARGO_PKG_VERSION").into()),
+        ..Default::default()
+    };
+
+    let app_menu = SubmenuBuilder::new(handle, "srelens")
+        .about(Some(about))
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(handle, "Edit")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let view_menu = SubmenuBuilder::new(handle, "View").fullscreen().build()?;
+
+    // Custom Close item: keeps the familiar Cmd+W accelerator but routes to our
+    // menu-event handler instead of the native "Close Window".
+    let close_tab = MenuItemBuilder::new("Close")
+        .id(CLOSE_TAB_MENU_ID)
+        .accelerator("CmdOrCtrl+W")
+        .build(handle)?;
+
+    let window_menu = SubmenuBuilder::new(handle, "Window")
+        .minimize()
+        .item(&close_tab)
+        .build()?;
+
+    let menu = MenuBuilder::new(handle)
+        .item(&app_menu)
+        .item(&edit_menu)
+        .item(&view_menu)
+        .item(&window_menu)
+        .build()?;
+
+    app.set_menu(menu)?;
+
+    app.on_menu_event(move |app, event| {
+        if event.id().as_ref() == CLOSE_TAB_MENU_ID {
+            let _ = app.emit("close-active-tab", ());
+        }
+    });
+
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -45,12 +161,17 @@ pub fn run() {
                         .build(),
                 )?;
             }
+            #[cfg(desktop)]
+            size_main_window(app);
+            #[cfg(target_os = "macos")]
+            install_macos_menu(app)?;
             Ok(())
         })
         .manage(AppRegistry(registry))
         .manage(WatchManager::new(cache.clone()))
         .manage(ExecManager::new(cache.clone()))
         .manage(ForwardManager::new(cache.clone()))
+        .manage(McpHttpManager::new(cache.clone()))
         .manage(LogStreamManager::new(cache))
         .invoke_handler(tauri::generate_handler![
             invoke_capability,
@@ -69,7 +190,12 @@ pub fn run() {
             update_check,
             update_install,
             set_request_timeout,
-            get_request_timeout
+            get_request_timeout,
+            mcp_http_start,
+            mcp_http_stop,
+            mcp_http_status,
+            install_srelens_cli,
+            srelens_cli_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

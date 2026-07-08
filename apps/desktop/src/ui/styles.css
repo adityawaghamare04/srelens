@@ -970,42 +970,8 @@ body {
 }
 
 /* Cluster tabs (multi-cluster) */
-.fl-ctabs {
-  display: flex;
-  background: var(--fl-color-hotbar);
-  border-bottom: 1px solid var(--fl-color-border);
-  min-height: 34px;
-  overflow-x: auto;
-}
-.fl-ctabs::-webkit-scrollbar { height: 0; }
-.fl-ctab {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 14px;
-  cursor: pointer;
-  color: var(--fl-color-text-muted);
-  border-right: 1px solid var(--fl-color-border);
-  font-size: 13px;
-  white-space: nowrap;
-}
-.fl-ctab--active {
-  background: var(--fl-color-bg);
-  color: var(--fl-color-text);
-}
-.fl-ctab__close {
-  background: transparent;
-  border: none;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.5;
-  font-size: 11px;
-}
-.fl-ctab__close:hover { opacity: 1; }
-.fl-ctab__close svg {
-  width: 12px;
-  height: 12px;
-}
+/* .fl-ctabs / .fl-ctab live in one consolidated block further down (search
+   ".fl-ctabs {"). The earlier duplicate was removed. */
 
 /* Top bar */
 .fl-topbar {
@@ -1397,6 +1363,55 @@ body {
   line-height: 1.5;
   word-break: break-all;
   white-space: pre-wrap;
+}
+.fl-config-editor__value {
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  resize: vertical;
+  border: 1px solid var(--fl-color-border-faint);
+  border-radius: var(--fl-radius-md);
+  background: var(--fl-color-surface);
+  color: var(--fl-color-text);
+  font-family: var(--fl-font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.fl-config-editor__value:read-only {
+  border-color: transparent;
+  background: transparent;
+  color: var(--fl-color-text-muted);
+}
+.fl-config-editor__actions {
+  display: flex;
+  gap: 8px;
+}
+.fl-config-editor__key-actions {
+  display: inline-flex;
+  gap: 12px;
+}
+.fl-usage-bar {
+  position: relative;
+  min-width: 120px;
+  height: 18px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--fl-color-border-faint);
+}
+.fl-usage-bar__fill {
+  height: 100%;
+  background: var(--fl-color-accent);
+}
+.fl-usage-bar--warning .fl-usage-bar__fill { background: var(--fl-color-warning, #d9a441); }
+.fl-usage-bar--danger .fl-usage-bar__fill { background: var(--fl-color-danger, #e5484d); }
+.fl-usage-bar__label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--fl-color-text);
 }
 /* Monospace inline values (names, images, IPs). */
 .fl-mono {
@@ -1883,6 +1898,33 @@ body {
 
 /* Metrics panel (live CPU/memory charts). */
 .fl-metrics { margin-bottom: var(--fl-space-xl); }
+.fl-metrics__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fl-space-md);
+}
+.fl-metrics__range {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-md);
+}
+.fl-metrics__range button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: calc(var(--fl-radius-md) - 2px);
+  background: transparent;
+  color: var(--fl-color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.fl-metrics__range button:hover { color: var(--fl-color-text); }
+.fl-metrics__range button.is-active {
+  background: var(--fl-color-surface-alt);
+  color: var(--fl-color-text);
+}
 .fl-metrics__source {
   margin: -6px 0 var(--fl-space-md);
   font-size: 11px;
@@ -3132,12 +3174,22 @@ body {
   border-bottom-style: solid;
   border-bottom-width: 1px;
 }
+/* Thin, unobtrusive horizontal scrollbar so an overflowing strip stays usable. */
 .fl-ctabs::-webkit-scrollbar {
-  height: 0;
+  height: 6px;
+}
+.fl-ctabs::-webkit-scrollbar-thumb {
+  background: var(--fl-color-border);
+  border-radius: 3px;
+}
+.fl-ctabs::-webkit-scrollbar-track {
+  background: transparent;
 }
 .fl-ctab {
   display: inline-flex;
-  min-width: 0;
+  /* Keep each tab at its label width and let the strip overflow (scroll)
+     instead of squishing tabs below their text. */
+  flex: 0 0 auto;
   max-width: 360px;
   align-items: center;
   gap: 8px;
@@ -3182,6 +3234,10 @@ body {
 .fl-ctab__close:hover {
   background: var(--fl-color-surface-alt);
   opacity: 1;
+}
+.fl-ctab__close svg {
+  width: 14px;
+  height: 14px;
 }
 .fl-tabs {
   min-height: 42px;

@@ -18,11 +18,13 @@ export async function startPodExec(
   pod: string,
   onData: (chunk: string) => void,
   onExit: (error: string | null) => void,
+  container?: string,
 ): Promise<ExecSession> {
   const session = await invokeCommand<number>("start_pod_exec", {
     context,
     namespace,
     pod,
+    container: container ?? null,
     shell: null,
   });
   const disposeOut = on(`exec:out:${session}`, (p) => onData(p as string));

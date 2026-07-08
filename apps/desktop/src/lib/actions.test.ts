@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { deleteResource, scaleResource, rolloutRestart } from "./actions";
+import {
+  deleteResource,
+  scaleResource,
+  rolloutRestart,
+  cronjobSetSuspend,
+  cronjobTriggerNow,
+  updateConfigData,
+} from "./actions";
 
 describe("resource actions", () => {
   it("deleteResource passes kind/namespace/name", async () => {
@@ -42,5 +49,39 @@ describe("resource actions", () => {
       Promise.reject(new Error("forbidden")),
     );
     expect(out.error).toContain("forbidden");
+  });
+
+  it("cronjobSetSuspend passes the suspend flag", async () => {
+    const invoke = vi.fn().mockResolvedValue({ ok: true });
+    await cronjobSetSuspend("c", "ops", "nightly", true, invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.cronjobSetSuspend", {
+      context: "c",
+      namespace: "ops",
+      name: "nightly",
+      suspend: true,
+    });
+  });
+
+  it("updateConfigData passes kind/namespace/name and the edited data map", async () => {
+    const invoke = vi.fn().mockResolvedValue({ ok: true });
+    await updateConfigData("c", "ConfigMap", "default", "web-config", { "app.conf": "level=debug" }, invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.updateConfigData", {
+      context: "c",
+      kind: "ConfigMap",
+      namespace: "default",
+      name: "web-config",
+      data: { "app.conf": "level=debug" },
+    });
+  });
+
+  it("cronjobTriggerNow sends a unique suffix and returns the job name", async () => {
+    const invoke = vi.fn().mockResolvedValue({ jobName: "nightly-123", ok: true });
+    const out = await cronjobTriggerNow("c", "ops", "nightly", invoke);
+    const call = invoke.mock.calls[0];
+    expect(call[0]).toBe("k8s.cronjobTriggerNow");
+    expect(call[1]).toMatchObject({ context: "c", namespace: "ops", name: "nightly" });
+    expect(typeof (call[1] as { suffix: string }).suffix).toBe("string");
+    expect((call[1] as { suffix: string }).suffix.length).toBeGreaterThan(0);
+    expect(out.jobName).toBe("nightly-123");
   });
 });

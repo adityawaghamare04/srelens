@@ -80,8 +80,13 @@ pub fn get_object_capability(cache: Arc<ClientCache>) -> Capability {
                     .map_err(|_| CapabilityError::Handler("get object timed out".into()))?
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
                 obj.metadata.managed_fields = None;
-                let object = serde_json::to_value(obj)
+                let mut object = serde_json::to_value(obj)
                     .map_err(|e| CapabilityError::Handler(e.to_string()))?;
+                // Never return Secret values through the generic path; the UI
+                // reads them via the dedicated, consent-gateable `k8s.getSecret`.
+                if ar.kind == "Secret" && ar.group.is_empty() {
+                    crate::secrets::redact_secret_data(&mut object);
+                }
                 Ok(ObjectOut { object })
             }
         },
@@ -267,6 +272,7 @@ pub fn apply_manifest_capability(cache: Arc<ClientCache>) -> Capability {
             read_only: false,
             destructive: false,
             requires_confirm: true,
+            sensitive: false,
         },
         move |input: ApplyIn| {
             let cache = cache.clone();

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { ArrowDownToLine, CircleCheck, CircleSlash2 } from "lucide-react";
 import { getObject } from "../lib/manifest";
 import { cordonNode, drainNode } from "../lib/actions";
+import { notify } from "../lib/notify";
 import { IconButton, ConfirmDialog } from "../ui";
 
 /**
@@ -47,9 +48,11 @@ export function NodeCordonAction({
     setBusy(false);
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to ${cordoned ? "uncordon" : "cordon"} ${name}`, r.error);
       return;
     }
     setDialog(null);
+    notify.success(`${cordoned ? "Uncordoned" : "Cordoned"} ${name}`);
     setCordoned(!cordoned);
   }
 
@@ -60,9 +63,11 @@ export function NodeCordonAction({
     setBusy(false);
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to drain ${name}`, r.error);
       return;
     }
     setDialog(null);
+    notify.success(`Drained ${name}`, r.evicted != null ? `Evicted ${r.evicted} pod(s)` : undefined);
     setCordoned(true); // drain cordons the node
   }
 

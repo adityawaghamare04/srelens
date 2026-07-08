@@ -20,7 +20,12 @@ pub struct ListNodesIn {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct NodeSummary {
     pub name: String,
+    /// Readiness derived from the `Ready` condition: "Ready", "NotReady", or "Unknown".
     pub status: String,
+    /// Whether the node is cordoned (`spec.unschedulable`) — shown as "SchedulingDisabled".
+    pub unschedulable: bool,
+    /// Number of taints on the node, excluding the auto-added unschedulable taint.
+    pub taints: u32,
     pub version: String,
     pub roles: String,
     pub age: String,
@@ -65,9 +70,24 @@ fn summarise(node: Node) -> NodeSummary {
             }
         })
         .unwrap_or_else(|| "<none>".to_string());
+    let spec = node.spec.as_ref();
+    let unschedulable = spec.and_then(|s| s.unschedulable).unwrap_or(false);
+    // Count taints, ignoring the taint Kubernetes adds automatically when a node
+    // is cordoned — that state is already conveyed by `unschedulable`.
+    let taints = spec
+        .and_then(|s| s.taints.as_ref())
+        .map(|taints| {
+            taints
+                .iter()
+                .filter(|taint| taint.key != "node.kubernetes.io/unschedulable")
+                .count() as u32
+        })
+        .unwrap_or(0);
     NodeSummary {
         name,
         status,
+        unschedulable,
+        taints,
         version,
         roles,
         age: crate::humanize_age(node.metadata.creation_timestamp.as_ref()),
@@ -141,5 +161,48 @@ mod tests {
         assert_eq!(s.status, "Ready");
         assert_eq!(s.version, "v1.35.0");
         assert_eq!(s.roles, "control-plane");
+        assert!(!s.unschedulable);
+        assert_eq!(s.taints, 0);
+    }
+
+    #[test]
+    fn reports_cordoned_and_taints_excluding_the_unschedulable_taint() {
+        use k8s_openapi::api::core::v1::{NodeSpec, Taint};
+        let node = Node {
+            metadata: kube::core::ObjectMeta {
+                name: Some("worker-1".into()),
+                ..Default::default()
+            },
+            spec: Some(NodeSpec {
+                unschedulable: Some(true),
+                taints: Some(vec![
+                    Taint {
+                        key: "dedicated".into(),
+                        effect: "NoSchedule".into(),
+                        ..Default::default()
+                    },
+                    // Auto-added when cordoned — must not be counted as a taint.
+                    Taint {
+                        key: "node.kubernetes.io/unschedulable".into(),
+                        effect: "NoSchedule".into(),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            status: Some(NodeStatus {
+                conditions: Some(vec![NodeCondition {
+                    type_: "Ready".into(),
+                    status: "True".into(),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = summarise(node);
+        assert_eq!(s.status, "Ready");
+        assert!(s.unschedulable);
+        assert_eq!(s.taints, 1);
     }
 }

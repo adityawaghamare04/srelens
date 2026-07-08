@@ -23,13 +23,22 @@ export function ResourceDetail({
   kind,
   namespace,
   name,
+  reloadKey = 0,
   onOpenResource,
+  onOpenLogs,
+  onOpenExec,
 }: {
   context: string;
   kind: string;
   namespace: string | null;
   name: string;
+  /** Bumped by the parent after a write action to refresh the overview. */
+  reloadKey?: number;
   onOpenResource?: OpenResource;
+  /** Open logs scoped to a container (Pod detail only). */
+  onOpenLogs?: (container: string) => void;
+  /** Open an exec session in a container (Pod detail only). */
+  onOpenExec?: (container: string) => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("overview");
 
@@ -43,7 +52,10 @@ export function ResourceDetail({
             kind={kind}
             namespace={namespace}
             name={name}
+            reloadKey={reloadKey}
             onOpenResource={onOpenResource}
+            onOpenLogs={onOpenLogs}
+            onOpenExec={onOpenExec}
           />
         )}
         {tab === "yaml" && (

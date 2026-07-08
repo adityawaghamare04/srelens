@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import {
   ContextMenu,
@@ -36,10 +36,31 @@ export function ResourceTabs({
   onCloseToRight: (id: number) => void;
   onCloseAll: () => void;
 }) {
+  const stripRef = useRef<HTMLDivElement>(null);
+
+  // Keep the active tab visible — opening the 15th tab shouldn't leave it
+  // off-screen to the right. Query the strip (rather than hold a ref) since the
+  // tab is wrapped by Radix's asChild trigger, which owns the child ref.
+  useEffect(() => {
+    stripRef.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [activeId, tabs.length]);
+
+  // Translate vertical wheel gestures into horizontal scroll so a plain mouse
+  // (no shift, no trackpad) can reach overflowed tabs.
+  function onWheel(e: React.WheelEvent<HTMLDivElement>) {
+    const strip = stripRef.current;
+    if (!strip || e.deltaX !== 0 || e.deltaY === 0) return;
+    strip.scrollLeft += e.deltaY;
+  }
+
   return (
     <div
+      ref={stripRef}
       role="tablist"
       className="fl-ctabs"
+      onWheel={onWheel}
     >
       {tabs.map((t, i) => {
         const active = t.id === activeId;

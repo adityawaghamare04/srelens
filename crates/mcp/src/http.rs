@@ -34,6 +34,23 @@ pub async fn serve_http(server: McpServer, addr: SocketAddr) -> std::io::Result<
     axum::serve(listener, router(server)).await
 }
 
+/// Serve on an already-bound `listener` until `shutdown` resolves. Lets a host
+/// (e.g. the desktop app) bind the port up front — surfacing bind errors
+/// synchronously — then run the server with graceful shutdown so it can be
+/// toggled off from Settings and the port released cleanly.
+pub async fn serve_http_with_shutdown<F>(
+    server: McpServer,
+    listener: tokio::net::TcpListener,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    axum::serve(listener, router(server))
+        .with_graceful_shutdown(shutdown)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

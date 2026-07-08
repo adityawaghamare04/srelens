@@ -20,6 +20,7 @@ import {
   ArrowUp,
   GripVertical,
   ClipboardPaste,
+  Plug,
 } from "lucide-react";
 import {
   PageHeader,
@@ -48,6 +49,7 @@ import {
 } from "../lib/settings";
 import { updateRequestTimeout } from "../lib/requestTimeout";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
+import { McpSettingsSection } from "./McpSettingsSection";
 import { pickKubeconfigFiles, savePastedKubeconfig } from "../lib/files";
 import { checkForUpdate, installUpdate, type UpdateMeta } from "../lib/updater";
 import { appVersion, relaunchApp } from "../transport/transport";
@@ -58,7 +60,7 @@ const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string;
   { mode: "system", label: "System", description: "Follow the OS appearance", icon: Monitor },
 ];
 
-type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts" | "updates";
+export type SettingsSection = "appearance" | "layout" | "kubernetes" | "contexts" | "mcp" | "updates";
 
 type UpdatePhase =
   | { phase: "idle" }
@@ -84,6 +86,7 @@ const SETTINGS_SECTIONS: Array<{
   { id: "layout", label: "Layout", description: "Panel dimensions", icon: LayoutPanelLeft },
   { id: "kubernetes", label: "Kubernetes", description: "Workspace defaults", icon: Network },
   { id: "contexts", label: "Contexts", description: "Names, logos and colors", icon: Boxes },
+  { id: "mcp", label: "MCP", description: "Agent access and client config", icon: Plug },
   { id: "updates", label: "Updates", description: "App version and updates", icon: Download },
 ];
 
@@ -103,6 +106,7 @@ export function SettingsView({
   onKubeconfigFilesChange,
   contextOrder,
   onContextOrderChange,
+  initialSection = "appearance",
 }: {
   theme: Theme;
   onThemeNameChange: (name: ThemeName) => void;
@@ -117,8 +121,10 @@ export function SettingsView({
   onKubeconfigFilesChange: (paths: string[]) => void;
   contextOrder: string[];
   onContextOrderChange: (order: string[]) => void;
+  /** Section to open on mount (e.g. deep-linked from the update toast). */
+  initialSection?: SettingsSection;
 }) {
-  const [section, setSection] = useState<SettingsSection>("appearance");
+  const [section, setSection] = useState<SettingsSection>(initialSection);
   const [contexts, setContexts] = useState<ClusterContext[] | null>(null);
   const [contextError, setContextError] = useState("");
   const [contextQuery, setContextQuery] = useState("");
@@ -757,6 +763,15 @@ export function SettingsView({
                   )}
                 </div>
               )}
+            </SectionPanel>
+          )}
+
+          {section === "mcp" && (
+            <SectionPanel
+              title="MCP"
+              description="Expose srelens to agents and MCP clients, and get ready-to-paste client config."
+            >
+              <McpSettingsSection />
             </SectionPanel>
           )}
 

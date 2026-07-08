@@ -1,18 +1,23 @@
-import React, { useEffect, useState } from "react";
-import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ArrowLeftRight, ChevronDown, ChevronUp, ScrollText, SquareTerminal } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
-import { getObject, type K8sObject } from "../lib/manifest";
+import { getObject, getSecret, type K8sObject } from "../lib/manifest";
+import { listEndpointSlices } from "../lib/network";
+import { podsForPvc, formatStorageSize } from "../lib/storage";
+import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from "../lib/rbac";
+import { updateConfigData } from "../lib/actions";
 import {
   Spinner,
   StatusPill,
   Badge,
+  Button,
   Table,
   IconButton,
   type StatusKind,
   type BadgeVariant,
   type Column,
 } from "../ui";
-import { DeployRevisions, ManagedPods } from "./WorkloadRelations";
+import { DeployRevisions, ManagedPods, CronJobJobs } from "./WorkloadRelations";
 import { MetricsPanel } from "./MetricsPanel";
 import { ForwardDialog } from "./ForwardDialog";
 import {
@@ -39,6 +44,20 @@ export function ageFromTimestamp(iso?: string, now: number = Date.now()): string
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   return `${days}d`;
+}
+
+/** Human-readable duration between two ISO timestamps, e.g. "2m 30s". */
+export function durationBetween(startIso?: string, endIso?: string): string {
+  if (!startIso || !endIso) return "—";
+  const secs = Math.max(0, Math.floor((new Date(endIso).getTime() - new Date(startIso).getTime()) / 1000));
+  if (Number.isNaN(secs)) return "—";
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) return remSecs ? `${mins}m ${remSecs}s` : `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
 }
 
 /** Absolute, human-readable timestamp, e.g. "Jun 10, 2026, 12:52:33 PM". */
@@ -247,6 +266,49 @@ function conditionBadgeVariant(c: Condition): BadgeVariant {
   return negative ? "danger" : "success";
 }
 
+// The pod lifecycle, in the order kubelet reports it.
+const POD_CONDITION_ORDER = ["PodScheduled", "Initialized", "ContainersReady", "Ready"];
+
+/**
+ * Sort pod conditions into lifecycle order (PodScheduled → Initialized →
+ * ContainersReady → Ready); any other condition types keep their relative order
+ * after the known lifecycle ones.
+ */
+export function orderPodConditions(conditions: Condition[]): Condition[] {
+  const rank = (type: string) => {
+    const index = POD_CONDITION_ORDER.indexOf(type);
+    return index === -1 ? POD_CONDITION_ORDER.length : index;
+  };
+  return conditions
+    .map((condition, index) => ({ condition, index }))
+    .sort((a, b) => rank(a.condition.type) - rank(b.condition.type) || a.index - b.index)
+    .map(({ condition }) => condition);
+}
+
+/**
+ * One line per affinity type in use, e.g. "Node affinity: 2 required, 1
+ * preferred". `nodeAffinity` counts `nodeSelectorTerms`; pod (anti-)affinity
+ * count their rule arrays directly. Types with no rules are omitted.
+ */
+export function summarizeAffinity(affinity: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const describe = (label: string, rule: Record<string, unknown>, requiredIsTerms: boolean) => {
+    const required = requiredIsTerms
+      ? asArray(asRecord(rule.requiredDuringSchedulingIgnoredDuringExecution).nodeSelectorTerms).length
+      : asArray(rule.requiredDuringSchedulingIgnoredDuringExecution).length;
+    const preferred = asArray(rule.preferredDuringSchedulingIgnoredDuringExecution).length;
+    if (required === 0 && preferred === 0) return;
+    const parts: string[] = [];
+    if (required) parts.push(`${required} required`);
+    if (preferred) parts.push(`${preferred} preferred`);
+    lines.push(`${label}: ${parts.join(", ")}`);
+  };
+  describe("Node affinity", asRecord(affinity.nodeAffinity), true);
+  describe("Pod affinity", asRecord(affinity.podAffinity), false);
+  describe("Pod anti-affinity", asRecord(affinity.podAntiAffinity), false);
+  return lines;
+}
+
 /** Conditions as a row of coloured badges (Pod/Deployment-style). */
 function ConditionBadges({ conditions }: { conditions: Condition[] }) {
   if (conditions.length === 0) return <span className="fl-detail-empty">None</span>;
@@ -428,6 +490,17 @@ function mountText(m: unknown): string {
   return `${str(r.mountPath)}${ro} ← ${str(r.name)}`;
 }
 
+/** A toleration as "key=value → effect" (or "key Exists → effect"). */
+function tolerationText(t: unknown): string {
+  const r = asRecord(t);
+  const key = str(r.key) || "(any taint)";
+  const operator = str(r.operator) || "Equal";
+  const effect = str(r.effect) || "all effects";
+  const secs = r.tolerationSeconds != null ? ` for ${str(r.tolerationSeconds)}s` : "";
+  const left = operator === "Exists" ? `${key} exists` : `${key}=${str(r.value)}`;
+  return `${left} → ${effect}${secs}`;
+}
+
 function PlainChips({ items }: { items: string[] }) {
   return (
     <div className="fl-chips">
@@ -501,11 +574,17 @@ function ContainerCard({
   status,
   forward,
   now,
+  onLogs,
+  onExec,
 }: {
   container: Record<string, unknown>;
   status?: Record<string, unknown>;
   forward?: ForwardTarget;
   now: number;
+  /** Open logs scoped to this container. */
+  onLogs?: () => void;
+  /** Open an exec session in this container. */
+  onExec?: () => void;
 }) {
   const name = str(container.name);
   const st = status ? containerStateText(status) : null;
@@ -517,6 +596,7 @@ function ContainerCard({
   const limits = asRecord(resources.limits);
   const liveness = asRecord(container.livenessProbe);
   const readiness = asRecord(container.readinessProbe);
+  const startup = asRecord(container.startupProbe);
   const command = [...asArray(container.command), ...asArray(container.args)].map(str).join(" ");
   const restartCount = status?.restartCount;
   const lastRestart = containerLastRestartTime(status);
@@ -527,10 +607,19 @@ function ContainerCard({
       <div className="fl-container-card__name">
         <span className={`fl-status__dot fl-status--${st?.kind ?? "neutral"}`} />
         {name}
+        {(onLogs || onExec) && (
+          <span className="ml-auto flex gap-0.5">
+            {onLogs && <IconButton icon={ScrollText} label={`Logs for ${name}`} onClick={onLogs} />}
+            {onExec && <IconButton icon={SquareTerminal} label={`Exec into ${name}`} onClick={onExec} />}
+          </span>
+        )}
       </div>
       <KV
         pairs={[
           ["Status", st ? <span className={`fl-status--${st.kind} fl-status-text`}>{st.text}</span> : ""],
+          container.targetContainerName
+            ? ["Debugging", <span className="fl-mono">{str(container.targetContainerName)}</span>]
+            : ["", ""],
           ["Restarts", restartCount != null ? str(restartCount) : ""],
           ["Last restart", timestampWithAge(lastRestart, now)],
           ["Running since", timestampWithAge(runningSince, now)],
@@ -569,6 +658,7 @@ function ContainerCard({
           ],
           ["Liveness", Object.keys(liveness).length ? <PlainChips items={probeChips(liveness)} /> : ""],
           ["Readiness", Object.keys(readiness).length ? <PlainChips items={probeChips(readiness)} /> : ""],
+          ["Startup", Object.keys(startup).length ? <PlainChips items={probeChips(startup)} /> : ""],
           ["Command", command ? <CollapsibleText text={command} label="command" muted /> : ""],
           ["Requests", Object.keys(requests).length ? resourceText(requests) : ""],
           ["Limits", Object.keys(limits).length ? resourceText(limits) : ""],
@@ -578,16 +668,54 @@ function ContainerCard({
   );
 }
 
+/**
+ * Pod lifecycle conditions as an ordered timeline. Three aligned columns —
+ * type (with reason), status pill, and the transition time (relative, with the
+ * absolute timestamp on hover) right-aligned so the progression scans top-down.
+ */
+function PodConditionsTimeline({ conditions, now }: { conditions: Condition[]; now: number }) {
+  if (conditions.length === 0) return null;
+  return (
+    <Section title="Conditions">
+      <ol className="grid grid-cols-[auto_auto_1fr] items-center gap-x-4 gap-y-2">
+        {orderPodConditions(conditions).map((condition) => (
+          <li key={condition.type} className="contents">
+            <span className="fl-mono text-sm">
+              {condition.type}
+              {condition.reason && condition.reason !== condition.type && (
+                <span className="text-muted-foreground"> · {condition.reason}</span>
+              )}
+            </span>
+            <StatusPill status={condition.status} kind={conditionKind(condition)} />
+            <span
+              className="text-right text-xs text-muted-foreground tabular-nums"
+              title={condition.lastTransitionTime ? absoluteTimestamp(condition.lastTransitionTime) : undefined}
+            >
+              {condition.lastTransitionTime ? `${ageFromTimestamp(condition.lastTransitionTime, now)} ago` : ""}
+            </span>
+          </li>
+        ))}
+      </ol>
+    </Section>
+  );
+}
+
 function PodDetailView({
   obj,
   now,
   context = "",
   onOpenResource,
+  onOpenLogs,
+  onOpenExec,
 }: {
   obj: K8sObject;
   now: number;
   context?: string;
   onOpenResource?: OpenResource;
+  /** Open logs for a specific container of this pod. */
+  onOpenLogs?: (container: string) => void;
+  /** Open an exec/terminal session in a specific container of this pod. */
+  onOpenExec?: (container: string) => void;
 }) {
   const meta = asRecord(obj.metadata);
   const spec = asRecord(obj.spec);
@@ -598,6 +726,13 @@ function PodDetailView({
   const conditions = asArray(status.conditions) as unknown as Condition[];
   const podIPs = asArray(status.podIPs).map((p) => str(asRecord(p).ip)).filter(Boolean);
   const tolerations = asArray(spec.tolerations);
+  const nodeSelector = (spec.nodeSelector ?? {}) as Record<string, string>;
+  const affinityLines = summarizeAffinity(asRecord(spec.affinity));
+  const hasScheduling =
+    !!spec.nodeName ||
+    Object.keys(nodeSelector).length > 0 ||
+    affinityLines.length > 0 ||
+    tolerations.length > 0;
   const created = str(meta.creationTimestamp);
   const namespace = str(meta.namespace) || null;
   const forward: ForwardTarget | undefined = context
@@ -622,6 +757,10 @@ function PodDetailView({
   const initStatuses = new Map(
     asArray(status.initContainerStatuses).map((s) => [str(asRecord(s).name), asRecord(s)]),
   );
+  const ephemeralStatuses = new Map(
+    asArray(status.ephemeralContainerStatuses).map((s) => [str(asRecord(s).name), asRecord(s)]),
+  );
+  const ephemeralContainers = asArray(spec.ephemeralContainers).map(asRecord);
   const allContainerStatuses = [
     ...asArray(status.initContainerStatuses),
     ...asArray(status.containerStatuses),
@@ -805,11 +944,46 @@ function PodDetailView({
               ),
             ],
             ["QoS Class", str(status.qosClass)],
-            ["Conditions", <ConditionBadges key="c" conditions={conditions} />],
-            ["Tolerations", tolerations.length ? plural(tolerations.length, "toleration") : ""],
           ]}
         />
       </Section>
+
+      <PodConditionsTimeline conditions={conditions} now={now} />
+
+      {hasScheduling && (
+        <Section title="Scheduling">
+          <KV
+            pairs={[
+              [
+                "Node",
+                spec.nodeName ? (
+                  <ResourceLink
+                    target={{ kind: "Node", namespace: null, name: str(spec.nodeName) }}
+                    onOpenResource={onOpenResource}
+                  />
+                ) : (
+                  "Not scheduled"
+                ),
+              ],
+              [
+                "Node selector",
+                Object.keys(nodeSelector).length ? <Chips map={nodeSelector} /> : "",
+              ],
+              ["Affinity", affinityLines.length ? <PlainChips items={affinityLines} /> : ""],
+              [
+                "Tolerations",
+                tolerations.length ? (
+                  <Expandable summary={plural(tolerations.length, "toleration")}>
+                    <PlainChips items={tolerations.map(tolerationText)} />
+                  </Expandable>
+                ) : (
+                  ""
+                ),
+              ],
+            ]}
+          />
+        </Section>
+      )}
 
       {podVolumes.length > 0 && (
         <Section title="Pod Volumes">
@@ -843,18 +1017,38 @@ function PodDetailView({
         ) : (
           asArray(spec.containers).map((c) => {
             const cr = asRecord(c);
+            const cn = str(cr.name);
             return (
               <ContainerCard
-                key={str(cr.name)}
+                key={cn}
                 container={cr}
-                status={containerStatuses.get(str(cr.name))}
+                status={containerStatuses.get(cn)}
                 forward={forward}
                 now={now}
+                onLogs={onOpenLogs ? () => onOpenLogs(cn) : undefined}
+                onExec={onOpenExec ? () => onOpenExec(cn) : undefined}
               />
             );
           })
         )}
       </Section>
+
+      {ephemeralContainers.length > 0 && (
+        <Section title="Ephemeral Containers">
+          {ephemeralContainers.map((cr) => {
+            const cn = str(cr.name);
+            return (
+              <ContainerCard
+                key={cn}
+                container={cr}
+                status={ephemeralStatuses.get(cn)}
+                now={now}
+                onLogs={onOpenLogs ? () => onOpenLogs(cn) : undefined}
+              />
+            );
+          })}
+        </Section>
+      )}
     </div>
   );
 }
@@ -956,7 +1150,24 @@ function WorkloadDetailView({
                 ""
               ),
             ],
-            ["Strategy Type", str(asRecord(spec.strategy).type) || str(spec.updateStrategy && asRecord(spec.updateStrategy).type)],
+            [
+              "Strategy Type",
+              kind === "Deployment"
+                ? str(asRecord(spec.strategy).type)
+                : updateStrategyText(asRecord(spec.updateStrategy)),
+            ],
+            ...(kind === "StatefulSet"
+              ? ([
+                  ["Service", <span key="svc" className="fl-mono">{str(spec.serviceName)}</span>],
+                  [
+                    "Volume claim templates",
+                    asArray(spec.volumeClaimTemplates)
+                      .map((t) => str(asRecord(asRecord(t).metadata).name))
+                      .filter(Boolean)
+                      .join(", ") || "—",
+                  ],
+                ] as Pair[])
+              : []),
             ["Status", <StatusPill key="st" status={phase} kind={phaseKind(phase)} />],
             ["Conditions", <ConditionBadges key="c" conditions={conditions} />],
           ]}
@@ -983,9 +1194,21 @@ function WorkloadDetailView({
   );
 }
 
+/** "RollingUpdate (partition 2)" / "RollingUpdate (max unavailable 1)" / "OnDelete". */
+function updateStrategyText(strategy: Record<string, unknown>): string {
+  const type = str(strategy.type) || "RollingUpdate";
+  const ru = asRecord(strategy.rollingUpdate);
+  const parts: string[] = [];
+  if (ru.partition != null) parts.push(`partition ${str(ru.partition)}`);
+  if (ru.maxUnavailable != null) parts.push(`max unavailable ${str(ru.maxUnavailable)}`);
+  if (ru.maxSurge != null) parts.push(`max surge ${str(ru.maxSurge)}`);
+  return parts.length ? `${type} (${parts.join(", ")})` : type;
+}
+
 function DaemonSetBody({ obj }: { obj: K8sObject }) {
   const status = asRecord(obj.status);
-  const selector = asRecord(asRecord(asRecord(obj.spec).selector).matchLabels) as Record<string, string>;
+  const spec = asRecord(obj.spec);
+  const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
   return (
     <Section title="Scheduling">
       <KV
@@ -995,6 +1218,7 @@ function DaemonSetBody({ obj }: { obj: K8sObject }) {
           ["Ready", str(status.numberReady)],
           ["Up-to-date", str(status.updatedNumberScheduled)],
           ["Available", str(status.numberAvailable)],
+          ["Update strategy", updateStrategyText(asRecord(spec.updateStrategy))],
           ["Selector", <Chips key="s" map={selector} />],
         ]}
       />
@@ -1012,10 +1236,40 @@ interface PortRow {
   servicePort?: number;
 }
 
-function ServiceBody({ obj, context = "" }: { obj: K8sObject; context?: string }) {
+function ServiceBody({
+  obj,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
   const spec = asRecord(obj.spec);
   const meta = asRecord(obj.metadata);
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
   const selector = asRecord(spec.selector) as Record<string, string>;
+
+  // The service's EndpointSlices carry a `kubernetes.io/service-name` label the
+  // backend surfaces as `service`; list them in the namespace and keep ours.
+  // This closes the service → endpointslice → pods navigation chain.
+  const [sliceTargets, setSliceTargets] = useState<ResourceTarget[]>([]);
+  useEffect(() => {
+    setSliceTargets([]);
+    if (!context || !namespace || !name) return;
+    let active = true;
+    void listEndpointSlices(context, namespace).then((r) => {
+      if (!active) return;
+      const mine = (r.endpointslices ?? [])
+        .filter((s) => s.service === name)
+        .map((s): ResourceTarget => ({ kind: "EndpointSlice", namespace, name: s.name }));
+      setSliceTargets(mine);
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
   const ports: PortRow[] = asArray(spec.ports).map((p, i) => {
     const pr = asRecord(p);
     return {
@@ -1065,6 +1319,11 @@ function ServiceBody({ obj, context = "" }: { obj: K8sObject; context?: string }
           <Table columns={portCols} data={ports} getRowKey={(p) => p.key} />
         </Section>
       )}
+      {sliceTargets.length > 0 && (
+        <Section title="Endpoint Slices">
+          <LinkedResources targets={sliceTargets} onOpenResource={onOpenResource} />
+        </Section>
+      )}
     </>
   );
 }
@@ -1110,9 +1369,16 @@ function NodeBody({ obj }: { obj: K8sObject }) {
   );
 }
 
-function JobBody({ obj }: { obj: K8sObject }) {
+function JobBody({ obj, now }: { obj: K8sObject; now: number }) {
   const spec = asRecord(obj.spec);
   const status = asRecord(obj.status);
+  const startTime = str(status.startTime);
+  const completionTime = str(status.completionTime);
+  const duration = completionTime
+    ? durationBetween(startTime, completionTime)
+    : startTime
+      ? `${ageFromTimestamp(startTime, now)} (running)`
+      : "—";
   return (
     <Section title="Job">
       <KV
@@ -1122,16 +1388,34 @@ function JobBody({ obj }: { obj: K8sObject }) {
           ["Succeeded", str(status.succeeded) || "0"],
           ["Failed", str(status.failed) || "0"],
           ["Active", str(status.active) || "0"],
+          ["Started", startTime ? timestampWithAge(startTime, now) : "—"],
+          ["Completed", completionTime ? timestampWithAge(completionTime, now) : "—"],
+          ["Duration", duration],
         ]}
       />
     </Section>
   );
 }
 
-function CronJobBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?: OpenResource }) {
+function CronJobBody({
+  obj,
+  now,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  now: number;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
+  const meta = asRecord(obj.metadata);
   const spec = asRecord(obj.spec);
   const status = asRecord(obj.status);
-  const namespace = str(asRecord(obj.metadata).namespace) || null;
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
+  const lastSchedule = str(status.lastScheduleTime);
+  const successKept = str(spec.successfulJobsHistoryLimit) || "3";
+  const failedKept = str(spec.failedJobsHistoryLimit) || "1";
   const activeJobs = asArray(status.active)
     .map(asRecord)
     .map((job) => ({
@@ -1141,23 +1425,35 @@ function CronJobBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?:
     }))
     .filter((job) => job.name);
   return (
-    <Section title="Schedule">
-      <KV
-        pairs={[
-          ["Schedule", <span className="fl-mono">{str(spec.schedule)}</span>],
-          ["Suspend", spec.suspend === true ? "Yes" : "No"],
-          ["Concurrency policy", str(spec.concurrencyPolicy)],
-          [
-            "Active jobs",
-            activeJobs.length ? (
-              <LinkedResources targets={activeJobs} onOpenResource={onOpenResource} />
-            ) : (
-              "0"
-            ),
-          ],
-        ]}
-      />
-    </Section>
+    <>
+      <Section title="Schedule">
+        <KV
+          pairs={[
+            ["Schedule", <span className="fl-mono">{str(spec.schedule)}</span>],
+            ["Suspend", spec.suspend === true ? "Yes" : "No"],
+            ["Concurrency policy", str(spec.concurrencyPolicy)],
+            ["Last schedule", lastSchedule ? timestampWithAge(lastSchedule, now) : "—"],
+            ["History (kept)", `${successKept} succeeded, ${failedKept} failed`],
+            [
+              "Active jobs",
+              activeJobs.length ? (
+                <LinkedResources targets={activeJobs} onOpenResource={onOpenResource} />
+              ) : (
+                "0"
+              ),
+            ],
+          ]}
+        />
+      </Section>
+      {context && namespace && (
+        <CronJobJobs
+          context={context}
+          namespace={namespace}
+          ownerName={name}
+          onOpenResource={onOpenResource}
+        />
+      )}
+    </>
   );
 }
 
@@ -1306,8 +1602,7 @@ function privateKeyType(pem: string): string {
   return pem ? "Unrecognized format" : "Missing";
 }
 
-function TlsSecretBody({ obj }: { obj: K8sObject }) {
-  const data = asRecord(obj.data) as Record<string, string>;
+function TlsSecretBody({ data }: { data: Record<string, string> }) {
   const certificate = decodeBase64(str(data["tls.crt"]));
   const privateKey = decodeBase64(str(data["tls.key"]));
   const certificateCount = certificate.match(/-----BEGIN CERTIFICATE-----/g)?.length ?? 0;
@@ -1411,9 +1706,7 @@ function dockerRegistries(data: Record<string, string>, type: string): DockerReg
   }
 }
 
-function DockerSecretBody({ obj }: { obj: K8sObject }) {
-  const data = asRecord(obj.data) as Record<string, string>;
-  const type = str(obj.type);
+function DockerSecretBody({ data, type }: { data: Record<string, string>; type: string }) {
   const configKey = type === "kubernetes.io/dockercfg" ? ".dockercfg" : ".dockerconfigjson";
   const registries = dockerRegistries(data, type);
   const columns: Column<DockerRegistryRow>[] = [
@@ -1442,10 +1735,48 @@ function DockerSecretBody({ obj }: { obj: K8sObject }) {
   );
 }
 
-function GeneralSecretBody({ obj }: { obj: K8sObject }) {
-  const data = asRecord(obj.data) as Record<string, string>;
+/**
+ * Fetch a Secret's real (base64) values via the gated `getSecret`. `getObject`
+ * redacts Secret data, so this is how the detail views get the actual values.
+ * Falls back to the redacted keys (blank values) while loading or when there's
+ * no context (a static preview). Values sit in memory but stay masked in the
+ * DOM until the user reveals a key.
+ */
+function useSecretData(
+  context: string,
+  namespace: string,
+  name: string,
+  redacted: Record<string, string>,
+): Record<string, string> {
+  const [data, setData] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    setData(null);
+    if (!context) return;
+    let active = true;
+    void getSecret(context, namespace, name).then((r) => {
+      if (active && r.data) setData(r.data);
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
+  return data ?? redacted;
+}
+
+function GeneralSecretBody({
+  obj,
+  data,
+  context = "",
+  onEdited,
+}: {
+  obj: K8sObject;
+  data: Record<string, string>;
+  context?: string;
+  onEdited?: () => void;
+}) {
+  const meta = asRecord(obj.metadata);
   const keys = Object.keys(data);
-  const totalBytes = Object.values(data).reduce((total, value) => total + decodedByteLength(str(value)), 0);
+  const immutable = obj.immutable === true;
   return (
     <>
       <Section title="Secret summary">
@@ -1453,78 +1784,287 @@ function GeneralSecretBody({ obj }: { obj: K8sObject }) {
           pairs={[
             ["Type", str(obj.type) || "Opaque"],
             ["Keys", plural(keys.length, "key")],
-            ["Decoded size", formatBytes(totalBytes)],
-            ["Immutable", obj.immutable === true ? "Yes" : "No"],
+            ["Immutable", immutable ? "Yes" : "No"],
           ]}
         />
       </Section>
-      <SecretData data={data} />
+      <Section title={`Data (${plural(keys.length, "key")})`}>
+        {/* Immutable Secrets can't be edited; render read-only by withholding context. */}
+        <ConfigDataEditor
+          context={immutable ? "" : context}
+          kind="Secret"
+          namespace={str(meta.namespace)}
+          name={str(meta.name)}
+          data={data}
+          secret
+          onSaved={onEdited}
+        />
+      </Section>
     </>
   );
 }
 
-function SecretBody({ obj }: { obj: K8sObject }) {
+function SecretBody({
+  obj,
+  context = "",
+  onEdited,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onEdited?: () => void;
+}) {
+  const meta = asRecord(obj.metadata);
   const type = str(obj.type) || "Opaque";
-  if (type === "kubernetes.io/tls") return <TlsSecretBody obj={obj} />;
+  const redacted = asRecord(obj.data) as Record<string, string>;
+  const data = useSecretData(context, str(meta.namespace), str(meta.name), redacted);
+  if (type === "kubernetes.io/tls") return <TlsSecretBody data={data} />;
   if (type === "kubernetes.io/dockerconfigjson" || type === "kubernetes.io/dockercfg")
-    return <DockerSecretBody obj={obj} />;
-  return <GeneralSecretBody obj={obj} />;
+    return <DockerSecretBody data={data} type={type} />;
+  return <GeneralSecretBody obj={obj} data={data} context={context} onEdited={onEdited} />;
 }
 
-function ConfigBody({ obj }: { obj: K8sObject }) {
+/**
+ * Editable key/value data for ConfigMaps and Secrets. Secret values are masked
+ * until the user reveals a key (which decodes it for editing); Save only sends
+ * the keys that actually changed, as plaintext (the backend patches
+ * ConfigMap `data` / Secret `stringData`, so the apiserver handles encoding).
+ * Editing is only enabled when a `context` is available (i.e. the live detail).
+ */
+export function ConfigDataEditor({
+  context,
+  kind,
+  namespace,
+  name,
+  data,
+  secret,
+  onSaved,
+}: {
+  context: string;
+  kind: string;
+  namespace: string;
+  name: string;
+  /** Plaintext-or-base64 values by key. For Secrets these are the real values
+   * fetched via the gated `getSecret` (see SecretBody); base64 here. */
+  data: Record<string, string>;
+  secret: boolean;
+  onSaved?: () => void;
+}) {
+  // Baseline plaintext per key (Secret values decoded for editing).
+  const [baseline, setBaseline] = useState<Record<string, string>>({});
+  const [edited, setEdited] = useState<Record<string, string>>({});
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const keys = Object.keys(data);
+
+  // Baseline follows the data (Secret values arrive asynchronously via the
+  // gated fetch); updating it here must NOT clobber the user's reveal/edit
+  // state, so those reset only when the target object itself changes.
+  useEffect(() => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data)) out[k] = secret ? decodeBase64(str(v)) : str(v);
+    setBaseline(out);
+  }, [data, secret]);
+
+  useEffect(() => {
+    setEdited({});
+    setRevealed({});
+  }, [context, kind, namespace, name]);
+
+  const valueOf = (k: string) => edited[k] ?? baseline[k] ?? "";
+  const changedKeys = keys.filter((k) => edited[k] !== undefined && edited[k] !== (baseline[k] ?? ""));
+  const editable = context !== "";
+
+  function reveal(k: string) {
+    setRevealed((r) => ({ ...r, [k]: !r[k] }));
+  }
+
+  async function copy(k: string) {
+    try {
+      await navigator.clipboard?.writeText(valueOf(k));
+      setCopied(k);
+      setTimeout(() => setCopied((c) => (c === k ? null : c)), 1500);
+    } catch {
+      /* clipboard unavailable — ignore */
+    }
+  }
+
+  async function save() {
+    setBusy(true);
+    setErr("");
+    const patch = Object.fromEntries(changedKeys.map((k) => [k, edited[k]]));
+    const r = await updateConfigData(context, kind, namespace, name, patch);
+    setBusy(false);
+    if (r.error) {
+      setErr(r.error);
+      return;
+    }
+    setEdited({});
+    onSaved?.();
+  }
+
+  if (keys.length === 0) return <span className="fl-detail-empty">No data</span>;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {keys.map((k) => {
+        const shown = !secret || revealed[k];
+        return (
+          <div key={k} className="fl-secret-entry">
+            <div className="fl-secret-entry__header">
+              <span className="fl-mono">{k}</span>
+              <span className="fl-config-editor__key-actions">
+                {shown && (
+                  <button
+                    type="button"
+                    className="fl-secret-entry__toggle"
+                    aria-label={`Copy value for ${k}`}
+                    onClick={() => void copy(k)}
+                  >
+                    {copied === k ? "Copied" : "Copy"}
+                  </button>
+                )}
+                {secret && (
+                  <button
+                    type="button"
+                    className="fl-secret-entry__toggle"
+                    onClick={() => void reveal(k)}
+                  >
+                    {revealed[k] ? "Hide" : "Reveal"}
+                  </button>
+                )}
+              </span>
+            </div>
+            {shown ? (
+              <textarea
+                className="fl-config-editor__value"
+                aria-label={`Value for ${k}`}
+                value={valueOf(k)}
+                readOnly={!editable}
+                onChange={(e) => setEdited((ed) => ({ ...ed, [k]: e.target.value }))}
+                rows={valueOf(k).split("\n").length > 1 ? 4 : 1}
+              />
+            ) : (
+              <pre className="fl-secret-entry__value">••••••••</pre>
+            )}
+          </div>
+        );
+      })}
+      {editable && changedKeys.length > 0 && (
+        <div className="fl-config-editor__actions">
+          <Button size="sm" onClick={() => void save()} busy={busy}>
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setEdited({})} disabled={busy}>
+            Reset
+          </Button>
+        </div>
+      )}
+      {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
+    </div>
+  );
+}
+
+function ConfigBody({
+  obj,
+  context = "",
+  onEdited,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onEdited?: () => void;
+}) {
+  const meta = asRecord(obj.metadata);
   const data = asRecord(obj.data) as Record<string, string>;
   const keys = Object.keys(data);
   return (
     <Section title={`Data (${plural(keys.length, "key")})`}>
-      {keys.length === 0 ? (
-        <span className="fl-detail-empty">No data</span>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {keys.map((k) => (
-            <ConfigDataEntry key={k} name={k} value={str(data[k])} secret={false} />
-          ))}
-        </div>
-      )}
+      <ConfigDataEditor
+        context={context}
+        kind="ConfigMap"
+        namespace={str(meta.namespace)}
+        name={str(meta.name)}
+        data={data}
+        secret={false}
+        onSaved={onEdited}
+      />
     </Section>
   );
 }
 
-function PvcBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?: OpenResource }) {
+function PvcBody({
+  obj,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
   const spec = asRecord(obj.spec);
   const status = asRecord(obj.status);
+  const meta = asRecord(obj.metadata);
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
   const phase = str(status.phase);
+
+  // Pods that mount this claim — the backend scans pod volumes for the claim
+  // name; completes the PVC → consuming pods navigation.
+  const [podTargets, setPodTargets] = useState<ResourceTarget[]>([]);
+  useEffect(() => {
+    setPodTargets([]);
+    if (!context || !namespace || !name) return;
+    let active = true;
+    void podsForPvc(context, namespace, name).then((r) => {
+      if (!active) return;
+      setPodTargets((r.pods ?? []).map((p) => ({ kind: "Pod", namespace, name: p.name })));
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
+
   return (
-    <Section title="Volume">
-      <KV
-        pairs={[
-          ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
-          ["Capacity", str(asRecord(status.capacity).storage)],
-          ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
-          [
-            "Storage class",
-            spec.storageClassName ? (
-              <ResourceLink
-                target={{ kind: "StorageClass", namespace: null, name: str(spec.storageClassName) }}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-          [
-            "Volume",
-            spec.volumeName ? (
-              <ResourceLink
-                target={{ kind: "PersistentVolume", namespace: null, name: str(spec.volumeName) }}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-        ]}
-      />
-    </Section>
+    <>
+      <Section title="Volume">
+        <KV
+          pairs={[
+            ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
+            ["Capacity", formatStorageSize(str(asRecord(status.capacity).storage))],
+            ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
+            [
+              "Storage class",
+              spec.storageClassName ? (
+                <ResourceLink
+                  target={{ kind: "StorageClass", namespace: null, name: str(spec.storageClassName) }}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+            [
+              "Volume",
+              spec.volumeName ? (
+                <ResourceLink
+                  target={{ kind: "PersistentVolume", namespace: null, name: str(spec.volumeName) }}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+          ]}
+        />
+      </Section>
+      {podTargets.length > 0 && (
+        <Section title="Consumed by">
+          <LinkedResources targets={podTargets} onOpenResource={onOpenResource} />
+        </Section>
+      )}
+    </>
   );
 }
 
@@ -1545,7 +2085,7 @@ function PersistentVolumeBody({
       <KV
         pairs={[
           ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
-          ["Capacity", str(asRecord(spec.capacity).storage)],
+          ["Capacity", formatStorageSize(str(asRecord(spec.capacity).storage))],
           ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
           ["Reclaim policy", str(spec.persistentVolumeReclaimPolicy)],
           ["Volume mode", str(spec.volumeMode)],
@@ -1700,6 +2240,29 @@ interface QuotaRow {
   hard: string;
 }
 
+/** Parse a Kubernetes quantity (e.g. "500m", "2Gi", "4") to a base-unit number. */
+export function parseQuantity(q: string): number | null {
+  const m = /^([0-9.]+)\s*([a-zA-Z]*)$/.exec((q ?? "").trim());
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (Number.isNaN(n)) return null;
+  const unit = m[2];
+  const binary: Record<string, number> = { Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60 };
+  const decimal: Record<string, number> = { k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18 };
+  if (unit === "") return n;
+  if (unit === "m") return n / 1000;
+  if (binary[unit]) return n * binary[unit];
+  if (decimal[unit]) return n * decimal[unit];
+  return n; // unknown unit — same on both sides, so the ratio still holds
+}
+
+function usagePercent(used: string, hard: string): number | null {
+  const u = parseQuantity(used);
+  const h = parseQuantity(hard);
+  if (u == null || h == null || h === 0) return null;
+  return Math.round((u / h) * 100);
+}
+
 function ResourceQuotaBody({ obj }: { obj: K8sObject }) {
   const status = asRecord(obj.status);
   const hard = asRecord(status.hard);
@@ -1714,6 +2277,28 @@ function ResourceQuotaBody({ obj }: { obj: K8sObject }) {
     { key: "resource", header: "Resource", render: (r) => <span className="fl-mono">{r.resource}</span> },
     { key: "used", header: "Used", render: (r) => r.used },
     { key: "hard", header: "Hard", render: (r) => r.hard },
+    {
+      key: "usage",
+      header: "Usage",
+      render: (r) => {
+        const pct = usagePercent(r.used, r.hard);
+        if (pct == null) return <span className="fl-detail-empty">—</span>;
+        const kind: StatusKind = pct >= 90 ? "danger" : pct >= 75 ? "warning" : "success";
+        return (
+          <div
+            className={`fl-usage-bar fl-usage-bar--${kind}`}
+            role="progressbar"
+            aria-label={`${r.resource} usage`}
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="fl-usage-bar__fill" style={{ width: `${Math.min(100, pct)}%` }} />
+            <span className="fl-usage-bar__label">{pct}%</span>
+          </div>
+        );
+      },
+    },
   ];
   return (
     <Section title="Quota">
@@ -1760,40 +2345,109 @@ function NetworkPolicyBody({ obj }: { obj: K8sObject }) {
   );
 }
 
-function ServiceAccountBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?: OpenResource }) {
+function ServiceAccountBody({
+  obj,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
   const secrets = asArray(obj.secrets).map((s) => str(asRecord(s).name)).filter(Boolean);
   const pull = asArray(obj.imagePullSecrets).map((s) => str(asRecord(s).name)).filter(Boolean);
-  const namespace = str(asRecord(obj.metadata).namespace) || null;
+  const meta = asRecord(obj.metadata);
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
+
+  // "What can this SA do?" — the (Cluster)RoleBindings that grant it permissions
+  // and the pods that run as it. Both are reverse lookups the backend resolves.
+  const [bindings, setBindings] = useState<SaBinding[]>([]);
+  const [podTargets, setPodTargets] = useState<ResourceTarget[]>([]);
+  useEffect(() => {
+    setBindings([]);
+    setPodTargets([]);
+    if (!context || !namespace || !name) return;
+    let active = true;
+    void bindingsForServiceAccount(context, namespace, name).then((r) => {
+      if (active) setBindings(r.bindings ?? []);
+    });
+    void podsForServiceAccount(context, namespace, name).then((r) => {
+      if (active) setPodTargets((r.pods ?? []).map((p) => ({ kind: "Pod", namespace, name: p.name })));
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
+
   return (
-    <Section title="Service Account">
-      <KV
-        pairs={[
-          [
-            "Secrets",
-            secrets.length ? (
-              <LinkedResources
-                targets={secrets.map((name) => ({ kind: "Secret", namespace, name }))}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-          [
-            "Image pull secrets",
-            pull.length ? (
-              <LinkedResources
-                targets={pull.map((name) => ({ kind: "Secret", namespace, name }))}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-          ["Automount token", obj.automountServiceAccountToken === false ? "No" : "Yes"],
-        ]}
-      />
-    </Section>
+    <>
+      <Section title="Service Account">
+        <KV
+          pairs={[
+            [
+              "Secrets",
+              secrets.length ? (
+                <LinkedResources
+                  targets={secrets.map((name) => ({ kind: "Secret", namespace, name }))}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+            [
+              "Image pull secrets",
+              pull.length ? (
+                <LinkedResources
+                  targets={pull.map((name) => ({ kind: "Secret", namespace, name }))}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+            ["Automount token", obj.automountServiceAccountToken === false ? "No" : "Yes"],
+          ]}
+        />
+      </Section>
+      {(bindings.length > 0 || podTargets.length > 0) && (
+        <Section title="Used by">
+          <KV
+            pairs={[
+              [
+                "Bindings",
+                bindings.length ? (
+                  <div className="fl-sa-bindings">
+                    {bindings.map((b, i) => (
+                      <div key={`${b.kind}/${b.name}/${i}`}>
+                        <ResourceLink
+                          target={{ kind: b.kind, namespace: b.namespace, name: b.name }}
+                          onOpenResource={onOpenResource}
+                        >
+                          {b.kind}/{b.name}
+                        </ResourceLink>{" "}
+                        grants <span className="fl-mono">{b.role}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  ""
+                ),
+              ],
+              [
+                "Pods",
+                podTargets.length ? (
+                  <LinkedResources targets={podTargets} onOpenResource={onOpenResource} />
+                ) : (
+                  ""
+                ),
+              ],
+            ]}
+          />
+        </Section>
+      )}
+    </>
   );
 }
 
@@ -2075,30 +2729,34 @@ function KindBody({
   kind,
   obj,
   context = "",
+  now = Date.now(),
+  onEdited,
   onOpenResource,
 }: {
   kind: string;
   obj: K8sObject;
   context?: string;
+  now?: number;
+  onEdited?: () => void;
   onOpenResource?: OpenResource;
 }) {
   switch (kind) {
     case "DaemonSet":
       return <DaemonSetBody obj={obj} />;
     case "Service":
-      return <ServiceBody obj={obj} context={context} />;
+      return <ServiceBody obj={obj} context={context} onOpenResource={onOpenResource} />;
     case "Node":
       return <NodeBody obj={obj} />;
     case "Job":
-      return <JobBody obj={obj} />;
+      return <JobBody obj={obj} now={now} />;
     case "CronJob":
-      return <CronJobBody obj={obj} onOpenResource={onOpenResource} />;
+      return <CronJobBody obj={obj} now={now} context={context} onOpenResource={onOpenResource} />;
     case "ConfigMap":
-      return <ConfigBody obj={obj} />;
+      return <ConfigBody obj={obj} context={context} onEdited={onEdited} />;
     case "Secret":
-      return <SecretBody obj={obj} />;
+      return <SecretBody obj={obj} context={context} onEdited={onEdited} />;
     case "PersistentVolumeClaim":
-      return <PvcBody obj={obj} onOpenResource={onOpenResource} />;
+      return <PvcBody obj={obj} context={context} onOpenResource={onOpenResource} />;
     case "PersistentVolume":
       return <PersistentVolumeBody obj={obj} onOpenResource={onOpenResource} />;
     case "Ingress":
@@ -2112,7 +2770,7 @@ function KindBody({
     case "NetworkPolicy":
       return <NetworkPolicyBody obj={obj} />;
     case "ServiceAccount":
-      return <ServiceAccountBody obj={obj} onOpenResource={onOpenResource} />;
+      return <ServiceAccountBody obj={obj} context={context} onOpenResource={onOpenResource} />;
     case "Endpoints":
       return <EndpointsBody obj={obj} onOpenResource={onOpenResource} />;
     case "EndpointSlice":
@@ -2166,12 +2824,14 @@ function GenericDetail({
   obj,
   now,
   context = "",
+  onEdited,
   onOpenResource,
 }: {
   kind: string;
   obj: K8sObject;
   now: number;
   context?: string;
+  onEdited?: () => void;
   onOpenResource?: OpenResource;
 }) {
   const meta = asRecord(obj.metadata);
@@ -2219,7 +2879,7 @@ function GenericDetail({
         <Chips map={meta.annotations as Record<string, string>} />
       </Section>
 
-      <KindBody kind={kind} obj={obj} context={context} onOpenResource={onOpenResource} />
+      <KindBody kind={kind} obj={obj} context={context} now={now} onEdited={onEdited} onOpenResource={onOpenResource} />
 
       {context && namespace && Object.keys(podSelector).length > 0 && (
         <ManagedPods
@@ -2241,17 +2901,31 @@ export function ObjectDetail({
   obj,
   now,
   context = "",
+  onEdited,
   onOpenResource,
+  onOpenLogs,
+  onOpenExec,
 }: {
   kind: string;
   obj: K8sObject;
   now: number;
   context?: string;
+  onEdited?: () => void;
   onOpenResource?: OpenResource;
+  /** Open logs scoped to a container (Pod detail only). */
+  onOpenLogs?: (container: string) => void;
+  /** Open an exec session in a container (Pod detail only). */
+  onOpenExec?: (container: string) => void;
 }) {
   const meta = asRecord(obj.metadata);
-  // Metrics chart (Pod/Node) sits above the rest, matching Lens. Needs a
-  // context to poll; in tests without one it's simply omitted.
+  // Metrics chart sits above the rest, matching Lens. Pods and Nodes read their
+  // own usage; workload controllers aggregate the usage of their pods (matched
+  // by the controller's label selector). Needs a context to poll; in tests
+  // without one it's simply omitted.
+  const WORKLOAD_METRIC_KINDS = ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"];
+  const workloadSelector = asRecord(asRecord(obj.spec).selector).matchLabels as
+    | Record<string, string>
+    | undefined;
   const metrics =
     context && (kind === "Pod" || kind === "Node") ? (
       <MetricsPanel
@@ -2259,6 +2933,14 @@ export function ObjectDetail({
         context={context}
         namespace={str(meta.namespace) || null}
         name={str(meta.name)}
+      />
+    ) : context && WORKLOAD_METRIC_KINDS.includes(kind) && workloadSelector ? (
+      <MetricsPanel
+        kind={kind as "Deployment" | "StatefulSet" | "DaemonSet" | "ReplicaSet" | "Job"}
+        context={context}
+        namespace={str(meta.namespace) || null}
+        name={str(meta.name)}
+        selector={workloadSelector}
       />
     ) : null;
 
@@ -2271,18 +2953,23 @@ export function ObjectDetail({
           now={now}
           context={context}
           onOpenResource={onOpenResource}
+          onOpenLogs={onOpenLogs}
+          onOpenExec={onOpenExec}
         />
       </>
     );
   if (kind === "Deployment" || kind === "StatefulSet" || kind === "ReplicaSet")
     return (
-      <WorkloadDetailView
-        kind={kind}
-        obj={obj}
-        now={now}
-        context={context}
-        onOpenResource={onOpenResource}
-      />
+      <>
+        {metrics}
+        <WorkloadDetailView
+          kind={kind}
+          obj={obj}
+          now={now}
+          context={context}
+          onOpenResource={onOpenResource}
+        />
+      </>
     );
   return (
     <>
@@ -2292,6 +2979,7 @@ export function ObjectDetail({
         obj={obj}
         now={now}
         context={context}
+        onEdited={onEdited}
         onOpenResource={onOpenResource}
       />
     </>
@@ -2313,17 +3001,28 @@ export function ResourceOverview({
   namespace,
   name,
   getObjectFn = getObject,
+  reloadKey = 0,
   onOpenResource,
+  onOpenLogs,
+  onOpenExec,
 }: {
   context: string;
   kind: string;
   namespace: string | null;
   name: string;
   getObjectFn?: typeof getObject;
+  /** Bumped by the parent after a write action to re-fetch the shown object. */
+  reloadKey?: number;
   onOpenResource?: OpenResource;
+  /** Open logs scoped to a container (Pod detail only). */
+  onOpenLogs?: (container: string) => void;
+  /** Open an exec session in a container (Pod detail only). */
+  onOpenExec?: (container: string) => void;
 }) {
   const [obj, setObj] = useState<K8sObject | null>(null);
   const [error, setError] = useState("");
+  // Bumped locally after an in-place edit saves, to re-fetch the fresh object.
+  const [editReload, setEditReload] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -2337,7 +3036,7 @@ export function ResourceOverview({
     return () => {
       active = false;
     };
-  }, [context, kind, namespace, name, getObjectFn]);
+  }, [context, kind, namespace, name, getObjectFn, reloadKey, editReload]);
 
   if (error) return <p style={{ color: "var(--fl-color-danger)" }}>Error: {error}</p>;
   if (obj === null) return <Spinner label="Loading details" />;
@@ -2347,7 +3046,10 @@ export function ResourceOverview({
       obj={obj}
       now={Date.now()}
       context={context}
+      onEdited={() => setEditReload((n) => n + 1)}
       onOpenResource={onOpenResource}
+      onOpenLogs={onOpenLogs}
+      onOpenExec={onOpenExec}
     />
   );
 }

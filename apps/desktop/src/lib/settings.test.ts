@@ -21,6 +21,8 @@ import {
   clampTimeoutSecs,
   getRequestTimeoutSecs,
   setRequestTimeoutSecs,
+  loadHiddenColumns,
+  saveHiddenColumns,
 } from "./settings";
 
 beforeEach(() => localStorage.clear());
@@ -95,6 +97,22 @@ describe("settings persistence", () => {
   it("persists and deduplicates additional kubeconfig files", () => {
     saveKubeconfigFiles(["/tmp/a", "/tmp/b", "/tmp/a"]);
     expect(loadKubeconfigFiles()).toEqual(["/tmp/a", "/tmp/b"]);
+  });
+
+  it("persists hidden columns per view independently", () => {
+    expect(loadHiddenColumns("nodes")).toEqual([]);
+    saveHiddenColumns("nodes", ["cpu", "memory", "cpu"]);
+    expect(loadHiddenColumns("nodes")).toEqual(["cpu", "memory"]);
+    // A different view keeps its own set.
+    expect(loadHiddenColumns("pods")).toEqual([]);
+    saveHiddenColumns("pods", ["restarts"]);
+    expect(loadHiddenColumns("nodes")).toEqual(["cpu", "memory"]);
+    expect(loadHiddenColumns("pods")).toEqual(["restarts"]);
+  });
+
+  it("returns no hidden columns when storage is corrupt", () => {
+    localStorage.setItem("srelens.hiddenColumns", "{not json");
+    expect(loadHiddenColumns("nodes")).toEqual([]);
   });
 
   it("persists context order and appends unordered contexts", () => {

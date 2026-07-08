@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Filter } from "lucide-react";
 import {
   Table as ShadTable,
@@ -41,6 +41,32 @@ function getColumnValue<T>(row: T, column: Column<T>): unknown {
   return column.getValue ? column.getValue(row) : (row as Record<string, unknown>)[column.key];
 }
 
+/**
+ * The slice of rows to render for a virtualized list. Returns the full range
+ * when `rowHeight` is unknown (0) — e.g. before measurement or in jsdom — so the
+ * table degrades to rendering everything rather than dividing by zero.
+ */
+export function computeVisibleRange({
+  scrollTop,
+  viewportHeight,
+  rowHeight,
+  total,
+  overscan,
+}: {
+  scrollTop: number;
+  viewportHeight: number;
+  rowHeight: number;
+  total: number;
+  overscan: number;
+}): { start: number; end: number } {
+  if (rowHeight <= 0) return { start: 0, end: total };
+  const firstVisible = Math.floor(scrollTop / rowHeight);
+  const visibleCount = Math.ceil(viewportHeight / rowHeight);
+  const end = Math.min(total, firstVisible + visibleCount + overscan);
+  const start = Math.min(Math.max(0, firstVisible - overscan), end);
+  return { start, end };
+}
+
 /** Apply the toolbar query to one selected column, or all searchable columns. */
 export function filterTableData<T>(
   data: T[],
@@ -75,6 +101,8 @@ export function Table<T>({
   const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const columnSignature = columns.map((column) => column.key).join("|");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [metrics, setMetrics] = useState({ scrollTop: 0, viewportHeight: 0, rowHeight: 0 });
 
   useEffect(() => setColumnWidths({}), [columnSignature]);
 
@@ -164,10 +192,60 @@ export function Table<T>({
     ? Object.values(columnWidths).reduce((total, width) => total + width, 0)
     : undefined;
 
+  // Virtualize long lists: render only the rows near the viewport plus spacer
+  // rows that reserve the scroll height. Below the threshold — or before the row
+  // height can be measured (jsdom, first paint) — render everything.
+  const VIRTUALIZE_THRESHOLD = 60;
+  const OVERSCAN = 8;
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || visibleData.length <= VIRTUALIZE_THRESHOLD) return;
+    let scrollParent: HTMLElement | null = root.parentElement;
+    while (scrollParent && scrollParent !== document.body) {
+      const overflowY = getComputedStyle(scrollParent).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") break;
+      scrollParent = scrollParent.parentElement;
+    }
+    if (!scrollParent) return;
+    const parent = scrollParent;
+    const measure = () => {
+      const firstRow = root.querySelector<HTMLElement>("tbody tr.fl-data-table__row");
+      setMetrics({
+        scrollTop: parent.scrollTop,
+        viewportHeight: parent.clientHeight,
+        rowHeight: firstRow ? firstRow.getBoundingClientRect().height : 0,
+      });
+    };
+    measure();
+    parent.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(parent);
+    return () => {
+      parent.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [visibleData.length]);
+
+  const virtualize = visibleData.length > VIRTUALIZE_THRESHOLD && metrics.rowHeight > 0;
+  const range = virtualize
+    ? computeVisibleRange({
+        scrollTop: metrics.scrollTop,
+        viewportHeight: metrics.viewportHeight,
+        rowHeight: metrics.rowHeight,
+        total: visibleData.length,
+        overscan: OVERSCAN,
+      })
+    : { start: 0, end: visibleData.length };
+  const windowRows = virtualize ? visibleData.slice(range.start, range.end) : visibleData;
+  const topPad = virtualize ? range.start * metrics.rowHeight : 0;
+  const bottomPad = virtualize ? (visibleData.length - range.end) * metrics.rowHeight : 0;
+
   if (data.length === 0) {
     return <EmptyState title={emptyText} />;
   }
   return (
+    <div ref={rootRef} style={{ display: "contents" }}>
     <ShadTable
       className={cn(
         "fl-data-table",
@@ -234,7 +312,12 @@ export function Table<T>({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {visibleData.map((row) => {
+        {topPad > 0 && (
+          <tr aria-hidden="true" className="fl-data-table__spacer">
+            <td colSpan={columns.length} style={{ height: topPad, padding: 0, border: 0 }} />
+          </tr>
+        )}
+        {windowRows.map((row) => {
           const rowKey = getRowKey(row);
           const selected = selectedKey === rowKey;
           return (
@@ -253,6 +336,11 @@ export function Table<T>({
             </TableRow>
           );
         })}
+        {bottomPad > 0 && (
+          <tr aria-hidden="true" className="fl-data-table__spacer">
+            <td colSpan={columns.length} style={{ height: bottomPad, padding: 0, border: 0 }} />
+          </tr>
+        )}
         {visibleData.length === 0 && (
           <TableRow>
             <TableCell colSpan={columns.length} className="fl-data-table__no-results">
@@ -262,5 +350,6 @@ export function Table<T>({
         )}
       </TableBody>
     </ShadTable>
+    </div>
   );
 }

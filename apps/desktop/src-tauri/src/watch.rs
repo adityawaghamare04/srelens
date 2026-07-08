@@ -88,9 +88,256 @@ pub async fn start_resource_watch(
                 )
                 .await
             }
+            "statefulsets" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_statefulsets(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "daemonsets" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_daemonsets(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "jobs" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_jobs(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "cronjobs" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_cronjobs(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "configmaps" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_configmaps(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "secrets" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_secrets(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "resourcequotas" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_resourcequotas(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "limitranges" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_limitranges(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
             "services" => {
                 let (a, c) = (app_out.clone(), emit_channel.clone());
                 srelens_kube::watch::watch_services(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "ingresses" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_ingresses(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "endpointslices" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_endpointslices(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "networkpolicies" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_networkpolicies(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "persistentvolumeclaims" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_pvcs(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "persistentvolumes" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_persistentvolumes(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "storageclasses" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_storageclasses(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "serviceaccounts" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_serviceaccounts(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "roles" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_roles(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "clusterroles" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_clusterroles(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "rolebindings" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_rolebindings(
+                    cache,
+                    context,
+                    namespace,
+                    move |rows| {
+                        let _ = a.emit(&c, rows);
+                    },
+                    status_of!(),
+                )
+                .await
+            }
+            "clusterrolebindings" => {
+                let (a, c) = (app_out.clone(), emit_channel.clone());
+                srelens_kube::watch::watch_clusterrolebindings(
                     cache,
                     context,
                     namespace,

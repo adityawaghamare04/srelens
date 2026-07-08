@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import React from "react";
 // Workload relations fetch their own data; stub them so the overview tests
@@ -6,18 +6,53 @@ import React from "react";
 vi.mock("./WorkloadRelations", () => ({
   DeployRevisions: () => <div data-testid="deploy-revisions" />,
   ManagedPods: () => <div data-testid="managed-pods" />,
+  CronJobJobs: () => <div data-testid="cronjob-jobs" />,
 }));
 vi.mock("./MetricsPanel", () => ({ MetricsPanel: () => <div data-testid="metrics" /> }));
+const { updateConfigDataMock } = vi.hoisted(() => ({ updateConfigDataMock: vi.fn() }));
+vi.mock("../lib/actions", () => ({ updateConfigData: updateConfigDataMock }));
+const { getSecretMock } = vi.hoisted(() => ({ getSecretMock: vi.fn() }));
+vi.mock("../lib/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/manifest")>()),
+  getSecret: getSecretMock,
+}));
+const { listEndpointSlicesMock } = vi.hoisted(() => ({ listEndpointSlicesMock: vi.fn() }));
+vi.mock("../lib/network", () => ({ listEndpointSlices: listEndpointSlicesMock }));
+const { podsForPvcMock } = vi.hoisted(() => ({ podsForPvcMock: vi.fn() }));
+vi.mock("../lib/storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/storage")>()),
+  podsForPvc: podsForPvcMock,
+}));
+const { bindingsForServiceAccountMock, podsForServiceAccountMock } = vi.hoisted(() => ({
+  bindingsForServiceAccountMock: vi.fn(),
+  podsForServiceAccountMock: vi.fn(),
+}));
+vi.mock("../lib/rbac", () => ({
+  bindingsForServiceAccount: bindingsForServiceAccountMock,
+  podsForServiceAccount: podsForServiceAccountMock,
+}));
 
 import {
   ResourceOverview,
   ObjectDetail,
   ageFromTimestamp,
   containerLastRestartTime,
+  parseQuantity,
+  orderPodConditions,
+  summarizeAffinity,
 } from "./ResourceOverview";
 import type { K8sObject } from "../lib/manifest";
 
 const NOW = Date.parse("2026-01-01T00:00:00Z");
+
+// Service/PVC details fetch related resources; default to none so tests that
+// render them without exercising those links don't hit an unmocked call.
+beforeEach(() => {
+  listEndpointSlicesMock.mockResolvedValue({ endpointslices: [] });
+  podsForPvcMock.mockResolvedValue({ pods: [] });
+  bindingsForServiceAccountMock.mockResolvedValue({ bindings: [] });
+  podsForServiceAccountMock.mockResolvedValue({ pods: [] });
+});
 const TLS_CERTIFICATE = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPakNDQWlLZ0F3SUJBZ0lVSjVQdnk1NXRIbUhESkd3elhNVld2YnV4ck5nd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01aWGhoYlhCc1pTNTBaWE4wTUI0WERUSTJNRGN3TmpFeE1qazFOVm9YRFRNMgpNRGN3TXpFeE1qazFOVm93RnpFVk1CTUdBMVVFQXd3TVpYaGhiWEJzWlM1MFpYTjBNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFzeFc2aHU0MVVwYittNXpHZm5aZ2tpT0xuaVhYTmhPYzhvTWgKaFZCcDVXL0Y5aXluelBGQjRGM0NOK2VlaEp1aVhYWHVFUWdQUVFqOVIrV3ErYlBUK1JPOHd6cEJqQ1BYaHo1TAp2Z0dzNDR1cXBQQ2JvUXVpV0RYcmZDWWtUT2xyd0tIZWJDcVRRM2FQUk1hUGk0YkhzRHdNdmlUcDRhMERGVTFWCkhGc2RXcHM0Uis3TG1MSXBhU3RUTTV1bU1qSC9FTzJGZ2psQmhYUUVGT1M0UnZ2WGpoV0E1ZGZiMEtwNUVSNFIKZjFGdktCRTNaTzVmbG5ldlFlTGdyMnZZT2Jhalg5OTQ1NVE0L1UwMTJJZG1ldWV4L2Q1ZU5VV0VNelprZzlrUQp1U00vMFpwbkhEVFU4UXZQTHh0Qy9jSlU1ekdKMzM0ZnppTGVmQUlpbDR2NFRvVzBQd0lEQVFBQm8zNHdmREFkCkJnTlZIUTRFRmdRVWxadEVndTl1L3ZTTVptSmNNa2RUcWhWVmJDSXdId1lEVlIwakJCZ3dGb0FVbFp0RWd1OXUKL3ZTTVptSmNNa2RUcWhWVmJDSXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QXBCZ05WSFJFRUlqQWdnZ3hsZUdGdApjR3hsTG5SbGMzU0NFSGQzZHk1bGVHRnRjR3hsTG5SbGMzUXdEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBR2svCnp6cGhUNnRuNCtxUXg5Ly9meWNkSzFtNjg1eW1TRFZqT3ZXeWRQaWg4RzI4OUJkQ1BmYlc4ZVVrOXJqakJVZWcKR1k5OUJMcEhvcW9zZDNVWEhOUDJzWUdnZ0dZOG40QXdSbFFWZi9qajBPenVWUzZpS0FDM1ZXWFBtdGk5Q1JQZwpHVkdaR0VZMWI1SXYwVStaSzBjYlJ6c1NSN0FBN05VWGhTUUg0NjJDQlpJa1JSTXNFcVhSV2huUG5Kd3phLzJJCmJ1REdiTG1WMmhRUTdJeWJtb0FpL1FQVUM5WldrMExOV2pGYlpDa0kvem4wd2QxWVhham1iTHBSV0dsTjR1LzcKL2NDSER6NDNyWTZXeHJNRjVwYkJ5aWcvWk5obUVZK25rSFhwK2ZoRFdZOGV1QVVxT1p4bUQrNFIzL2lPQ2dhYgpsVWMzUnNCdmExVjNSbFB6K0pvPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==";
 
 describe("ageFromTimestamp", () => {
@@ -31,6 +66,71 @@ describe("ageFromTimestamp", () => {
   it("returns a dash for missing or invalid input", () => {
     expect(ageFromTimestamp(undefined, NOW)).toBe("—");
     expect(ageFromTimestamp("not-a-date", NOW)).toBe("—");
+  });
+});
+
+describe("parseQuantity", () => {
+  it("parses plain, milli, binary, and decimal suffixes", () => {
+    expect(parseQuantity("4")).toBe(4);
+    expect(parseQuantity("500m")).toBe(0.5);
+    expect(parseQuantity("2Gi")).toBe(2 * 2 ** 30);
+    expect(parseQuantity("1G")).toBe(1e9);
+  });
+  it("returns null for unparseable input", () => {
+    expect(parseQuantity("")).toBeNull();
+    expect(parseQuantity("abc")).toBeNull();
+  });
+});
+
+describe("orderPodConditions", () => {
+  it("orders lifecycle conditions PodScheduled → Initialized → ContainersReady → Ready", () => {
+    const shuffled = [
+      { type: "Ready", status: "True" },
+      { type: "PodScheduled", status: "True" },
+      { type: "ContainersReady", status: "False" },
+      { type: "Initialized", status: "True" },
+    ];
+    expect(orderPodConditions(shuffled).map((c) => c.type)).toEqual([
+      "PodScheduled",
+      "Initialized",
+      "ContainersReady",
+      "Ready",
+    ]);
+  });
+
+  it("appends unknown condition types after the known lifecycle ones", () => {
+    const conds = [
+      { type: "DisruptionTarget", status: "True" },
+      { type: "Ready", status: "True" },
+      { type: "PodScheduled", status: "True" },
+    ];
+    expect(orderPodConditions(conds).map((c) => c.type)).toEqual([
+      "PodScheduled",
+      "Ready",
+      "DisruptionTarget",
+    ]);
+  });
+});
+
+describe("summarizeAffinity", () => {
+  it("summarizes required and preferred rules per affinity type", () => {
+    const affinity = {
+      nodeAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{}, {}] },
+        preferredDuringSchedulingIgnoredDuringExecution: [{}],
+      },
+      podAntiAffinity: {
+        requiredDuringSchedulingIgnoredDuringExecution: [{}],
+      },
+    };
+    expect(summarizeAffinity(affinity)).toEqual([
+      "Node affinity: 2 required, 1 preferred",
+      "Pod anti-affinity: 1 required",
+    ]);
+  });
+
+  it("returns an empty list when there is no affinity", () => {
+    expect(summarizeAffinity({})).toEqual([]);
   });
 });
 
@@ -167,6 +267,81 @@ describe("ObjectDetail (Pod)", () => {
   });
 });
 
+describe("ObjectDetail (Pod parity: #13)", () => {
+  const parityPod: K8sObject = {
+    kind: "Pod",
+    metadata: { name: "web-1", namespace: "default" },
+    spec: {
+      nodeName: "node-a",
+      nodeSelector: { "disktype": "ssd" },
+      affinity: {
+        podAntiAffinity: { requiredDuringSchedulingIgnoredDuringExecution: [{}] },
+      },
+      tolerations: [{ key: "dedicated", operator: "Equal", value: "gpu", effect: "NoSchedule" }],
+      containers: [
+        {
+          name: "nginx",
+          image: "nginx:1.27",
+          startupProbe: { httpGet: { path: "/healthz", port: 8080 } },
+        },
+      ],
+      ephemeralContainers: [{ name: "debugger", image: "busybox", targetContainerName: "nginx" }],
+    },
+    status: {
+      phase: "Running",
+      conditions: [
+        { type: "Ready", status: "True", lastTransitionTime: "2025-12-31T00:00:08Z" },
+        { type: "PodScheduled", status: "True", lastTransitionTime: "2025-12-31T00:00:00Z" },
+        { type: "Initialized", status: "True", lastTransitionTime: "2025-12-31T00:00:07Z" },
+        { type: "ContainersReady", status: "True", lastTransitionTime: "2025-12-31T00:00:08Z" },
+      ],
+      containerStatuses: [{ name: "nginx", ready: true, restartCount: 0, state: { running: {} } }],
+      ephemeralContainerStatuses: [{ name: "debugger", state: { running: {} } }],
+    },
+  };
+
+  it("renders the conditions in lifecycle order", () => {
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} />);
+    const order = screen
+      .getAllByText(/PodScheduled|Initialized|ContainersReady|^Ready$/)
+      .map((el) => el.textContent);
+    expect(order).toEqual(["PodScheduled", "Initialized", "ContainersReady", "Ready"]);
+  });
+
+  it("shows a Scheduling section with node selector, affinity and tolerations", () => {
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} />);
+    expect(screen.getByText("Scheduling")).toBeDefined();
+    expect(screen.getByText("disktype")).toBeDefined();
+    expect(screen.getByText("Pod anti-affinity: 1 required")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /1 toleration/ }));
+    expect(screen.getByText("dedicated=gpu → NoSchedule")).toBeDefined();
+  });
+
+  it("renders an ephemeral container with its debug target and a startup probe", () => {
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} />);
+    expect(screen.getByText("Ephemeral Containers")).toBeDefined();
+    expect(screen.getByText("debugger")).toBeDefined();
+    // "Debugging" row surfaces which container it targets.
+    expect(screen.getByText("Debugging")).toBeDefined();
+    // Startup probe row exists on the main container.
+    expect(screen.getByText("Startup")).toBeDefined();
+  });
+
+  it("offers per-container Logs that open scoped to the container", () => {
+    const onOpenLogs = vi.fn();
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} context="kind-dev" onOpenLogs={onOpenLogs} />);
+    fireEvent.click(screen.getByRole("button", { name: "Logs for nginx" }));
+    expect(onOpenLogs).toHaveBeenCalledWith("nginx");
+  });
+
+  it("offers per-container Exec that opens scoped to the container", () => {
+    const onOpenExec = vi.fn();
+    render(<ObjectDetail kind="Pod" obj={parityPod} now={NOW} context="kind-dev" onOpenExec={onOpenExec} />);
+    fireEvent.click(screen.getByRole("button", { name: "Exec into nginx" }));
+    expect(onOpenExec).toHaveBeenCalledWith("nginx");
+  });
+});
+
 describe("ObjectDetail (Deployment)", () => {
   it("renders replica summary, selector, and condition badges", () => {
     const dep: K8sObject = {
@@ -203,8 +378,80 @@ describe("ObjectDetail (Deployment)", () => {
   });
 });
 
+describe("ObjectDetail (workload kinds)", () => {
+  it("shows Job timing (started, completed, duration)", () => {
+    const job: K8sObject = {
+      kind: "Job",
+      metadata: { name: "backup", namespace: "ops" },
+      spec: { completions: 1 },
+      status: {
+        succeeded: 1,
+        startTime: "2026-01-01T10:00:00Z",
+        completionTime: "2026-01-01T10:02:30Z",
+      },
+    };
+    render(<ObjectDetail kind="Job" obj={job} now={NOW} />);
+    expect(screen.getByText("Started")).toBeDefined();
+    expect(screen.getByText("Completed")).toBeDefined();
+    expect(screen.getByText("Duration")).toBeDefined();
+    // 150s → "2m 30s"
+    expect(screen.getByText("2m 30s")).toBeDefined();
+  });
+
+  it("shows a StatefulSet's service, update strategy, and partition", () => {
+    const sts: K8sObject = {
+      kind: "StatefulSet",
+      metadata: { name: "pg", namespace: "data" },
+      spec: {
+        replicas: 3,
+        serviceName: "pg-headless",
+        selector: { matchLabels: { app: "pg" } },
+        updateStrategy: { type: "RollingUpdate", rollingUpdate: { partition: 2 } },
+        volumeClaimTemplates: [{ metadata: { name: "data" } }, { metadata: { name: "wal" } }],
+      },
+      status: { replicas: 3, readyReplicas: 2, updatedReplicas: 3 },
+    };
+    render(<ObjectDetail kind="StatefulSet" obj={sts} now={NOW} />);
+    expect(screen.getByText("pg-headless")).toBeDefined();
+    expect(screen.getByText("RollingUpdate (partition 2)")).toBeDefined();
+    // volume claim template names
+    expect(screen.getByText("data, wal")).toBeDefined();
+  });
+
+  it("shows a CronJob's history limits and last schedule", () => {
+    const cj: K8sObject = {
+      kind: "CronJob",
+      metadata: { name: "nightly", namespace: "ops" },
+      spec: {
+        schedule: "0 2 * * *",
+        suspend: false,
+        concurrencyPolicy: "Forbid",
+        successfulJobsHistoryLimit: 3,
+        failedJobsHistoryLimit: 1,
+      },
+      status: { lastScheduleTime: "2026-01-01T02:00:00Z" },
+    };
+    render(<ObjectDetail kind="CronJob" obj={cj} now={NOW} />);
+    expect(screen.getByText("History (kept)")).toBeDefined();
+    expect(screen.getByText("3 succeeded, 1 failed")).toBeDefined();
+    expect(screen.getByText("Last schedule")).toBeDefined();
+  });
+
+  it("shows a DaemonSet's update strategy", () => {
+    const ds: K8sObject = {
+      kind: "DaemonSet",
+      metadata: { name: "fluentd", namespace: "logging" },
+      spec: { updateStrategy: { type: "RollingUpdate", rollingUpdate: { maxUnavailable: 1 } } },
+      status: { desiredNumberScheduled: 5, numberReady: 5 },
+    };
+    render(<ObjectDetail kind="DaemonSet" obj={ds} now={NOW} />);
+    expect(screen.getByText("Update strategy")).toBeDefined();
+    expect(screen.getByText("RollingUpdate (max unavailable 1)")).toBeDefined();
+  });
+});
+
 describe("ObjectDetail (ConfigMap / Secret)", () => {
-  it("shows ConfigMap values inline", () => {
+  it("shows ConfigMap values in editable fields", () => {
     const cm: K8sObject = {
       kind: "ConfigMap",
       metadata: { name: "cm", namespace: "default" },
@@ -212,20 +459,43 @@ describe("ObjectDetail (ConfigMap / Secret)", () => {
     };
     render(<ObjectDetail kind="ConfigMap" obj={cm} now={NOW} />);
     expect(screen.getByText("app.conf")).toBeDefined();
-    expect(screen.getByText("level=info")).toBeDefined();
+    expect((screen.getByLabelText("Value for app.conf") as HTMLTextAreaElement).value).toBe("level=info");
   });
 
-  it("masks Secret values until revealed (base64-decoded)", () => {
+  it("fetches Secret values via getSecret and masks them until revealed", async () => {
+    // getObject redacts Secret data (values blank); getSecret is the gated path.
+    getSecretMock.mockResolvedValue({ data: { token: "aGVsbG8=" } }); // "hello"
     const secret: K8sObject = {
       kind: "Secret",
       metadata: { name: "s", namespace: "default" },
-      data: { token: "aGVsbG8=" }, // "hello"
+      data: { token: "" }, // redacted by getObject — key present, no value
     };
-    render(<ObjectDetail kind="Secret" obj={secret} now={NOW} />);
-    expect(screen.getByText("••••••••")).toBeDefined();
-    expect(screen.queryByText("hello")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
-    expect(screen.getByText("hello")).toBeDefined();
+    render(<ObjectDetail kind="Secret" obj={secret} now={NOW} context="kind-dev" />);
+    await waitFor(() => expect(getSecretMock).toHaveBeenCalledWith("kind-dev", "default", "s"));
+    // No editable field or plaintext is exposed until the user reveals the key.
+    expect(screen.queryByLabelText("Value for token")).toBeNull();
+    expect(screen.queryByDisplayValue("hello")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Reveal/ }));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Value for token") as HTMLTextAreaElement).value).toBe("hello"),
+    );
+  });
+
+  it("saves an edited ConfigMap value via updateConfigData", async () => {
+    updateConfigDataMock.mockResolvedValue({ ok: true });
+    const cm: K8sObject = {
+      kind: "ConfigMap",
+      metadata: { name: "web-config", namespace: "default" },
+      data: { "app.conf": "level=info" },
+    };
+    render(<ObjectDetail kind="ConfigMap" obj={cm} now={NOW} context="kind-dev" />);
+    fireEvent.change(screen.getByLabelText("Value for app.conf"), { target: { value: "level=debug" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(updateConfigDataMock).toHaveBeenCalledWith("kind-dev", "ConfigMap", "default", "web-config", {
+        "app.conf": "level=debug",
+      }),
+    );
   });
 
   it("shows parsed TLS certificate metadata without revealing material", async () => {
@@ -294,14 +564,19 @@ describe("ObjectDetail (more kinds)", () => {
     expect(screen.getByText("get, list")).toBeDefined();
   });
 
-  it("renders ResourceQuota used/hard", () => {
+  it("renders ResourceQuota used/hard with a usage bar", () => {
     const rq: K8sObject = {
       kind: "ResourceQuota",
       metadata: { name: "q", namespace: "default" },
-      status: { hard: { "limits.cpu": "4" }, used: { "limits.cpu": "1" } },
+      status: { hard: { "limits.cpu": "4", "requests.memory": "8Gi" }, used: { "limits.cpu": "1", "requests.memory": "2Gi" } },
     };
     render(<ObjectDetail kind="ResourceQuota" obj={rq} now={NOW} />);
     expect(screen.getByText("limits.cpu")).toBeDefined();
+    // 1/4 cpu and 2Gi/8Gi memory → both 25%.
+    const bars = screen.getAllByRole("progressbar");
+    expect(bars).toHaveLength(2);
+    expect(bars[0].getAttribute("aria-valuenow")).toBe("25");
+    expect(bars[1].getAttribute("aria-valuenow")).toBe("25");
   });
 
   it("offers an inline port-forward on Service ports when a context is given", () => {
@@ -410,6 +685,21 @@ describe("ObjectDetail (storage links)", () => {
       name: "data",
     });
   });
+
+  it("lists the pods consuming a claim (PVC → consuming pods)", async () => {
+    podsForPvcMock.mockResolvedValue({ pods: [{ name: "web-1", namespace: "default" }] });
+    const pvc: K8sObject = {
+      kind: "PersistentVolumeClaim",
+      metadata: { name: "data", namespace: "default" },
+      spec: { volumeName: "pv-data", storageClassName: "fast", accessModes: ["ReadWriteOnce"] },
+      status: { phase: "Bound", capacity: { storage: "10Gi" } },
+    };
+    render(
+      <ObjectDetail kind="PersistentVolumeClaim" obj={pvc} now={NOW} context="kind-dev" onOpenResource={() => {}} />,
+    );
+    await waitFor(() => expect(podsForPvcMock).toHaveBeenCalledWith("kind-dev", "default", "data"));
+    expect(await screen.findByText("Pod/web-1")).toBeDefined();
+  });
 });
 
 describe("ObjectDetail (Service)", () => {
@@ -428,6 +718,49 @@ describe("ObjectDetail (Service)", () => {
     expect(screen.getByText("10.96.0.1")).toBeDefined();
     expect(screen.getByText("Ports")).toBeDefined();
     expect(screen.getByText("8080")).toBeDefined();
+  });
+
+  it("links to the service's own EndpointSlices (service → endpointslice → pods)", async () => {
+    // Slices are matched to the service by the kubernetes.io/service-name label,
+    // surfaced as `service` on the summary; a slice for another service is ignored.
+    listEndpointSlicesMock.mockResolvedValue({
+      endpointslices: [
+        { name: "web-abc", namespace: "default", addressType: "IPv4", endpoints: "2/2", ports: "8080", service: "web", age: "1h" },
+        { name: "api-xyz", namespace: "default", addressType: "IPv4", endpoints: "1/1", ports: "80", service: "api", age: "2h" },
+      ],
+    });
+    const svc: K8sObject = {
+      kind: "Service",
+      metadata: { name: "web", namespace: "default" },
+      spec: { type: "ClusterIP", clusterIP: "10.96.0.1", selector: { app: "web" } },
+    };
+    render(<ObjectDetail kind="Service" obj={svc} now={NOW} context="kind-dev" onOpenResource={() => {}} />);
+    await waitFor(() => expect(listEndpointSlicesMock).toHaveBeenCalledWith("kind-dev", "default"));
+    expect(await screen.findByText("EndpointSlice/web-abc")).toBeDefined();
+    expect(screen.queryByText("EndpointSlice/api-xyz")).toBeNull();
+  });
+});
+
+describe("ObjectDetail (ServiceAccount)", () => {
+  it("shows the bindings and pods that use the account (what can this SA do?)", async () => {
+    bindingsForServiceAccountMock.mockResolvedValue({
+      bindings: [{ name: "read-pods", namespace: "ci", kind: "RoleBinding", role: "Role/pod-reader" }],
+    });
+    podsForServiceAccountMock.mockResolvedValue({ pods: [{ name: "builder-1", namespace: "ci" }] });
+    const sa: K8sObject = {
+      kind: "ServiceAccount",
+      metadata: { name: "builder", namespace: "ci" },
+    };
+    render(<ObjectDetail kind="ServiceAccount" obj={sa} now={NOW} context="kind-dev" onOpenResource={() => {}} />);
+    await waitFor(() =>
+      expect(bindingsForServiceAccountMock).toHaveBeenCalledWith("kind-dev", "ci", "builder"),
+    );
+    expect(podsForServiceAccountMock).toHaveBeenCalledWith("kind-dev", "ci", "builder");
+    // The binding links to its RoleBinding and shows which role it grants…
+    expect(await screen.findByText("RoleBinding/read-pods")).toBeDefined();
+    expect(screen.getByText("Role/pod-reader")).toBeDefined();
+    // …and the consuming pod is listed.
+    expect(screen.getByText("Pod/builder-1")).toBeDefined();
   });
 });
 
@@ -459,5 +792,32 @@ describe("ResourceOverview", () => {
       />,
     );
     await waitFor(() => expect(screen.getByText(/not found/)).toBeDefined());
+  });
+
+  it("re-fetches the object when reloadKey changes (after an action)", async () => {
+    const getObjectFn = vi.fn().mockResolvedValue({ object: podObject });
+    const { rerender } = render(
+      <ResourceOverview
+        context="kind-dev"
+        kind="Pod"
+        namespace="default"
+        name="web-1"
+        getObjectFn={getObjectFn}
+        reloadKey={0}
+      />,
+    );
+    await waitFor(() => expect(getObjectFn).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <ResourceOverview
+        context="kind-dev"
+        kind="Pod"
+        namespace="default"
+        name="web-1"
+        getObjectFn={getObjectFn}
+        reloadKey={1}
+      />,
+    );
+    await waitFor(() => expect(getObjectFn).toHaveBeenCalledTimes(2));
   });
 });

@@ -33,6 +33,7 @@ describe("startPodExec", () => {
       context: "kind-dev",
       namespace: "default",
       pod: "web-1",
+      container: null,
       shell: null,
     });
     expect(onMock).toHaveBeenCalledWith("exec:out:7", expect.any(Function));
@@ -47,5 +48,18 @@ describe("startPodExec", () => {
     expect(invokeCommandMock).toHaveBeenCalledWith("exec_input", { session: 7, data: "ls\n" });
     session.close();
     expect(invokeCommandMock).toHaveBeenCalledWith("exec_close", { session: 7 });
+  });
+
+  it("forwards a container when execing into a specific one", async () => {
+    invokeCommandMock.mockResolvedValueOnce(9);
+    onMock.mockReturnValue(vi.fn());
+    await startPodExec("kind-dev", "default", "web-1", vi.fn(), vi.fn(), "sidecar");
+    expect(invokeCommandMock).toHaveBeenCalledWith("start_pod_exec", {
+      context: "kind-dev",
+      namespace: "default",
+      pod: "web-1",
+      container: "sidecar",
+      shell: null,
+    });
   });
 });

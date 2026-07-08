@@ -2,7 +2,12 @@ import { invokeCapability, type Invoker } from "../transport/transport";
 
 export interface NodeSummary {
   name: string;
+  /** Readiness: "Ready", "NotReady", or "Unknown". */
   status: string;
+  /** Cordoned (`spec.unschedulable`) — surfaced as "SchedulingDisabled". */
+  unschedulable: boolean;
+  /** Number of taints, excluding the auto-added unschedulable taint. */
+  taints: number;
   version: string;
   roles: string;
   age: string;
@@ -73,6 +78,30 @@ export async function getObject(
       name,
     });
     return { object: out.object };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+/**
+ * Read a Secret's values via the dedicated, consent-gateable `k8s.getSecret`.
+ * `k8s.getObject` redacts Secret data, so this is the only structured path to
+ * the (base64-encoded) values — fetched lazily, only when the user reveals a
+ * key.
+ */
+export async function getSecret(
+  context: string,
+  namespace: string,
+  name: string,
+  invoke: Invoker = invokeCapability,
+): Promise<{ data?: Record<string, string>; error?: string }> {
+  try {
+    const out = await invoke<{ data: Record<string, string> }>("k8s.getSecret", {
+      context,
+      namespace,
+      name,
+    });
+    return { data: out.data };
   } catch (e) {
     return { error: String(e) };
   }

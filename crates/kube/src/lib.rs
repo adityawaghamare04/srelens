@@ -31,6 +31,36 @@ pub(crate) fn humanize_age(creation: Option<&Time>) -> String {
     }
 }
 
+/// Abbreviate PV/PVC access modes ("ReadWriteOnce" → "RWO"), comma-joined.
+pub(crate) fn abbreviate_access_modes(modes: Option<&Vec<String>>) -> String {
+    modes
+        .map(|m| {
+            m.iter()
+                .map(|mode| match mode.as_str() {
+                    "ReadWriteOnce" => "RWO",
+                    "ReadOnlyMany" => "ROX",
+                    "ReadWriteMany" => "RWX",
+                    "ReadWriteOncePod" => "RWOP",
+                    other => other,
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod access_mode_tests {
+    use super::abbreviate_access_modes;
+
+    #[test]
+    fn abbreviates_known_modes() {
+        let modes = vec!["ReadWriteOnce".to_string(), "ReadOnlyMany".to_string()];
+        assert_eq!(abbreviate_access_modes(Some(&modes)), "RWO, ROX");
+        assert_eq!(abbreviate_access_modes(None), "");
+    }
+}
+
 /// Build a namespaced API, or an all-namespaces API when `namespace` is empty.
 /// An empty namespace is how the UI requests "All namespaces".
 pub(crate) fn scoped_api<K>(client: Client, namespace: &str) -> Api<K>
@@ -66,17 +96,34 @@ pub mod cluster;
 pub mod crds;
 pub mod connect;
 pub mod contexts;
+pub mod configmaps;
+pub mod cronjobs;
+pub mod daemonsets;
 pub mod deployments;
+pub mod endpointslices;
 pub mod events;
 pub mod exec;
 pub mod forward;
 pub mod helm;
+pub mod ingresses;
+pub mod jobs;
 pub mod kubeconfig;
+pub mod limitranges;
 pub mod logs;
 pub mod manifest;
 pub mod metrics;
+pub mod networkpolicies;
 pub mod nodes;
+pub mod persistentvolumes;
+pub mod pvcs;
+pub mod resourcequotas;
+pub mod rolebindings;
+pub mod roles;
 pub mod schema;
+pub mod secrets;
+pub mod serviceaccounts;
 pub mod services;
+pub mod statefulsets;
+pub mod storageclasses;
 pub mod watch;
 pub mod workloads;

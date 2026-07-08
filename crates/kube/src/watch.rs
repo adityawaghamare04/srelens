@@ -8,16 +8,47 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{Event as CoreEvent, Pod, Service};
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
+use k8s_openapi::api::batch::v1::{CronJob, Job};
+use k8s_openapi::api::core::v1::{
+    ConfigMap, Event as CoreEvent, LimitRange, PersistentVolume, PersistentVolumeClaim, Pod,
+    ResourceQuota, Secret, Service, ServiceAccount,
+};
+use k8s_openapi::api::discovery::v1::EndpointSlice;
+use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
+use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
+use k8s_openapi::api::storage::v1::StorageClass;
 use kube::runtime::watcher::{Config, Event};
 use kube::Api;
 use serde::de::DeserializeOwned;
 
 use crate::client_cache::ClientCache;
+use crate::configmaps::{summarise as summarise_configmap, ConfigMapSummary};
+use crate::cronjobs::{summarise as summarise_cronjob, CronJobSummary};
+use crate::daemonsets::{summarise as summarise_daemonset, DaemonSetSummary};
+use crate::endpointslices::{summarise as summarise_endpointslice, EndpointSliceSummary};
+use crate::ingresses::{summarise as summarise_ingress, IngressSummary};
+use crate::limitranges::{summarise as summarise_limitrange, LimitRangeSummary};
+use crate::networkpolicies::{summarise as summarise_networkpolicy, NetworkPolicySummary};
+use crate::persistentvolumes::{summarise as summarise_pv, PvSummary};
+use crate::pvcs::{summarise as summarise_pvc, PvcSummary};
+use crate::rolebindings::{
+    summarise as summarise_rolebinding, summarise_cluster as summarise_clusterrolebinding,
+    ClusterRoleBindingSummary, RoleBindingSummary,
+};
+use crate::roles::{
+    summarise as summarise_role, summarise_cluster as summarise_clusterrole, ClusterRoleSummary,
+    RoleSummary,
+};
+use crate::serviceaccounts::{summarise as summarise_serviceaccount, ServiceAccountSummary};
+use crate::storageclasses::{summarise as summarise_storageclass, StorageClassSummary};
+use crate::resourcequotas::{summarise as summarise_resourcequota, ResourceQuotaSummary};
+use crate::secrets::{summarise as summarise_secret, SecretSummary};
 use crate::deployments::{summarise as summarise_deployment, DeploymentSummary};
 use crate::events::{summarise as summarise_event, EventSummary};
+use crate::jobs::{summarise as summarise_job, JobSummary};
 use crate::services::{summarise as summarise_service, ServiceSummary};
+use crate::statefulsets::{summarise as summarise_statefulset, StatefulSetSummary};
 use crate::workloads::{summarise_pod, PodSummary};
 
 /// Normalised watch event over summaries (decoupled from kube-rs types so the
@@ -178,6 +209,191 @@ where
     .await
 }
 
+/// Watch StatefulSets in a namespace.
+pub async fn watch_statefulsets<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<StatefulSetSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<StatefulSet> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_statefulset,
+        |s: &StatefulSetSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch DaemonSets in a namespace.
+pub async fn watch_daemonsets<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<DaemonSetSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<DaemonSet> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_daemonset,
+        |d: &DaemonSetSummary| d.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Jobs in a namespace.
+pub async fn watch_jobs<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<JobSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Job> = crate::scoped_api(client, &namespace);
+    watch_typed(api, summarise_job, |j: &JobSummary| j.name.clone(), on_update, on_status).await
+}
+
+/// Watch CronJobs in a namespace.
+pub async fn watch_cronjobs<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<CronJobSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<CronJob> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_cronjob,
+        |c: &CronJobSummary| c.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch ConfigMaps in a namespace.
+pub async fn watch_configmaps<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ConfigMapSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ConfigMap> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_configmap,
+        |c: &ConfigMapSummary| c.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Secrets in a namespace (type + key count only — no values).
+pub async fn watch_secrets<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<SecretSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Secret> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_secret,
+        |s: &SecretSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch ResourceQuotas in a namespace.
+pub async fn watch_resourcequotas<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ResourceQuotaSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ResourceQuota> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_resourcequota,
+        |r: &ResourceQuotaSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch LimitRanges in a namespace.
+pub async fn watch_limitranges<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<LimitRangeSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<LimitRange> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_limitrange,
+        |l: &LimitRangeSummary| l.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
 /// Watch services in a namespace.
 pub async fn watch_services<F, G>(
     cache: Arc<ClientCache>,
@@ -220,6 +436,270 @@ where
         api,
         summarise_event,
         |e: &EventSummary| e.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Ingresses in a namespace.
+pub async fn watch_ingresses<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<IngressSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Ingress> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_ingress,
+        |i: &IngressSummary| i.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch EndpointSlices in a namespace.
+pub async fn watch_endpointslices<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<EndpointSliceSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<EndpointSlice> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_endpointslice,
+        |e: &EndpointSliceSummary| e.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch NetworkPolicies in a namespace.
+pub async fn watch_networkpolicies<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<NetworkPolicySummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<NetworkPolicy> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_networkpolicy,
+        |n: &NetworkPolicySummary| n.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch PersistentVolumeClaims in a namespace.
+pub async fn watch_pvcs<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<PvcSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<PersistentVolumeClaim> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_pvc,
+        |p: &PvcSummary| p.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster PersistentVolumes (cluster-scoped; namespace ignored).
+pub async fn watch_persistentvolumes<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<PvSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<PersistentVolume> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_pv,
+        |p: &PvSummary| p.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster StorageClasses (cluster-scoped; namespace ignored).
+pub async fn watch_storageclasses<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<StorageClassSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<StorageClass> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_storageclass,
+        |s: &StorageClassSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch ServiceAccounts in a namespace.
+pub async fn watch_serviceaccounts<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ServiceAccountSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ServiceAccount> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_serviceaccount,
+        |s: &ServiceAccountSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Roles in a namespace.
+pub async fn watch_roles<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<RoleSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Role> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_role,
+        |r: &RoleSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster ClusterRoles (cluster-scoped; namespace ignored).
+pub async fn watch_clusterroles<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ClusterRoleSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ClusterRole> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_clusterrole,
+        |r: &ClusterRoleSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch RoleBindings in a namespace.
+pub async fn watch_rolebindings<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<RoleBindingSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<RoleBinding> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_rolebinding,
+        |r: &RoleBindingSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster ClusterRoleBindings (cluster-scoped; namespace ignored).
+pub async fn watch_clusterrolebindings<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ClusterRoleBindingSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ClusterRoleBinding> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_clusterrolebinding,
+        |r: &ClusterRoleBindingSummary| r.name.clone(),
         on_update,
         on_status,
     )

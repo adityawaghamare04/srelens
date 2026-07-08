@@ -67,14 +67,71 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::deployments::list_replicasets_capability(
         cache.clone(),
     ));
+    reg.register(srelens_kube::statefulsets::list_statefulsets_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::daemonsets::list_daemonsets_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::jobs::list_jobs_capability(cache.clone()));
+    reg.register(srelens_kube::cronjobs::list_cronjobs_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::cronjobs::cronjob_set_suspend_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::cronjobs::cronjob_trigger_now_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::configmaps::list_configmaps_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::secrets::list_secrets_capability(cache.clone()));
+    reg.register(srelens_kube::resourcequotas::list_resourcequotas_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::limitranges::list_limitranges_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::services::list_services_capability(
         cache.clone(),
     ));
+    reg.register(srelens_kube::ingresses::list_ingresses_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::endpointslices::list_endpointslices_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::networkpolicies::list_networkpolicies_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::pvcs::list_pvcs_capability(cache.clone()));
+    reg.register(srelens_kube::pvcs::pods_for_pvc_capability(cache.clone()));
+    reg.register(srelens_kube::persistentvolumes::list_pvs_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::storageclasses::list_storageclasses_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::serviceaccounts::list_serviceaccounts_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::serviceaccounts::pods_for_service_account_capability(cache.clone()));
+    reg.register(srelens_kube::serviceaccounts::bindings_for_service_account_capability(cache.clone()));
+    reg.register(srelens_kube::roles::list_roles_capability(cache.clone()));
+    reg.register(srelens_kube::roles::list_clusterroles_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::rolebindings::list_rolebindings_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::rolebindings::list_clusterrolebindings_capability(cache.clone()));
     reg.register(srelens_kube::actions::delete_pod_capability(cache.clone()));
     reg.register(srelens_kube::actions::evict_pod_capability(cache.clone()));
     reg.register(srelens_kube::actions::delete_resource_capability(cache.clone()));
     reg.register(srelens_kube::actions::scale_capability(cache.clone()));
     reg.register(srelens_kube::actions::rollout_restart_capability(cache.clone()));
+    reg.register(srelens_kube::actions::update_config_data_capability(cache.clone()));
     reg.register(srelens_kube::actions::cordon_node_capability(cache.clone()));
     reg.register(srelens_kube::actions::drain_node_capability(cache.clone()));
     reg.register(srelens_kube::events::list_events_capability(cache.clone()));
@@ -83,6 +140,7 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::nodes::list_nodes_capability(cache.clone()));
     reg.register(srelens_kube::manifest::get_manifest_capability(cache.clone()));
     reg.register(srelens_kube::manifest::get_object_capability(cache.clone()));
+    reg.register(srelens_kube::secrets::get_secret_capability(cache.clone()));
     reg.register(srelens_kube::manifest::apply_manifest_capability(cache.clone()));
     reg.register(srelens_kube::manifest::validate_manifest_capability(cache.clone()));
     reg.register(srelens_kube::schema::open_api_schema_capability(cache.clone()));

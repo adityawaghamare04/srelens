@@ -3,13 +3,24 @@ import {
   ArrowLeftRight,
   LogOut,
   Logs,
+  Pause,
+  Pencil,
+  Play,
   RotateCw,
   Scaling,
   SquareTerminal,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { deletePod, evictPod, type PodSummary } from "../lib/workloads";
-import { deleteResource, scaleResource, rolloutRestart } from "../lib/actions";
+import {
+  deleteResource,
+  scaleResource,
+  rolloutRestart,
+  cronjobSetSuspend,
+  cronjobTriggerNow,
+} from "../lib/actions";
+import { notify } from "../lib/notify";
 import { IconButton, ConfirmDialog, TextInput } from "../ui";
 import { ForwardDialog } from "./ForwardDialog";
 
@@ -27,12 +38,14 @@ export function PodActions({
   onDeleted,
   onOpenTerminal,
   onOpenLogs,
+  onEdit,
 }: {
   context: string;
   pod: PodSummary;
   onDeleted?: () => void;
   onOpenTerminal?: Opener;
   onOpenLogs?: Opener;
+  onEdit?: () => void;
 }) {
   const [dialog, setDialog] = useState<"delete" | "evict" | "forward" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -47,9 +60,11 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
+      notify.error(`Failed to delete ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
+    notify.success(`Deleted pod ${pod.name}`);
     onDeleted?.();
   }
 
@@ -60,9 +75,11 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
+      notify.error(`Failed to evict ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
+    notify.success(`Evicted pod ${pod.name}`);
     onDeleted?.();
   }
 
@@ -70,6 +87,7 @@ export function PodActions({
     <>
       <IconButton icon={Logs} label="Logs" onClick={() => onOpenLogs?.(target)} />
       <IconButton icon={SquareTerminal} label="Shell" onClick={() => onOpenTerminal?.(target)} />
+      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
       <IconButton icon={ArrowLeftRight} label="Forward" onClick={() => setDialog("forward")} />
       <IconButton
         icon={LogOut}
@@ -172,21 +190,61 @@ export function ResourceActions({
   kind,
   namespace,
   name,
+  cronjobSuspended,
   onDeleted,
+  onChanged,
   onOpenLogs,
+  onEdit,
 }: {
   context: string;
   kind: string;
   namespace: string | null;
   name: string;
+  /** For CronJob details: current suspend state, to label Suspend/Resume. */
+  cronjobSuspended?: boolean;
   onDeleted: () => void;
+  /** Fired after a successful non-delete write action so the detail refreshes. */
+  onChanged?: () => void;
   onOpenLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
+  onEdit?: () => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [scaling, setScaling] = useState(false);
   const [replicas, setReplicas] = useState("");
+  const [triggering, setTriggering] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  const isCronJob = kind === "CronJob";
+
+  async function doSetSuspend() {
+    setBusy("suspend");
+    setErr("");
+    const resume = cronjobSuspended;
+    const r = await cronjobSetSuspend(context, namespace ?? "", name, !cronjobSuspended);
+    setBusy("");
+    if (r.error) {
+      setErr(r.error);
+      notify.error(`Failed to ${resume ? "resume" : "suspend"} ${name}`, r.error);
+      return;
+    }
+    notify.success(`${resume ? "Resumed" : "Suspended"} ${name}`);
+    onChanged?.();
+  }
+
+  async function doTrigger() {
+    setBusy("trigger");
+    setErr("");
+    const r = await cronjobTriggerNow(context, namespace ?? "", name);
+    setBusy("");
+    if (r.error) {
+      setErr(r.error);
+      notify.error(`Failed to run ${name}`, r.error);
+      return;
+    }
+    setTriggering(false);
+    notify.success(`Triggered ${name}`, r.jobName ? `Created job ${r.jobName}` : undefined);
+    onChanged?.();
+  }
 
   async function doDelete() {
     setBusy("delete");
@@ -195,9 +253,11 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to delete ${name}`, r.error);
       return;
     }
     setConfirmDelete(false);
+    notify.success(`Deleted ${kind} ${name}`);
     onDeleted();
   }
 
@@ -213,16 +273,25 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
+      notify.error(`Failed to scale ${name}`, r.error);
       return;
     }
     setScaling(false);
+    notify.success(`Scaled ${name} to ${n}`);
+    onChanged?.();
   }
 
   async function doRestart() {
     setBusy("restart");
     setErr("");
-    await rolloutRestart(context, kind, namespace ?? "", name);
+    const r = await rolloutRestart(context, kind, namespace ?? "", name);
     setBusy("");
+    if (r.error) {
+      notify.error(`Failed to restart ${name}`, r.error);
+      return;
+    }
+    notify.success(`Rollout restart triggered for ${name}`);
+    onChanged?.();
   }
 
   return (
@@ -234,6 +303,7 @@ export function ResourceActions({
           onClick={() => onOpenLogs({ context, namespace: namespace ?? "", kind, name })}
         />
       )}
+      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
       {SCALABLE.includes(kind) && (
         <IconButton icon={Scaling} label="Scale" onClick={() => setScaling(true)} />
       )}
@@ -245,7 +315,36 @@ export function ResourceActions({
           onClick={() => void doRestart()}
         />
       )}
+      {isCronJob && (
+        <IconButton icon={Zap} label="Run now" onClick={() => setTriggering(true)} />
+      )}
+      {isCronJob && (
+        <IconButton
+          icon={cronjobSuspended ? Play : Pause}
+          label={cronjobSuspended ? "Resume" : "Suspend"}
+          disabled={busy === "suspend"}
+          onClick={() => void doSetSuspend()}
+        />
+      )}
       <IconButton icon={Trash2} label="Delete" danger onClick={() => setConfirmDelete(true)} />
+
+      {triggering && (
+        <ConfirmDialog
+          title="Run CronJob now"
+          message={
+            <>
+              <p style={{ marginTop: 0 }}>
+                Create a one-off Job from <code>{name}</code> and run it immediately.
+              </p>
+              {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
+            </>
+          }
+          confirmLabel="Run"
+          busy={busy === "trigger"}
+          onConfirm={() => void doTrigger()}
+          onCancel={() => setTriggering(false)}
+        />
+      )}
 
       {scaling && (
         <ConfirmDialog

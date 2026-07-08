@@ -171,6 +171,32 @@ export function saveKubeconfigFiles(paths: string[]): void {
   }
 }
 
+const HIDDEN_COLUMNS_KEY = "srelens.hiddenColumns";
+
+/** Column keys the user has hidden for a given table view (keyed by view id). */
+export function loadHiddenColumns(view: string): string[] {
+  try {
+    const parsed = JSON.parse(stored(HIDDEN_COLUMNS_KEY) ?? "{}") as unknown;
+    const map = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+    const keys = map[view];
+    return Array.isArray(keys) ? keys.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist the hidden column keys for a view, merging into the per-view map. */
+export function saveHiddenColumns(view: string, keys: string[]): void {
+  try {
+    const parsed = JSON.parse(stored(HIDDEN_COLUMNS_KEY) ?? "{}") as unknown;
+    const map = parsed && typeof parsed === "object" ? (parsed as Record<string, string[]>) : {};
+    map[view] = [...new Set(keys)];
+    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(map));
+  } catch {
+    // ignore unavailable/quota-exceeded storage
+  }
+}
+
 export function loadContextOrder(): string[] {
   try {
     const parsed = JSON.parse(stored(CONTEXT_ORDER_KEY) ?? "[]") as unknown;
@@ -225,4 +251,39 @@ export function orderContexts<T extends { name: string }>(contexts: T[], order: 
       return left.index - right.index;
     })
     .map(({ context }) => context);
+}
+
+const MCP_SETTINGS_KEY = "srelens.mcp";
+
+/** In-app MCP HTTP server preferences. */
+export interface McpSettings {
+  /** Run the loopback MCP HTTP server while the app is open. */
+  enabled: boolean;
+  /** Port for the loopback server. */
+  port: number;
+}
+
+export const DEFAULT_MCP_SETTINGS: McpSettings = { enabled: false, port: 8765 };
+
+export function loadMcpSettings(): McpSettings {
+  try {
+    const raw = stored(MCP_SETTINGS_KEY);
+    if (!raw) return { ...DEFAULT_MCP_SETTINGS };
+    const parsed = JSON.parse(raw) as Partial<McpSettings>;
+    const port = Number(parsed.port);
+    return {
+      enabled: parsed.enabled === true,
+      port: Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_MCP_SETTINGS.port,
+    };
+  } catch {
+    return { ...DEFAULT_MCP_SETTINGS };
+  }
+}
+
+export function saveMcpSettings(settings: McpSettings): void {
+  try {
+    localStorage.setItem(MCP_SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // ignore unavailable/quota-exceeded storage
+  }
 }

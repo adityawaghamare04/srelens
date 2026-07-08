@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ClusterHotbar } from "./components/ClusterHotbar";
 import { ResourceTabs, type TabDescriptor } from "./components/ResourceTabs";
 import { Sidebar } from "./components/Sidebar";
@@ -13,8 +15,10 @@ import { ClusterOverview } from "./components/ClusterOverview";
 import { PortForwardsView } from "./components/PortForwardsView";
 import { HelmReleasesView } from "./components/HelmReleasesView";
 import { NewResourceEditor } from "./components/NewResourceEditor";
+import { EditResourceTab } from "./components/EditResourceTab";
 import { SettingsView } from "./components/SettingsView";
 import { CommandPalette } from "./components/CommandPalette";
+import { Toaster } from "./components/ui/sonner";
 import { Dock, type DockSession, type DockKind } from "./components/Dock";
 import { StatusBar } from "./components/StatusBar";
 import { LandingPage } from "./components/LandingPage";
@@ -38,7 +42,13 @@ import {
   loadContextOrder,
   saveContextOrder,
   orderContexts,
+  loadUpdateChannel,
+  loadMcpSettings,
 } from "./lib/settings";
+import { startMcpHttp } from "./lib/mcp";
+import { checkForUpdateAndNotify } from "./lib/updateNotifier";
+import { notify } from "./lib/notify";
+import type { SettingsSection } from "./components/SettingsView";
 
 interface ViewTab {
   id: number;
@@ -50,6 +60,8 @@ interface ViewTab {
   focus?: { name: string; namespace: string | null; nonce: number };
   /** For a "new resource" tab: the template kind to start from. */
   create?: { initialKind?: string };
+  /** For an "edit resource" tab: the resource to preload and apply back. */
+  edit?: { kind: string; namespace: string | null; name: string };
   /** Selected namespace filter (empty = all), preserved per tab. */
   namespace?: string;
 }
@@ -72,6 +84,16 @@ export function App() {
   const [defaultNs, setDefaultNs] = useState(getDefaultNamespace);
   const tabIdRef = useRef(1);
   const focusNonce = useRef(0);
+  // Mirror the active tab id into a ref so the (once-registered) Cmd+W menu
+  // event listener always sees the latest value without re-subscribing.
+  const activeTabIdRef = useRef<number | null>(null);
+  activeTabIdRef.current = activeTabId;
+  const tabsRef = useRef<ViewTab[]>([]);
+  tabsRef.current = tabs;
+  // Deep-link the Settings tab to a section (e.g. from the update toast). The
+  // nonce bumps to remount SettingsView at the requested section when asked.
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>("appearance");
+  const [settingsSectionNonce, setSettingsSectionNonce] = useState(0);
 
   // Persist per-cluster namespace whenever it changes.
   useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
@@ -149,6 +171,27 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // On macOS the native menu routes Cmd+W to a custom "Close" item (see
+  // src-tauri) which emits `close-active-tab`. Close the active tab here, and
+  // only fall back to closing the window when no tabs remain — mirroring
+  // browser-style tab behavior.
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const unlistenPromise = listen("close-active-tab", () => {
+      const id = activeTabIdRef.current;
+      if (id != null) {
+        const closingLastTab = tabsRef.current.length === 1 && tabsRef.current[0]?.id === id;
+        closeView(id);
+        if (closingLastTab) void getCurrentWindow().close();
+      } else {
+        void getCurrentWindow().close();
+      }
+    }).catch(() => () => {});
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activeCluster = activeTab?.cluster ?? null;
   const activeKind: ResourceKind = activeTab?.kind ?? "pods";
@@ -175,8 +218,14 @@ export function App() {
     setQuery("");
   }
 
-  /** Open the single workspace-level Settings tab. */
-  function openSettings() {
+  /** Open the single workspace-level Settings tab, optionally at a section. */
+  function openSettings(section?: SettingsSection) {
+    if (section) {
+      setSettingsInitialSection(section);
+      // Remount SettingsView so it opens at the requested section even if the
+      // tab is already open on another section.
+      setSettingsSectionNonce((n) => n + 1);
+    }
     const existing = tabs.find((t) => t.kind === "settings" && !t.cluster);
     if (existing) {
       setActiveTabId(existing.id);
@@ -187,6 +236,38 @@ export function App() {
     setActiveTabId(id);
     setQuery("");
   }
+  // Keep a stable handle to openSettings so the update-check effect's toast
+  // action always uses the current tab state, not a stale closure.
+  const openSettingsRef = useRef(openSettings);
+  openSettingsRef.current = openSettings;
+
+  // Automatically check for updates on startup and periodically, surfacing a
+  // small toast (with a link to the Updates section) when one is available —
+  // rather than only when the user opens Settings and clicks "check".
+  const notifiedVersionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const channel = loadUpdateChannel();
+    const run = () =>
+      void checkForUpdateAndNotify(
+        channel,
+        (update) => {
+          notifiedVersionRef.current = update.version;
+          notify.updateAvailable(update.version, () => openSettingsRef.current("updates"));
+        },
+        { alreadyNotified: (v) => notifiedVersionRef.current === v },
+      );
+    run();
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    const timer = setInterval(run, SIX_HOURS);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Start the in-app MCP HTTP server on launch if the user left it enabled, so
+  // agents can connect without opening Settings first.
+  useEffect(() => {
+    const mcp = loadMcpSettings();
+    if (mcp.enabled) void startMcpHttp(mcp.port).catch(() => {});
+  }, []);
 
   /** Open a resource's kind view and deep-link to its detail (from search). */
   function openResource(kind: ResourceKind, namespace: string | null, name: string) {
@@ -219,6 +300,26 @@ export function App() {
     if (!activeCluster) return;
     const id = tabIdRef.current++;
     setTabs((ts) => [...ts, { id, cluster: activeCluster, kind: "newresource", create: { initialKind } }]);
+    setActiveTabId(id);
+  }
+
+  /** Open (or focus) a full-tab editor preloaded with a resource's manifest. */
+  function openEditResource(kind: string, namespace: string | null, name: string) {
+    if (!activeCluster) return;
+    const existing = tabs.find(
+      (t) =>
+        t.kind === "editresource" &&
+        t.cluster === activeCluster &&
+        t.edit?.kind === kind &&
+        (t.edit?.namespace ?? null) === (namespace ?? null) &&
+        t.edit?.name === name,
+    );
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = tabIdRef.current++;
+    setTabs((ts) => [...ts, { id, cluster: activeCluster, kind: "editresource", edit: { kind, namespace, name } }]);
     setActiveTabId(id);
   }
 
@@ -273,6 +374,7 @@ export function App() {
       context: string;
       namespace: string;
       pod?: string;
+      container?: string;
       workload?: { kind: string; name: string };
     },
   ) {
@@ -294,9 +396,11 @@ export function App() {
 
   const tabDescriptors: TabDescriptor[] = tabs.map((t) => ({
     id: t.id,
-    label: t.cluster
-      ? `${t.crd ? t.crd.kind : RESOURCE_LABELS[t.kind]} · ${contextDisplayName(t.cluster, contextProfiles[t.cluster])}`
-      : RESOURCE_LABELS[t.kind],
+    label: t.edit
+      ? `edit: ${t.edit.kind}/${t.edit.name}`
+      : t.cluster
+        ? `${t.crd ? t.crd.kind : RESOURCE_LABELS[t.kind]} · ${contextDisplayName(t.cluster, contextProfiles[t.cluster])}`
+        : RESOURCE_LABELS[t.kind],
   }));
 
   return (
@@ -344,7 +448,8 @@ export function App() {
                 <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
                   {activeKind === "settings" ? (
                     <SettingsView
-                      key={activeTab.id}
+                      key={`${activeTab.id}:${settingsSectionNonce}`}
+                      initialSection={settingsInitialSection}
                       theme={theme}
                       onThemeNameChange={setThemeName}
                       onThemeModeChange={setThemeMode}
@@ -390,6 +495,14 @@ export function App() {
                       context={activeCluster}
                       initialKind={activeTab.create?.initialKind}
                     />
+                  ) : activeCluster && activeKind === "editresource" && activeTab.edit ? (
+                    <EditResourceTab
+                      key={activeTab.id}
+                      context={activeCluster}
+                      kind={activeTab.edit.kind}
+                      namespace={activeTab.edit.namespace}
+                      name={activeTab.edit.name}
+                    />
                   ) : activeCluster ? (
                     <ResourceBrowser
                       key={activeTab.id}
@@ -399,6 +512,7 @@ export function App() {
                       onQueryChange={setQuery}
                       onOpenTerminal={(s) => openDock("terminal", s)}
                       onOpenLogs={(s) => openDock("logs", s)}
+                      onOpenEdit={openEditResource}
                       onOpenWorkloadLogs={(s) =>
                         openDock("logs", {
                           context: s.context,
@@ -462,6 +576,7 @@ export function App() {
         onOpenResource={openResource}
         onOpenCrd={(crd) => activeCluster && openCrdView(activeCluster, crd)}
       />
+      <Toaster position="top-right" richColors closeButton />
     </div>
   );
 }
