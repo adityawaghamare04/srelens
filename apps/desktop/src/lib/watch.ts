@@ -26,6 +26,11 @@ export const WATCHABLE_KINDS = [
   "persistentvolumeclaims",
   "persistentvolumes",
   "storageclasses",
+  "serviceaccounts",
+  "roles",
+  "clusterroles",
+  "rolebindings",
+  "clusterrolebindings",
   "events",
 ] as const;
 

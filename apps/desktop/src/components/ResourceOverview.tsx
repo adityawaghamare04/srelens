@@ -4,6 +4,7 @@ import type { X509Certificate } from "@peculiar/x509";
 import { getObject, getSecret, type K8sObject } from "../lib/manifest";
 import { listEndpointSlices } from "../lib/network";
 import { podsForPvc, formatStorageSize } from "../lib/storage";
+import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from "../lib/rbac";
 import { updateConfigData } from "../lib/actions";
 import {
   Spinner,
@@ -2169,40 +2170,109 @@ function NetworkPolicyBody({ obj }: { obj: K8sObject }) {
   );
 }
 
-function ServiceAccountBody({ obj, onOpenResource }: { obj: K8sObject; onOpenResource?: OpenResource }) {
+function ServiceAccountBody({
+  obj,
+  context = "",
+  onOpenResource,
+}: {
+  obj: K8sObject;
+  context?: string;
+  onOpenResource?: OpenResource;
+}) {
   const secrets = asArray(obj.secrets).map((s) => str(asRecord(s).name)).filter(Boolean);
   const pull = asArray(obj.imagePullSecrets).map((s) => str(asRecord(s).name)).filter(Boolean);
-  const namespace = str(asRecord(obj.metadata).namespace) || null;
+  const meta = asRecord(obj.metadata);
+  const namespace = str(meta.namespace) || null;
+  const name = str(meta.name);
+
+  // "What can this SA do?" — the (Cluster)RoleBindings that grant it permissions
+  // and the pods that run as it. Both are reverse lookups the backend resolves.
+  const [bindings, setBindings] = useState<SaBinding[]>([]);
+  const [podTargets, setPodTargets] = useState<ResourceTarget[]>([]);
+  useEffect(() => {
+    setBindings([]);
+    setPodTargets([]);
+    if (!context || !namespace || !name) return;
+    let active = true;
+    void bindingsForServiceAccount(context, namespace, name).then((r) => {
+      if (active) setBindings(r.bindings ?? []);
+    });
+    void podsForServiceAccount(context, namespace, name).then((r) => {
+      if (active) setPodTargets((r.pods ?? []).map((p) => ({ kind: "Pod", namespace, name: p.name })));
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, name]);
+
   return (
-    <Section title="Service Account">
-      <KV
-        pairs={[
-          [
-            "Secrets",
-            secrets.length ? (
-              <LinkedResources
-                targets={secrets.map((name) => ({ kind: "Secret", namespace, name }))}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-          [
-            "Image pull secrets",
-            pull.length ? (
-              <LinkedResources
-                targets={pull.map((name) => ({ kind: "Secret", namespace, name }))}
-                onOpenResource={onOpenResource}
-              />
-            ) : (
-              ""
-            ),
-          ],
-          ["Automount token", obj.automountServiceAccountToken === false ? "No" : "Yes"],
-        ]}
-      />
-    </Section>
+    <>
+      <Section title="Service Account">
+        <KV
+          pairs={[
+            [
+              "Secrets",
+              secrets.length ? (
+                <LinkedResources
+                  targets={secrets.map((name) => ({ kind: "Secret", namespace, name }))}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+            [
+              "Image pull secrets",
+              pull.length ? (
+                <LinkedResources
+                  targets={pull.map((name) => ({ kind: "Secret", namespace, name }))}
+                  onOpenResource={onOpenResource}
+                />
+              ) : (
+                ""
+              ),
+            ],
+            ["Automount token", obj.automountServiceAccountToken === false ? "No" : "Yes"],
+          ]}
+        />
+      </Section>
+      {(bindings.length > 0 || podTargets.length > 0) && (
+        <Section title="Used by">
+          <KV
+            pairs={[
+              [
+                "Bindings",
+                bindings.length ? (
+                  <div className="fl-sa-bindings">
+                    {bindings.map((b, i) => (
+                      <div key={`${b.kind}/${b.name}/${i}`}>
+                        <ResourceLink
+                          target={{ kind: b.kind, namespace: b.namespace, name: b.name }}
+                          onOpenResource={onOpenResource}
+                        >
+                          {b.kind}/{b.name}
+                        </ResourceLink>{" "}
+                        grants <span className="fl-mono">{b.role}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  ""
+                ),
+              ],
+              [
+                "Pods",
+                podTargets.length ? (
+                  <LinkedResources targets={podTargets} onOpenResource={onOpenResource} />
+                ) : (
+                  ""
+                ),
+              ],
+            ]}
+          />
+        </Section>
+      )}
+    </>
   );
 }
 
@@ -2525,7 +2595,7 @@ function KindBody({
     case "NetworkPolicy":
       return <NetworkPolicyBody obj={obj} />;
     case "ServiceAccount":
-      return <ServiceAccountBody obj={obj} onOpenResource={onOpenResource} />;
+      return <ServiceAccountBody obj={obj} context={context} onOpenResource={onOpenResource} />;
     case "Endpoints":
       return <EndpointsBody obj={obj} onOpenResource={onOpenResource} />;
     case "EndpointSlice":

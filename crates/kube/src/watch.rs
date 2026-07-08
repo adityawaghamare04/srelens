@@ -12,10 +12,11 @@ use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
     ConfigMap, Event as CoreEvent, LimitRange, PersistentVolume, PersistentVolumeClaim, Pod,
-    ResourceQuota, Secret, Service,
+    ResourceQuota, Secret, Service, ServiceAccount,
 };
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
+use k8s_openapi::api::rbac::v1::{ClusterRole, ClusterRoleBinding, Role, RoleBinding};
 use k8s_openapi::api::storage::v1::StorageClass;
 use kube::runtime::watcher::{Config, Event};
 use kube::Api;
@@ -31,6 +32,15 @@ use crate::limitranges::{summarise as summarise_limitrange, LimitRangeSummary};
 use crate::networkpolicies::{summarise as summarise_networkpolicy, NetworkPolicySummary};
 use crate::persistentvolumes::{summarise as summarise_pv, PvSummary};
 use crate::pvcs::{summarise as summarise_pvc, PvcSummary};
+use crate::rolebindings::{
+    summarise as summarise_rolebinding, summarise_cluster as summarise_clusterrolebinding,
+    ClusterRoleBindingSummary, RoleBindingSummary,
+};
+use crate::roles::{
+    summarise as summarise_role, summarise_cluster as summarise_clusterrole, ClusterRoleSummary,
+    RoleSummary,
+};
+use crate::serviceaccounts::{summarise as summarise_serviceaccount, ServiceAccountSummary};
 use crate::storageclasses::{summarise as summarise_storageclass, StorageClassSummary};
 use crate::resourcequotas::{summarise as summarise_resourcequota, ResourceQuotaSummary};
 use crate::secrets::{summarise as summarise_secret, SecretSummary};
@@ -570,6 +580,126 @@ where
         api,
         summarise_storageclass,
         |s: &StorageClassSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch ServiceAccounts in a namespace.
+pub async fn watch_serviceaccounts<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ServiceAccountSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ServiceAccount> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_serviceaccount,
+        |s: &ServiceAccountSummary| s.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch Roles in a namespace.
+pub async fn watch_roles<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<RoleSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<Role> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_role,
+        |r: &RoleSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster ClusterRoles (cluster-scoped; namespace ignored).
+pub async fn watch_clusterroles<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ClusterRoleSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ClusterRole> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_clusterrole,
+        |r: &ClusterRoleSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch RoleBindings in a namespace.
+pub async fn watch_rolebindings<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<RoleBindingSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<RoleBinding> = crate::scoped_api(client, &namespace);
+    watch_typed(
+        api,
+        summarise_rolebinding,
+        |r: &RoleBindingSummary| r.name.clone(),
+        on_update,
+        on_status,
+    )
+    .await
+}
+
+/// Watch cluster ClusterRoleBindings (cluster-scoped; namespace ignored).
+pub async fn watch_clusterrolebindings<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    _namespace: String,
+    on_update: F,
+    on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut(Vec<ClusterRoleBindingSummary>) + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    let client = cache.get(&context).await?;
+    let api: Api<ClusterRoleBinding> = Api::all(client);
+    watch_typed(
+        api,
+        summarise_clusterrolebinding,
+        |r: &ClusterRoleBindingSummary| r.name.clone(),
         on_update,
         on_status,
     )
