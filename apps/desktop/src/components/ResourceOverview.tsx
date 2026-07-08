@@ -3,7 +3,7 @@ import { ArrowLeftRight, ChevronDown, ChevronUp } from "lucide-react";
 import type { X509Certificate } from "@peculiar/x509";
 import { getObject, getSecret, type K8sObject } from "../lib/manifest";
 import { listEndpointSlices } from "../lib/network";
-import { podsForPvc } from "../lib/storage";
+import { podsForPvc, formatStorageSize } from "../lib/storage";
 import { updateConfigData } from "../lib/actions";
 import {
   Spinner,
@@ -1856,7 +1856,7 @@ function PvcBody({
         <KV
           pairs={[
             ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
-            ["Capacity", str(asRecord(status.capacity).storage)],
+            ["Capacity", formatStorageSize(str(asRecord(status.capacity).storage))],
             ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
             [
               "Storage class",
@@ -1909,7 +1909,7 @@ function PersistentVolumeBody({
       <KV
         pairs={[
           ["Status", <StatusPill key="s" status={phase || "—"} kind={phaseKind(phase)} />],
-          ["Capacity", str(asRecord(spec.capacity).storage)],
+          ["Capacity", formatStorageSize(str(asRecord(spec.capacity).storage))],
           ["Access modes", asArray(spec.accessModes).map(str).join(", ")],
           ["Reclaim policy", str(spec.persistentVolumeReclaimPolicy)],
           ["Volume mode", str(spec.volumeMode)],

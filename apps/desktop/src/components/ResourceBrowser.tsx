@@ -31,6 +31,7 @@ import {
   type NetworkPolicySummary,
 } from "../lib/network";
 import {
+  formatStorageSize,
   type PvcSummary,
   type PvSummary,
   type StorageClassSummary,
@@ -400,7 +401,7 @@ const pvcColumns: Column<PvcSummary>[] = [
   { key: "name", header: "Claim", render: (p) => <strong>{p.name}</strong> },
   { key: "namespace", header: "Namespace", render: (p) => <span className="fl-link">{p.namespace}</span> },
   { key: "status", header: "Status", render: (p) => <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" ? "Ready" : p.status)} /> },
-  { key: "capacity", header: "Capacity", render: (p) => <Muted>{p.capacity || "—"}</Muted> },
+  { key: "capacity", header: "Capacity", render: (p) => <Muted>{formatStorageSize(p.capacity)}</Muted> },
   { key: "accessModes", header: "Access Modes", render: (p) => <Muted>{p.accessModes || "—"}</Muted> },
   { key: "storageClass", header: "Storage Class", render: (p) => <span className="fl-link">{p.storageClass || "—"}</span> },
   { key: "volume", header: "Volume", render: (p) => <span className="fl-link">{p.volume || "—"}</span> },
@@ -409,7 +410,7 @@ const pvcColumns: Column<PvcSummary>[] = [
 
 const pvColumns: Column<PvSummary>[] = [
   { key: "name", header: "Volume", render: (p) => <strong>{p.name}</strong> },
-  { key: "capacity", header: "Capacity", render: (p) => <Muted>{p.capacity || "—"}</Muted> },
+  { key: "capacity", header: "Capacity", render: (p) => <Muted>{formatStorageSize(p.capacity)}</Muted> },
   { key: "accessModes", header: "Access Modes", render: (p) => <Muted>{p.accessModes || "—"}</Muted> },
   { key: "reclaimPolicy", header: "Reclaim", render: (p) => <Muted>{p.reclaimPolicy || "—"}</Muted> },
   { key: "status", header: "Status", render: (p) => <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" || p.status === "Available" ? "Ready" : p.status)} /> },

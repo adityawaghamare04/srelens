@@ -1,5 +1,31 @@
 import { describe, it, expect, vi } from "vitest";
-import { listPersistentVolumeClaims, listPersistentVolumes, listStorageClasses, podsForPvc } from "./storage";
+import {
+  listPersistentVolumeClaims,
+  listPersistentVolumes,
+  listStorageClasses,
+  podsForPvc,
+  formatStorageSize,
+} from "./storage";
+
+describe("formatStorageSize", () => {
+  it("humanizes a raw byte quantity to the nearest binary unit", () => {
+    expect(formatStorageSize("7586630231655")).toBe("6.9Ti");
+    expect(formatStorageSize("1073741824")).toBe("1Gi");
+    expect(formatStorageSize("536870912")).toBe("512Mi");
+  });
+
+  it("normalizes an already-suffixed quantity", () => {
+    expect(formatStorageSize("10Gi")).toBe("10Gi");
+    expect(formatStorageSize("500Mi")).toBe("500Mi");
+    expect(formatStorageSize("5G")).toBe("4.7Gi");
+  });
+
+  it("shows raw bytes below 1Ki and a dash for empty/invalid", () => {
+    expect(formatStorageSize("512")).toBe("512");
+    expect(formatStorageSize("")).toBe("—");
+    expect(formatStorageSize("nonsense")).toBe("nonsense");
+  });
+});
 
 describe("listPersistentVolumeClaims", () => {
   it("calls k8s.listPersistentVolumeClaims and returns typed rows", async () => {

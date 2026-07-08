@@ -281,16 +281,18 @@ describe("ResourceBrowser", () => {
     expect(screen.getByText("Ingress, Egress")).toBeDefined();
   });
 
-  it("streams PVCs live with status, capacity and bound volume", async () => {
+  it("streams PVCs live and humanizes a raw-byte capacity", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
     watchResourceMock.mockImplementation(
       watchWith([
-        { name: "data", namespace: "default", status: "Bound", capacity: "10Gi", accessModes: "RWO", storageClass: "standard", volume: "pv-123", age: "3d" },
+        // Raw bytes as MinIO/some provisioners report — must render as a size, not digits.
+        { name: "data", namespace: "default", status: "Bound", capacity: "7586630231655", accessModes: "RWO", storageClass: "standard", volume: "pv-123", age: "3d" },
       ]),
     );
     render(<ResourceBrowser context="kind-dev" kind="persistentvolumeclaims" />);
     await waitFor(() => expect(screen.getByText("data")).toBeDefined());
-    expect(screen.getByText("10Gi")).toBeDefined();
+    expect(screen.getByText("6.9Ti")).toBeDefined();
+    expect(screen.queryByText("7586630231655")).toBeNull();
     expect(screen.getByText("pv-123")).toBeDefined();
   });
 

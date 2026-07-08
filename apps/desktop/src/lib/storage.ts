@@ -1,6 +1,48 @@
 import { invokeCapability, type Invoker } from "../transport/transport";
 import type { PodSummary } from "./workloads";
 
+const BINARY_UNITS: Array<[string, number]> = [
+  ["Pi", 2 ** 50],
+  ["Ti", 2 ** 40],
+  ["Gi", 2 ** 30],
+  ["Mi", 2 ** 20],
+  ["Ki", 2 ** 10],
+];
+const UNIT_FACTORS: Record<string, number> = {
+  Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60,
+  k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18,
+};
+
+/** Parse a Kubernetes storage Quantity ("10Gi", "5G", "7586630231655") to bytes. */
+function quantityToBytes(quantity: string): number | null {
+  const m = /^([0-9.]+)\s*([a-zA-Z]*)$/.exec((quantity ?? "").trim());
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (Number.isNaN(n)) return null;
+  const unit = m[2];
+  if (unit === "") return n;
+  return UNIT_FACTORS[unit] ? n * UNIT_FACTORS[unit] : n;
+}
+
+/**
+ * Render a storage Quantity as a compact binary size ("6.9Ti", "10Gi"). Raw
+ * byte quantities (as MinIO and some provisioners report) become the nearest
+ * Ki/Mi/Gi/Ti/Pi; values below 1Ki stay as bytes, and an empty value shows "—".
+ */
+export function formatStorageSize(quantity: string): string {
+  if (!quantity) return "—";
+  const bytes = quantityToBytes(quantity);
+  if (bytes == null) return quantity;
+  if (bytes === 0) return "0";
+  for (const [suffix, factor] of BINARY_UNITS) {
+    if (bytes >= factor) {
+      const value = bytes / factor;
+      return `${value.toFixed(1).replace(/\.0$/, "")}${suffix}`;
+    }
+  }
+  return `${bytes}`;
+}
+
 /** PersistentVolumeClaim row — mirrors `crates/kube/src/pvcs.rs`. */
 export interface PvcSummary {
   name: string;

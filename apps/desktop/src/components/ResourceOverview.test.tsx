@@ -19,7 +19,10 @@ vi.mock("../lib/manifest", async (importOriginal) => ({
 const { listEndpointSlicesMock } = vi.hoisted(() => ({ listEndpointSlicesMock: vi.fn() }));
 vi.mock("../lib/network", () => ({ listEndpointSlices: listEndpointSlicesMock }));
 const { podsForPvcMock } = vi.hoisted(() => ({ podsForPvcMock: vi.fn() }));
-vi.mock("../lib/storage", () => ({ podsForPvc: podsForPvcMock }));
+vi.mock("../lib/storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/storage")>()),
+  podsForPvc: podsForPvcMock,
+}));
 
 import {
   ResourceOverview,
