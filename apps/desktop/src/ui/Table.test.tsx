@@ -1,7 +1,71 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
-import { Table, filterTableData, type Column } from "./Table";
+import { Table, filterTableData, computeVisibleRange, type Column } from "./Table";
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("Table virtualization", () => {
+  const bigColumns: Column<{ name: string; phase: string }>[] = [
+    { key: "name", header: "Name" },
+    { key: "phase", header: "Phase" },
+  ];
+  const bigData = Array.from({ length: 1000 }, (_, i) => ({ name: `row-${i}`, phase: "x" }));
+
+  it("renders every row when layout can't be measured (jsdom fallback)", () => {
+    const { container } = render(
+      <Table columns={bigColumns} data={bigData} getRowKey={(r) => r.name} />,
+    );
+    // No measurable row height → degrade to rendering all rows.
+    expect(container.querySelectorAll("tbody tr.fl-data-table__row").length).toBe(1000);
+  });
+
+  it("renders only a window of rows when the row height is measurable", () => {
+    // Simulate layout: each row 20px tall inside a 200px scroll viewport.
+    vi.spyOn(HTMLTableRowElement.prototype, "getBoundingClientRect").mockReturnValue({
+      height: 20,
+    } as DOMRect);
+    const { container } = render(
+      <div data-testid="scroll" style={{ overflowY: "auto" }}>
+        <Table columns={bigColumns} data={bigData} getRowKey={(r) => r.name} />
+      </div>,
+    );
+    const sp = screen.getByTestId("scroll");
+    Object.defineProperty(sp, "clientHeight", { value: 200, configurable: true });
+    Object.defineProperty(sp, "scrollTop", { value: 0, writable: true, configurable: true });
+    fireEvent.scroll(sp);
+
+    const rows = container.querySelectorAll("tbody tr.fl-data-table__row");
+    expect(rows.length).toBeLessThan(100); // a window, not all 1000
+    expect(rows.length).toBeGreaterThan(0);
+    expect(screen.getByText("row-0")).toBeDefined();
+    expect(screen.queryByText("row-900")).toBeNull(); // far off-screen, not rendered
+  });
+});
+
+describe("computeVisibleRange", () => {
+  it("returns the window of rows around the scroll position with overscan", () => {
+    // rowHeight 20, viewport 100 → 5 visible rows; scrolled to row 50; overscan 3.
+    const r = computeVisibleRange({ scrollTop: 1000, viewportHeight: 100, rowHeight: 20, total: 500, overscan: 3 });
+    expect(r.start).toBe(47); // 50 - 3
+    expect(r.end).toBe(58); // 50 + ceil(100/20)=5 + 3
+  });
+
+  it("clamps to the data bounds", () => {
+    expect(computeVisibleRange({ scrollTop: 0, viewportHeight: 100, rowHeight: 20, total: 500, overscan: 3 }).start).toBe(0);
+    const end = computeVisibleRange({ scrollTop: 999999, viewportHeight: 100, rowHeight: 20, total: 500, overscan: 3 });
+    expect(end.end).toBe(500);
+    expect(end.start).toBeLessThanOrEqual(500);
+  });
+
+  it("renders everything when the row height is unknown (0)", () => {
+    // jsdom / pre-measure: fall back to the full range rather than dividing by zero.
+    expect(computeVisibleRange({ scrollTop: 0, viewportHeight: 0, rowHeight: 0, total: 42, overscan: 3 })).toEqual({
+      start: 0,
+      end: 42,
+    });
+  });
+});
 
 interface Row {
   name: string;
