@@ -9,6 +9,8 @@ vi.mock("./WorkloadRelations", () => ({
   CronJobJobs: () => <div data-testid="cronjob-jobs" />,
 }));
 vi.mock("./MetricsPanel", () => ({ MetricsPanel: () => <div data-testid="metrics" /> }));
+const { updateConfigDataMock } = vi.hoisted(() => ({ updateConfigDataMock: vi.fn() }));
+vi.mock("../lib/actions", () => ({ updateConfigData: updateConfigDataMock }));
 
 import {
   ResourceOverview,
@@ -277,7 +279,7 @@ describe("ObjectDetail (workload kinds)", () => {
 });
 
 describe("ObjectDetail (ConfigMap / Secret)", () => {
-  it("shows ConfigMap values inline", () => {
+  it("shows ConfigMap values in editable fields", () => {
     const cm: K8sObject = {
       kind: "ConfigMap",
       metadata: { name: "cm", namespace: "default" },
@@ -285,20 +287,38 @@ describe("ObjectDetail (ConfigMap / Secret)", () => {
     };
     render(<ObjectDetail kind="ConfigMap" obj={cm} now={NOW} />);
     expect(screen.getByText("app.conf")).toBeDefined();
-    expect(screen.getByText("level=info")).toBeDefined();
+    expect((screen.getByLabelText("Value for app.conf") as HTMLTextAreaElement).value).toBe("level=info");
   });
 
-  it("masks Secret values until revealed (base64-decoded)", () => {
+  it("masks Secret values until revealed for editing (base64-decoded)", () => {
     const secret: K8sObject = {
       kind: "Secret",
       metadata: { name: "s", namespace: "default" },
       data: { token: "aGVsbG8=" }, // "hello"
     };
     render(<ObjectDetail kind="Secret" obj={secret} now={NOW} />);
-    expect(screen.getByText("••••••••")).toBeDefined();
-    expect(screen.queryByText("hello")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Reveal" }));
-    expect(screen.getByText("hello")).toBeDefined();
+    // No editable field is exposed until the user reveals the key.
+    expect(screen.queryByLabelText("Value for token")).toBeNull();
+    expect(screen.queryByDisplayValue("hello")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Reveal/ }));
+    expect((screen.getByLabelText("Value for token") as HTMLTextAreaElement).value).toBe("hello");
+  });
+
+  it("saves an edited ConfigMap value via updateConfigData", async () => {
+    updateConfigDataMock.mockResolvedValue({ ok: true });
+    const cm: K8sObject = {
+      kind: "ConfigMap",
+      metadata: { name: "web-config", namespace: "default" },
+      data: { "app.conf": "level=info" },
+    };
+    render(<ObjectDetail kind="ConfigMap" obj={cm} now={NOW} context="kind-dev" />);
+    fireEvent.change(screen.getByLabelText("Value for app.conf"), { target: { value: "level=debug" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(updateConfigDataMock).toHaveBeenCalledWith("kind-dev", "ConfigMap", "default", "web-config", {
+        "app.conf": "level=debug",
+      }),
+    );
   });
 
   it("shows parsed TLS certificate metadata without revealing material", async () => {

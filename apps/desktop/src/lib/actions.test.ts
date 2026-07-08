@@ -5,6 +5,7 @@ import {
   rolloutRestart,
   cronjobSetSuspend,
   cronjobTriggerNow,
+  updateConfigData,
 } from "./actions";
 
 describe("resource actions", () => {
@@ -58,6 +59,18 @@ describe("resource actions", () => {
       namespace: "ops",
       name: "nightly",
       suspend: true,
+    });
+  });
+
+  it("updateConfigData passes kind/namespace/name and the edited data map", async () => {
+    const invoke = vi.fn().mockResolvedValue({ ok: true });
+    await updateConfigData("c", "ConfigMap", "default", "web-config", { "app.conf": "level=debug" }, invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.updateConfigData", {
+      context: "c",
+      kind: "ConfigMap",
+      namespace: "default",
+      name: "web-config",
+      data: { "app.conf": "level=debug" },
     });
   });
 
