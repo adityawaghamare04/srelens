@@ -4053,3 +4053,51 @@ body {
     width: 100%;
   }
 }
+
+.fl-diff { display: flex; flex-direction: column; gap: 6px; }
+.fl-diff__title { display: flex; align-items: center; gap: 6px; padding: 6px 8px; }
+.fl-diff__badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; }
+.fl-diff__badge--new { background: color-mix(in srgb, var(--fl-color-success, #22c55e) 18%, transparent); }
+.fl-diff__empty { padding: 8px; color: var(--fl-color-muted-foreground, #888); font-size: 13px; }
+.fl-diff__table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--fl-font-mono, ui-monospace, monospace); font-size: 12px; }
+.fl-diff__cell { width: 50%; white-space: pre-wrap; word-break: break-word; padding: 0 8px; vertical-align: top; border-left: 1px solid var(--fl-color-border, #e5e7eb); }
+.fl-diff__row--same { color: color-mix(in srgb, currentColor 55%, transparent); }
+.fl-diff__row--replace .fl-diff__cell--left,
+.fl-diff__row--delete .fl-diff__cell--left { background: color-mix(in srgb, var(--fl-color-danger, #ef4444) 14%, transparent); }
+.fl-diff__row--replace .fl-diff__cell--right,
+.fl-diff__row--insert .fl-diff__cell--right { background: color-mix(in srgb, var(--fl-color-success, #22c55e) 16%, transparent); }
+
+.fl-apply-conflict { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--fl-color-border, #e5e7eb); background: color-mix(in srgb, var(--fl-color-danger, #ef4444) 10%, transparent); font-size: 13px; }
+.fl-apply-conflict > p { flex: 1 1 auto; }
+.fl-apply-conflict__list { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; }
+.fl-apply-conflict__item { margin: 0; }
+.fl-apply-stale { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--fl-color-warning, #f59e0b) 20%, transparent); }
+.fl-changes-panel { padding: 4px 0; }
+.fl-changes-panel__resize {
+  position: relative;
+  flex: 0 0 8px;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+}
+.fl-changes-panel__resize:hover {
+  background: transparent;
+}
+.fl-changes-panel__resize::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 44px;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.45);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.fl-changes-panel__resize:hover::after {
+  background: rgba(128, 128, 128, 0.65);
+  opacity: 1;
+}
