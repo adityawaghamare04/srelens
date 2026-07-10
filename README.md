@@ -5,10 +5,10 @@
 <h3 align="center">The Kubernetes control room—built in Rust, ready for engineers and AI agents.</h3>
 
 <p align="center">
-  A local-first Kubernetes desktop workspace for SREs, platform engineers, and DevOps engineers.
-  Investigate, analyse, and take safe action across clusters from one application, built with
-  <a href="https://v2.tauri.app">Tauri v2</a> and a pure-Rust core. Supported backend capabilities
-  are also available to AI agents through <a href="https://modelcontextprotocol.io">MCP</a>.
+  srelens is an open-source, local-first Kubernetes desktop workspace for SREs,
+  platform engineers, and DevOps engineers. Investigate, analyse, and take safe
+  action across clusters from one application built with Tauri v2, React 19,
+  and a pure-Rust core.
 </p>
 
 <p align="center">
@@ -27,140 +27,199 @@
 </p>
 
 <p align="center">
-  <img alt="Rust" src="https://img.shields.io/badge/core-100%25_Rust-8b5cf6">
-  <img alt="Tauri v2" src="https://img.shields.io/badge/shell-Tauri_v2-e457c2">
-  <img alt="MCP" src="https://img.shields.io/badge/agents-MCP_native-fb923c">
+  <img alt="Rust core" src="https://img.shields.io/badge/core-Rust-8b5cf6">
+  <img alt="Tauri v2" src="https://img.shields.io/badge/desktop-Tauri_v2-e457c2">
+  <img alt="MCP server" src="https://img.shields.io/badge/agents-MCP-fb923c">
+  <img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-f59e0b">
 </p>
 
 ---
 
 ## Why srelens?
 
-srelens is a desktop workspace for operating Kubernetes clusters, inspired by
-[Lens](https://k8slens.dev)/[Freelens](https://github.com/freelensapp/freelens) but rebuilt
-from scratch on a modern stack. Three ideas drive the project:
+Kubernetes troubleshooting often means moving between terminals, dashboards, YAML
+editors, logs, and cluster contexts. srelens brings that investigation loop into
+one local-first desktop workspace.
 
-| | srelens | Electron-era Kubernetes IDEs |
-|---|---|---|
-| **Rendering** | OS system WebView via Tauri v2 | Bundled Chromium in every install |
-| **Core runtime** | Pure Rust (`kube-rs`, `tokio`) — no Node.js | Node.js main process |
-| **Cluster access** | Direct to the API server via `kube-rs` | Bundled `kubectl` + `helm` behind a proxy layer |
-| **AI agents** | Built-in MCP server, every capability exposed | — |
+- **One workspace from investigation to action** — browse resources, inspect events
+  and YAML, follow logs, use terminals, manage port forwards, and take cluster
+  actions without constantly switching tools.
+- **Built for engineers and AI agents** — supported backend capabilities are also
+  available through the built-in MCP server.
+- **Local-first cluster access** — srelens uses credentials from your local
+  kubeconfig and connects directly to Kubernetes API servers, without routing
+  cluster access through a srelens cloud service.
+- **Safe operations** — destructive actions are identified and confirmation-gated.
+- **Open source** — licensed under MIT, with public code, releases, issues, and
+  roadmap on GitHub.
 
-**MCP-native by design** — every backend operation is declared once in a capability
-registry and surfaced twice: as a Tauri command for the UI *and* as an MCP tool for
-external agents (Claude, IDEs, automation). A CI completeness test guarantees the two
-surfaces never drift.
+srelens uses the operating system WebView through Tauri v2 and a Rust backend built
+with `kube-rs` and `tokio`. It is independently developed and is not affiliated with
+Mirantis Lens or the Freelens project.
 
 ## Features
 
-- **Multi-cluster workspace** — kubeconfig discovery (including additional files and pasted configs), context switching, cluster hotbar, per-context avatars and colors.
-- **Live resource browsing** — 40+ resource kinds across workloads, networking, storage, RBAC, and custom resources (CRDs), with server-side watches streaming into the UI — no polling.
-- **Resource detail & YAML** — manifest view, schema-aware YAML editing (CodeMirror) with validation and apply, resource events, workload relations.
-- **Operations** — scale, rollout restart, delete/evict pods, cordon/drain nodes, port-forward management — every destructive action gated behind confirmation.
-- **Pod terminal & logs** — interactive `exec` sessions (xterm.js) and live log streaming with follow.
-- **Helm** — browse installed releases and inspect release details.
-- **Metrics** — node and pod metrics (metrics-server) with usage overviews and sparklines.
-- **Command palette** — `⌘K` keyboard-first navigation across contexts, resources, and actions.
-- **MCP-native** — every capability is also an MCP tool; enable the server and copy client config from **Settings → MCP** (see below).
-- **Local-first** — talks directly to your API servers with your kubeconfig credentials. No cloud service in between.
+- **Multi-cluster workspace** — discover kubeconfig contexts, add additional files,
+  paste configurations, customise profiles, and move between clusters with the
+  cluster hotbar.
+- **Live Kubernetes resources** — browse workloads, networking, storage, RBAC,
+  admission, autoscaling, and custom resources with live watch updates.
+- **Resource details and YAML** — inspect manifests, events, relationships, and
+  schema-aware YAML with validation and apply workflows.
+- **Logs and pod terminals** — stream logs and open interactive container sessions
+  directly beside the resource you are investigating.
+- **Port forwarding** — create, inspect, and manage active forwards from the desktop
+  workspace.
+- **Helm views** — browse installed releases and inspect release details.
+- **Metrics** — inspect node and pod CPU and memory data when `metrics-server` is
+  available.
+- **Operational actions** — scale workloads, restart rollouts, evict or delete pods,
+  and cordon or drain nodes with confirmation gates for destructive actions.
+- **Command palette** — use keyboard-first navigation across contexts, resources,
+  and supported actions.
+- **MCP access** — expose supported backend capabilities to MCP-capable clients over
+  stdio or loopback HTTP.
+- **Local terminal workflows** — use `kubectl` and other installed command-line tools
+  from the built-in local terminal when needed.
 
 ## Install
 
-Download the latest build for your platform from the
-[**Releases**](https://github.com/srelens/srelens/releases/latest) page:
+Download the latest beta for your platform from
+[GitHub Releases](https://github.com/srelens/srelens/releases/latest).
 
-- **macOS** — `.dmg` (Apple silicon & Intel)
-- **Linux** — `.AppImage`, `.deb`, or `.rpm`
-- **Windows** — `.msi` installer
+| Platform | Packages | Notes |
+| --- | --- | --- |
+| macOS | `.dmg` for Apple Silicon and Intel | Developer ID signed and notarized |
+| Linux | `.AppImage`, `.deb`, `.rpm` | AppImage supports the in-app updater |
+| Windows | `.exe`, `.msi` | Windows may show a SmartScreen prompt while code signing remains on the roadmap |
 
-See the [installation guide](docs/INSTALL.md) for step-by-step instructions,
-first-launch security prompts, updating, and uninstalling. Prefer to build from
-source? See [Quick start](#quick-start).
+See the [installation guide](docs/INSTALL.md) for platform-specific installation,
+first-launch, updating, verification, and uninstall instructions.
 
 ## MCP server
 
-srelens is MCP-native — every capability it exposes to the UI is also an MCP tool, so
-agents and MCP-enabled editors can drive your clusters. Set it up in **Settings → MCP**:
+srelens includes an MCP server generated from the same capability registry used by
+the desktop backend. Supported backend capabilities can therefore be used by
+MCP-capable clients without creating a separate cluster integration layer.
 
-- **Run the MCP server (HTTP)** — toggle a loopback server (default `127.0.0.1:8765`) that
-  shares the app's authenticated clusters, so a client sees exactly what you do.
-- **Install the srelens CLI** — adds a `srelens` command to `~/.local/bin` so clients can
-  spawn `srelens --mcp-stdio` (make sure `~/.local/bin` is on your `PATH`).
-- **Client config** — copy ready-made config for Claude Code, Claude Desktop, Cursor,
-  Codex, Antigravity, and generic clients.
+Open **Settings → MCP** to:
 
-Or run the server directly from a terminal:
+- run the MCP server over loopback HTTP;
+- install the `srelens` CLI for stdio connections;
+- copy client configuration for supported MCP clients.
+
+You can also start the server directly:
 
 ```sh
-srelens --mcp-stdio                 # stdio (agents / IDE clients spawn this)
-srelens --mcp-http 127.0.0.1:8765   # loopback HTTP
+srelens --mcp-stdio
+srelens --mcp-http 127.0.0.1:8765
 ```
 
-Destructive tools (delete, drain, apply, …) are annotated and require an explicit
-`_confirm` argument — an agent can't delete or drain anything without approval.
+Mutating tools require an explicit `_confirm: true` argument before they run.
 
-Example client config (stdio):
+Example stdio configuration:
 
 ```json
 {
   "mcpServers": {
-    "srelens": { "command": "srelens", "args": ["--mcp-stdio"] }
+    "srelens": {
+      "command": "srelens",
+      "args": ["--mcp-stdio"]
+    }
   }
 }
 ```
 
+> MCP access uses your locally authenticated cluster contexts. Review tool calls
+> and use appropriate Kubernetes RBAC permissions, especially with critical
+> clusters.
+
 ## Quick start
 
-Prerequisites: [Rust](https://rustup.rs) (stable), [Node.js](https://nodejs.org) 22+,
-[pnpm](https://pnpm.io) 9+, and the
-[Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/) for your platform.
+### Prerequisites
+
+- [Rust](https://rustup.rs) stable
+- [Node.js](https://nodejs.org) 22+
+- [pnpm](https://pnpm.io) 9+
+- [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/)
+- A reachable Kubernetes cluster for cluster-dependent workflows
+
+### Run locally
 
 ```sh
+git clone https://github.com/srelens/srelens
+cd srelens
 pnpm install
-pnpm dev          # launches the desktop app with hot reload
+pnpm dev
 ```
 
-Other useful commands:
+### Useful commands
 
-```sh
-pnpm test         # all JS/TS tests (Vitest, with coverage)
-cargo test        # all Rust tests
-pnpm build        # production frontend build
-pnpm tauri build  # packaged desktop binaries
-```
+| Command | Purpose |
+| --- | --- |
+| `pnpm dev` | Launch the desktop application in development mode |
+| `pnpm test` | Run JavaScript and TypeScript tests |
+| `cargo test` | Run Rust workspace tests |
+| `pnpm build` | Build the production frontend |
+| `pnpm tauri build` | Create packaged desktop binaries |
 
 See the [developer guide](docs/DEVELOPMENT.md) for architecture, testing standards,
-and how to add a new capability.
+and instructions for adding capabilities.
 
-## Repository layout
+## Architecture
 
+```text
+React 19 + TypeScript
+        │
+        │ Tauri commands and events
+        ▼
+Tauri v2 desktop shell
+        │
+        ▼
+Pure-Rust backend
+├── capability registry
+├── Kubernetes integration with kube-rs
+├── live watches, logs, exec, and port forwarding
+├── Helm and metrics
+└── MCP server over stdio and loopback HTTP
 ```
-apps/desktop/            Tauri app
-  src/                   React 19 + TypeScript UI (shadcn/radix, MobX, xterm, CodeMirror)
-  src-tauri/             Rust backend: commands, streams, capability registration
+
+Repository layout:
+
+```text
+apps/desktop/
+  src/                   React and TypeScript desktop UI
+  src-tauri/             Tauri application and Rust command bridge
 crates/
-  capability/            Capability registry — single source of truth for backend ops
-  kube/                  Kubernetes integration (kubeconfig, watches, actions, helm, metrics)
-  mcp/                   MCP server (stdio + HTTP) generated from the registry
-docs/                    Project documentation + brand assets
+  capability/            Backend capability registry
+  kube/                  Kubernetes clients, watches, actions, Helm, and metrics
+  mcp/                   MCP server
+docs/                    Installation, development, and project documentation
 ```
 
 ## Project status
 
-srelens is in **early, active development** (v0.1 pre-release). The read/browse/operate
-core described above works end-to-end; extension support, broader resource coverage, and
-packaging polish are on the roadmap. Expect breaking changes.
+srelens is currently in **beta**. It is ready for evaluation and everyday testing,
+but users should review release notes and take extra care when using it with
+critical clusters.
 
-Signed builds for macOS (Apple Silicon + Intel), Linux (AppImage/deb/rpm), and Windows
-are on the [latest release](https://github.com/srelens/srelens/releases/latest); the app
-updates itself from there. See the [install guide](docs/INSTALL.md) for per-platform steps,
-or the [quick start](#quick-start) to build from source.
+Breaking changes may still occur before a stable release. Feedback, bug reports,
+and reproducible troubleshooting details are welcome.
+
+- [Latest release](https://github.com/srelens/srelens/releases/latest)
+- [All releases](https://github.com/srelens/srelens/releases)
+- [Issues and roadmap](https://github.com/srelens/srelens/issues)
 
 ## Contributing
 
-Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
-Please also review our [Code of Conduct](.github/CODE_OF_CONDUCT.md).
+Contributions are welcome. Start with:
+
+- [Contribution guide](CONTRIBUTING.md)
+- [Developer guide](docs/DEVELOPMENT.md)
+- [Open issues](https://github.com/srelens/srelens/issues)
+
+Please review the [Code of Conduct](.github/CODE_OF_CONDUCT.md) before
+participating.
 
 ## License
 
@@ -169,5 +228,5 @@ srelens is open source under the [MIT License](LICENSE).
 ---
 
 <p align="center">
-  <sub>Not affiliated with Mirantis (Lens) or the Freelens project.</sub>
+  <sub>Not affiliated with Mirantis Lens or the Freelens project.</sub>
 </p>
