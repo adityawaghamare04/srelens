@@ -1,7 +1,25 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import React from "react";
+
+vi.mock("../lib/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/access")>();
+  return { ...actual, useAccess: vi.fn() };
+});
+import { useAccess } from "../lib/access";
+
 import { NodeCordonAction } from "./NodeCordonAction";
+
+beforeEach(() => {
+  // Default: everything allowed, so pre-existing behavioural tests (written
+  // before RBAC gating existed) keep exercising enabled controls.
+  vi.mocked(useAccess).mockReturnValue({
+    allowed: () => true,
+    reason: () => "",
+    known: () => true,
+    loading: false,
+  });
+});
 
 describe("NodeCordonAction", () => {
   it("offers Cordon for a schedulable node and applies it", async () => {
@@ -38,5 +56,34 @@ describe("NodeCordonAction", () => {
     // dialog open → the dialog's Drain button is the only reachable one
     fireEvent.click(screen.getByRole("button", { name: "Drain" }));
     await waitFor(() => expect(drainFn).toHaveBeenCalledWith("kind-dev", "node-a"));
+  });
+});
+
+describe("NodeCordonAction RBAC gating", () => {
+  it("disables Cordon and explains why when the user can't patch nodes", async () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    const getObjectFn = vi.fn().mockResolvedValue({ object: { spec: {} } });
+    render(<NodeCordonAction context="kind-dev" name="node-a" getObjectFn={getObjectFn} />);
+    const cordon = await screen.findByRole("button", { name: "Cordon" });
+    expect((cordon as HTMLButtonElement).disabled).toBe(true);
+    expect(cordon.getAttribute("title")).toEqual(expect.stringContaining("patch nodes"));
+  });
+
+  it("enables Cordon when allowed", async () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => true,
+      reason: () => "",
+      known: () => true,
+      loading: false,
+    });
+    const getObjectFn = vi.fn().mockResolvedValue({ object: { spec: {} } });
+    render(<NodeCordonAction context="kind-dev" name="node-a" getObjectFn={getObjectFn} />);
+    const cordon = await screen.findByRole("button", { name: "Cordon" });
+    expect((cordon as HTMLButtonElement).disabled).toBe(false);
   });
 });

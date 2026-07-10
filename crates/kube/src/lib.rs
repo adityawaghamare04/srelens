@@ -90,6 +90,7 @@ mod age_tests {
     }
 }
 
+pub mod access;
 pub mod actions;
 pub mod client_cache;
 pub mod cluster;

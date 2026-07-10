@@ -24,6 +24,10 @@ pub struct ContextDto {
     pub name: String,
     pub cluster: String,
     pub server: String,
+    /// The context's default namespace from the kubeconfig
+    /// (`contexts[].context.namespace`); empty when unset — used to scope
+    /// views for namespace-restricted credentials that can't list namespaces.
+    pub namespace: String,
     #[serde(rename = "isCurrent")]
     pub is_current: bool,
     /// Whether this context points at a local development cluster (kind, k3d,
@@ -94,6 +98,7 @@ pub fn list_contexts_capability(cache: Arc<ClientCache>, default_paths: Vec<Path
                         name: named.name,
                         cluster: cluster_name,
                         server,
+                        namespace: context.namespace.clone().unwrap_or_default(),
                         is_local: class.is_local,
                         provider: class.provider.map(|provider| provider.as_str().to_string()),
                     }
@@ -312,6 +317,47 @@ mod tests {
         reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path]));
         let err = reg.invoke("k8s.listContexts", json!({})).await.unwrap_err();
         assert!(matches!(err, CapabilityError::Handler(_)));
+    }
+
+    #[tokio::test]
+    async fn exposes_the_context_declared_namespace() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "srelens-ctx-namespace-kubeconfig-{}.yaml",
+            std::process::id()
+        ));
+        tokio::fs::write(
+            &path,
+            r#"apiVersion: v1
+kind: Config
+clusters:
+- name: c
+  cluster: { server: "https://example.com" }
+contexts:
+- name: team-a-ctx
+  context: { cluster: c, user: u, namespace: team-a }
+- name: no-ns-ctx
+  context: { cluster: c, user: u }
+users:
+- name: u
+  user: {}
+"#,
+        )
+        .await
+        .unwrap();
+
+        let mut reg = Registry::new();
+        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path.clone()]));
+        let out = reg.invoke("k8s.listContexts", json!({})).await.unwrap();
+        let contexts = out["contexts"].as_array().unwrap();
+
+        let team_a = contexts.iter().find(|c| c["name"] == "team-a-ctx").unwrap();
+        assert_eq!(team_a["namespace"], "team-a");
+
+        let no_ns = contexts.iter().find(|c| c["name"] == "no-ns-ctx").unwrap();
+        assert_eq!(no_ns["namespace"], "");
+
+        let _ = tokio::fs::remove_file(&path).await;
     }
 
     #[tokio::test]

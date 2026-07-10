@@ -50,6 +50,7 @@ import { checkForUpdateAndNotify } from "./lib/updateNotifier";
 import { notify } from "./lib/notify";
 import type { SettingsSection } from "./components/SettingsView";
 import { listContexts, deleteContext, type ClusterContext } from "./lib/clusters";
+import { clearAccessCache } from "./lib/access";
 
 interface ViewTab {
   id: number;
@@ -260,6 +261,13 @@ export function App() {
     [...new Set(tabs.flatMap((t) => (t.cluster ? [t.cluster] : [])))].map((name) => ({ name })),
     contextOrder,
   ).map(({ name }) => name);
+
+  // RBAC preflight results are cached per (context, check) — clear them on
+  // context switch so a stale cache from a previous cluster (or an admin who
+  // just changed the user's bindings) can't leave controls mis-gated.
+  useEffect(() => {
+    clearAccessCache();
+  }, [activeCluster]);
 
   /** Open (or focus, if already open) a resource view for a cluster + kind. */
   function openView(cluster: string, kind: ResourceKind) {
@@ -591,6 +599,7 @@ export function App() {
                       initialNamespace={activeTab.namespace ?? ""}
                       onNamespaceChange={(ns) => setTabNamespace(activeTab.id, activeCluster, ns)}
                       detailDrawerWidth={layout.rightSidebarWidth}
+                      kubeconfigFiles={kubeconfigFiles}
                     />
                   ) : (
                     <LandingPage

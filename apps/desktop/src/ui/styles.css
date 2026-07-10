@@ -3230,13 +3230,17 @@ body {
   border-bottom-style: solid;
   border-bottom-width: 1px;
 }
-/* Thin, unobtrusive horizontal scrollbar so an overflowing strip stays usable. */
+/* Ultra-thin horizontal scrollbar; the thumb only shows on hover so the strip
+   stays clean (wheel/trackpad scroll and auto-scroll-to-active still work). */
 .fl-ctabs::-webkit-scrollbar {
-  height: 6px;
+  height: 3px;
 }
 .fl-ctabs::-webkit-scrollbar-thumb {
-  background: var(--fl-color-border);
+  background: transparent;
   border-radius: 3px;
+}
+.fl-ctabs:hover::-webkit-scrollbar-thumb {
+  background: var(--fl-color-border);
 }
 .fl-ctabs::-webkit-scrollbar-track {
   background: transparent;

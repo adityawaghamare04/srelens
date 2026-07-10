@@ -110,6 +110,13 @@ impl WatchStatus {
     }
 }
 
+/// A watcher error that will never self-heal (authentication/authorization) —
+/// surface it and stop, instead of reconnecting forever.
+fn is_permanent_watch_error(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("forbidden") || m.contains("unauthorized") || m.contains("401") || m.contains("403")
+}
+
 /// Generic watch loop: stream `K`, summarise to `T`, key by `key_of`, call
 /// `on_update` with a full snapshot on every change, and `on_status` on
 /// connection transitions.
@@ -155,7 +162,13 @@ where
                     on_update(snapshot(&state));
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                let msg = e.to_string();
+                if is_permanent_watch_error(&msg) {
+                    // Auth/authz failures never self-heal: stop and surface the
+                    // error so the caller can emit it to the UI.
+                    return Err(msg);
+                }
                 // Transient: the watcher backs off and re-lists internally. Flag
                 // the UI once per outage, then keep consuming.
                 if !reconnecting {
@@ -755,5 +768,23 @@ mod tests {
         let snap = snapshot(&state);
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].name, "b");
+    }
+
+    #[test]
+    fn permanent_watch_errors_are_auth_failures() {
+        // Authentication/authorization failures never self-heal — surface them.
+        assert!(is_permanent_watch_error(
+            "watch deployments is forbidden: User cannot watch"
+        ));
+        assert!(is_permanent_watch_error("Forbidden (ErrorResponse { code: 403 })"));
+        assert!(is_permanent_watch_error("Unauthorized"));
+        assert!(is_permanent_watch_error("server responded with 401"));
+        assert!(is_permanent_watch_error("server responded with 403"));
+
+        // Transient failures must NOT be treated as permanent (they self-heal).
+        assert!(!is_permanent_watch_error("list deployments timed out"));
+        assert!(!is_permanent_watch_error(
+            "error trying to connect: connection refused"
+        ));
     }
 }

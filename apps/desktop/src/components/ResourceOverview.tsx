@@ -6,6 +6,8 @@ import { listEndpointSlices } from "../lib/network";
 import { podsForPvc, formatStorageSize } from "../lib/storage";
 import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from "../lib/rbac";
 import { updateConfigData } from "../lib/actions";
+import { useAccess, denyReason, reportActionError, type AccessCheck } from "../lib/access";
+import { describeError } from "../lib/errors";
 import {
   Spinner,
   StatusPill,
@@ -1839,6 +1841,15 @@ export function ConfigDataEditor({
 
   const keys = Object.keys(data);
 
+  // Preflight the mutating RBAC (verb `update` on configmaps/secrets in this
+  // namespace) so Save fails closed until the check resolves allowed.
+  const updateCheck: AccessCheck = {
+    verb: "update",
+    resource: kind === "Secret" ? "secrets" : "configmaps",
+    namespace,
+  };
+  const access = useAccess(context, [updateCheck]);
+
   // Baseline follows the data (Secret values arrive asynchronously via the
   // gated fetch); updating it here must NOT clobber the user's reveal/edit
   // state, so those reset only when the target object itself changes.
@@ -1878,7 +1889,8 @@ export function ConfigDataEditor({
     const r = await updateConfigData(context, kind, namespace, name, patch);
     setBusy(false);
     if (r.error) {
-      setErr(r.error);
+      setErr(describeError(r.error).detail);
+      reportActionError(context, `Failed to save ${name}`, r.error);
       return;
     }
     setEdited({});
@@ -1934,7 +1946,13 @@ export function ConfigDataEditor({
       })}
       {editable && changedKeys.length > 0 && (
         <div className="fl-config-editor__actions">
-          <Button size="sm" onClick={() => void save()} busy={busy}>
+          <Button
+            size="sm"
+            onClick={() => void save()}
+            busy={busy}
+            disabled={busy || !access.allowed(updateCheck)}
+            title={denyReason(access, updateCheck)}
+          >
             Save
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setEdited({})} disabled={busy}>

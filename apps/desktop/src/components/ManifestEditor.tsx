@@ -1,4 +1,5 @@
 import React, { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { parseAllDocuments } from "yaml";
 import { CircleCheck, Undo2, Upload } from "lucide-react";
 import {
   applyManifest,
@@ -11,6 +12,8 @@ import {
 } from "../lib/manifest";
 import { notify } from "../lib/notify";
 import { openApiSchema } from "../lib/schema";
+import { useAccess, rbac, kindToResource, reportActionError, type AccessCheck } from "../lib/access";
+import { describeError } from "../lib/errors";
 import { Spinner, Button, ConfirmDialog } from "../ui";
 import { DiffView } from "./DiffView";
 
@@ -119,6 +122,37 @@ export function ManifestEditor({
     }
   }, [yaml]);
 
+  // Derive the edited resource's identity from the FIRST YAML document so Apply
+  // can be gated on whether the user is authorized to patch it. `parseAllDocuments`
+  // (not `parse`, which THROWS on multi-document input) handles multi-doc streams;
+  // we gate on the first document. Only EDIT mode (`confirm` set) is gated: the
+  // New-resource tab creates (verb `create`, not `patch`), so gating on `patch`
+  // there would wrongly disable Apply for a user who can create but not patch.
+  // Unknown/CRD kinds (kindToResource → null) resolve to `null` too — Apply stays
+  // enabled and the API server remains the source of truth for those.
+  const identity: AccessCheck | null = (() => {
+    if (!confirm) return null; // only gate edits; creates use a different verb (create)
+    try {
+      const docs = parseAllDocuments(yaml);
+      const first = docs[0]?.toJS() as { kind?: string; metadata?: { namespace?: string } } | null;
+      if (!first?.kind) return null;
+      const res = kindToResource(first.kind);
+      if (!res) return null;
+      return rbac.edit(res.group, res.resource, first.metadata?.namespace ?? "");
+    } catch {
+      return null;
+    }
+  })();
+  const access = useAccess(context, identity ? [identity] : []);
+  // Fail-CLOSED (matches DetailActions/NodeCordonAction and the spec): disabled
+  // while the check is still loading OR resolved as denied. The explanatory
+  // title only appears once the check has resolved as denied.
+  const applyDenied = identity ? !access.allowed(identity) : false;
+  const applyDeniedTitle =
+    identity && access.known(identity) && !access.allowed(identity)
+      ? `You don't have permission to patch ${identity.resource}${identity.namespace ? ` in ${identity.namespace}` : ""}`
+      : undefined;
+
   const conflictEntries = (conflictDocs ?? []).filter(
     (d): d is ApplyDoc & { conflict: Conflict } => d.conflict != null,
   );
@@ -132,9 +166,10 @@ export function ManifestEditor({
     const out = await applyManifest(context, yaml, force);
     setBusy(false);
     if (out.error) {
-      setError(out.error);
+      setError(describeError(out.error).detail);
       setConflictDocs(null);
-      notify.error(`Failed to apply ${confirm?.name ?? "resource"}`, out.error);
+      // Actionable toast; a 403 also invalidates this context's access cache.
+      reportActionError(context, `Failed to apply ${confirm?.name ?? "resource"}`, out.error);
       return;
     }
     const docs = out.documents ?? [];
@@ -147,7 +182,8 @@ export function ManifestEditor({
         failedDocs.length > 1 ? `Failed to apply ${failedDocs.length} documents: ${names}` : `Failed to apply ${names}`;
       const detail = failedDocs.map((d) => d.error).filter(Boolean).join("; ") || "apply failed";
       setError(label);
-      notify.error(label, detail);
+      // Actionable toast; a 403 also invalidates this context's access cache.
+      reportActionError(context, label, detail);
     };
     // Close the confirm dialog for any resolved response (conflict, failure, or
     // success) — the conflict banner and error text render inline, outside the
@@ -241,7 +277,11 @@ export function ManifestEditor({
   );
 
   const applyButton = (
-    <Button onClick={onApplyClick} disabled={busy || !yaml.trim() || (resetTo != null && yaml === resetTo)}>
+    <Button
+      onClick={onApplyClick}
+      disabled={busy || !yaml.trim() || (resetTo != null && yaml === resetTo) || applyDenied}
+      title={applyDeniedTitle}
+    >
       {busy ? <Spinner label={applyingLabel} data-icon="inline-start" /> : applyIcon ?? <Upload data-icon="inline-start" />}
       {busy ? applyingLabel : applyLabel}
     </Button>
@@ -255,6 +295,12 @@ export function ManifestEditor({
           <p style={{ marginTop: 0 }}>
             Server-side apply the edited <code>{confirm?.kind}</code> <code>{confirm?.name}</code> to the cluster?
           </p>
+          {identity && (
+            <p>
+              This authorizes patch on {identity.resource}
+              {identity.namespace ? ` in ${identity.namespace}` : ""}.
+            </p>
+          )}
           {error && <p style={{ color: "var(--fl-color-danger)" }}>Error: {error}</p>}
         </>
       }

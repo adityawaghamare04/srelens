@@ -21,6 +21,7 @@ import {
   cronjobTriggerNow,
 } from "../lib/actions";
 import { notify } from "../lib/notify";
+import { useAccess, rbac, kindToResource, denyReason, reportActionError, type AccessCheck } from "../lib/access";
 import { IconButton, ConfirmDialog, TextInput } from "../ui";
 import { ForwardDialog } from "./ForwardDialog";
 
@@ -51,6 +52,11 @@ export function PodActions({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  const deleteCheck = rbac.deletePod(pod.namespace);
+  const evictCheck = rbac.evictPod(pod.namespace);
+  const editCheck = rbac.edit("", "pods", pod.namespace);
+  const access = useAccess(context, [deleteCheck, evictCheck, editCheck]);
+
   const target = { context, namespace: pod.namespace, pod: pod.name };
 
   async function doDelete() {
@@ -60,7 +66,7 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
-      notify.error(`Failed to delete ${pod.name}`, out.error);
+      reportActionError(context, `Failed to delete ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
@@ -75,7 +81,7 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
-      notify.error(`Failed to evict ${pod.name}`, out.error);
+      reportActionError(context, `Failed to evict ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
@@ -87,11 +93,21 @@ export function PodActions({
     <>
       <IconButton icon={Logs} label="Logs" onClick={() => onOpenLogs?.(target)} />
       <IconButton icon={SquareTerminal} label="Shell" onClick={() => onOpenTerminal?.(target)} />
-      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
+      {onEdit && (
+        <IconButton
+          icon={Pencil}
+          label="Edit"
+          disabled={!access.allowed(editCheck)}
+          title={denyReason(access, editCheck)}
+          onClick={onEdit}
+        />
+      )}
       <IconButton icon={ArrowLeftRight} label="Forward" onClick={() => setDialog("forward")} />
       <IconButton
         icon={LogOut}
         label="Evict"
+        disabled={!access.allowed(evictCheck)}
+        title={denyReason(access, evictCheck)}
         onClick={() => {
           setError("");
           setDialog("evict");
@@ -101,6 +117,8 @@ export function PodActions({
         icon={Trash2}
         label="Delete"
         danger
+        disabled={!access.allowed(deleteCheck)}
+        title={denyReason(access, deleteCheck)}
         onClick={() => {
           setError("");
           setDialog("delete");
@@ -216,6 +234,28 @@ export function ResourceActions({
   const [err, setErr] = useState("");
   const isCronJob = kind === "CronJob";
 
+  // `res` is null for an unknown/CRD kind we don't have a GVR mapping for —
+  // in that case leave controls enabled and let the API server stay the
+  // source of truth, rather than guessing at RBAC.
+  const res = kindToResource(kind);
+  const ns = namespace ?? "";
+  const deleteCheck = res ? rbac.deleteResource(res.group, res.resource, ns) : null;
+  const scaleCheck = res && SCALABLE.includes(kind) ? rbac.scale(res.group, res.resource, ns) : null;
+  const restartCheck =
+    res && RESTARTABLE.includes(kind) ? rbac.rolloutRestart(res.group, res.resource, ns) : null;
+  const editCheck = res && onEdit ? rbac.edit(res.group, res.resource, ns) : null;
+  const cronSuspendCheck = res && isCronJob ? rbac.cronjobSuspend(ns) : null;
+  const cronTriggerCheck = res && isCronJob ? rbac.cronjobTrigger(ns) : null;
+  const checks: AccessCheck[] = [
+    deleteCheck,
+    scaleCheck,
+    restartCheck,
+    editCheck,
+    cronSuspendCheck,
+    cronTriggerCheck,
+  ].filter((c): c is AccessCheck => c !== null);
+  const access = useAccess(context, checks);
+
   async function doSetSuspend() {
     setBusy("suspend");
     setErr("");
@@ -224,7 +264,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to ${resume ? "resume" : "suspend"} ${name}`, r.error);
+      reportActionError(context, `Failed to ${resume ? "resume" : "suspend"} ${name}`, r.error);
       return;
     }
     notify.success(`${resume ? "Resumed" : "Suspended"} ${name}`);
@@ -238,7 +278,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to run ${name}`, r.error);
+      reportActionError(context, `Failed to run ${name}`, r.error);
       return;
     }
     setTriggering(false);
@@ -253,7 +293,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to delete ${name}`, r.error);
+      reportActionError(context, `Failed to delete ${name}`, r.error);
       return;
     }
     setConfirmDelete(false);
@@ -273,7 +313,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to scale ${name}`, r.error);
+      reportActionError(context, `Failed to scale ${name}`, r.error);
       return;
     }
     setScaling(false);
@@ -287,7 +327,7 @@ export function ResourceActions({
     const r = await rolloutRestart(context, kind, namespace ?? "", name);
     setBusy("");
     if (r.error) {
-      notify.error(`Failed to restart ${name}`, r.error);
+      reportActionError(context, `Failed to restart ${name}`, r.error);
       return;
     }
     notify.success(`Rollout restart triggered for ${name}`);
@@ -303,30 +343,59 @@ export function ResourceActions({
           onClick={() => onOpenLogs({ context, namespace: namespace ?? "", kind, name })}
         />
       )}
-      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
+      {onEdit && (
+        <IconButton
+          icon={Pencil}
+          label="Edit"
+          disabled={editCheck ? !access.allowed(editCheck) : false}
+          title={editCheck ? denyReason(access, editCheck) : undefined}
+          onClick={onEdit}
+        />
+      )}
       {SCALABLE.includes(kind) && (
-        <IconButton icon={Scaling} label="Scale" onClick={() => setScaling(true)} />
+        <IconButton
+          icon={Scaling}
+          label="Scale"
+          disabled={scaleCheck ? !access.allowed(scaleCheck) : false}
+          title={scaleCheck ? denyReason(access, scaleCheck) : undefined}
+          onClick={() => setScaling(true)}
+        />
       )}
       {RESTARTABLE.includes(kind) && (
         <IconButton
           icon={RotateCw}
           label="Restart"
-          disabled={busy === "restart"}
+          disabled={busy === "restart" || (restartCheck ? !access.allowed(restartCheck) : false)}
+          title={restartCheck ? denyReason(access, restartCheck) : undefined}
           onClick={() => void doRestart()}
         />
       )}
       {isCronJob && (
-        <IconButton icon={Zap} label="Run now" onClick={() => setTriggering(true)} />
+        <IconButton
+          icon={Zap}
+          label="Run now"
+          disabled={cronTriggerCheck ? !access.allowed(cronTriggerCheck) : false}
+          title={cronTriggerCheck ? denyReason(access, cronTriggerCheck) : undefined}
+          onClick={() => setTriggering(true)}
+        />
       )}
       {isCronJob && (
         <IconButton
           icon={cronjobSuspended ? Play : Pause}
           label={cronjobSuspended ? "Resume" : "Suspend"}
-          disabled={busy === "suspend"}
+          disabled={busy === "suspend" || (cronSuspendCheck ? !access.allowed(cronSuspendCheck) : false)}
+          title={cronSuspendCheck ? denyReason(access, cronSuspendCheck) : undefined}
           onClick={() => void doSetSuspend()}
         />
       )}
-      <IconButton icon={Trash2} label="Delete" danger onClick={() => setConfirmDelete(true)} />
+      <IconButton
+        icon={Trash2}
+        label="Delete"
+        danger
+        disabled={deleteCheck ? !access.allowed(deleteCheck) : false}
+        title={deleteCheck ? denyReason(access, deleteCheck) : undefined}
+        onClick={() => setConfirmDelete(true)}
+      />
 
       {triggering && (
         <ConfirmDialog
