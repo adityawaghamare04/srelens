@@ -210,6 +210,28 @@ describe("ObjectDetail (Pod)", () => {
     expect(screen.getByText("frontend")).toBeDefined();
   });
 
+  it("collapses labels and annotations for generic kinds (e.g. Node) too", () => {
+    const node: K8sObject = {
+      metadata: {
+        name: "worker-1",
+        creationTimestamp: "2026-01-01T00:00:00Z",
+        labels: { "beta.kubernetes.io/arch": "amd64", "kubernetes.io/os": "linux", role: "worker" },
+        annotations: { "node.alpha.kubernetes.io/ttl": "0" },
+      },
+      spec: {},
+      status: {},
+    };
+    render(<ObjectDetail kind="Node" obj={node} now={NOW} />);
+
+    // Collapsed by default — the count toggle shows, the chip values don't.
+    expect(screen.getByText("3 Labels")).toBeDefined();
+    expect(screen.getByText("1 Annotation")).toBeDefined();
+    expect(screen.queryByText("beta.kubernetes.io/arch")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /3 Labels/ }));
+    expect(screen.getByText("beta.kubernetes.io/arch")).toBeDefined();
+  });
+
   it("shows real volume sources and opens linked resources", () => {
     const onOpenResource = vi.fn();
     const pod: K8sObject = {
