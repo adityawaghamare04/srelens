@@ -180,6 +180,22 @@ function Chips({ map }: { map?: Record<string, string> }) {
 }
 
 /**
+ * A labels/annotations/selector map shown as a collapsed count summary
+ * ("42 Labels ⌄") that expands to the chips on click — so large maps (node
+ * feature labels, last-applied annotations) don't dominate the detail panel.
+ * The single source of truth for how these maps render across every detail view.
+ */
+function ChipMap({ map, singular }: { map?: Record<string, string>; singular: string }) {
+  const count = Object.keys(map ?? {}).length;
+  if (count === 0) return <span className="fl-detail-empty">None</span>;
+  return (
+    <Expandable summary={plural(count, singular)}>
+      <Chips map={map} />
+    </Expandable>
+  );
+}
+
+/**
  * A count summary that expands to its full content on click — the srelens
  * idiom for long label/annotation/toleration lists that would dominate the
  * panel ("6 Labels ⌄").
@@ -855,26 +871,8 @@ function PodDetailView({
                 ""
               ),
             ],
-            [
-              "Labels",
-              Object.keys(labels).length ? (
-                <Expandable summary={plural(Object.keys(labels).length, "Label")}>
-                  <Chips map={labels} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
-            [
-              "Annotations",
-              Object.keys(annotations).length ? (
-                <Expandable summary={plural(Object.keys(annotations).length, "Annotation")}>
-                  <Chips map={annotations} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
+            ["Labels", <ChipMap map={labels} singular="Label" />],
+            ["Annotations", <ChipMap map={annotations} singular="Annotation" />],
             [
               "Controlled By",
               ownerTargets.length ? (
@@ -1120,26 +1118,8 @@ function WorkloadDetailView({
                 ""
               ),
             ],
-            [
-              "Labels",
-              Object.keys(labels).length ? (
-                <Expandable summary={plural(Object.keys(labels).length, "Label")}>
-                  <Chips map={labels} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
-            [
-              "Annotations",
-              Object.keys(annotations).length ? (
-                <Expandable summary={plural(Object.keys(annotations).length, "Annotation")}>
-                  <Chips map={annotations} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
+            ["Labels", <ChipMap map={labels} singular="Label" />],
+            ["Annotations", <ChipMap map={annotations} singular="Annotation" />],
             ["Replicas", replicaText],
             ["Selector", <Chips key="s" map={selector} />],
             [
@@ -2874,9 +2854,9 @@ function GenericDetail({
           ]}
         />
         <div className="fl-detail-subhead">Labels</div>
-        <Chips map={meta.labels as Record<string, string>} />
+        <ChipMap map={meta.labels as Record<string, string>} singular="Label" />
         <div className="fl-detail-subhead">Annotations</div>
-        <Chips map={meta.annotations as Record<string, string>} />
+        <ChipMap map={meta.annotations as Record<string, string>} singular="Annotation" />
       </Section>
 
       <KindBody kind={kind} obj={obj} context={context} now={now} onEdited={onEdited} onOpenResource={onOpenResource} />
