@@ -2,12 +2,13 @@
   <img src="docs/assets/logo-full.svg" alt="srelens" width="380" />
 </p>
 
-<h3 align="center">See everything. Break nothing.</h3>
+<h3 align="center">The Kubernetes control room—built in Rust, ready for engineers and AI agents.</h3>
 
 <p align="center">
-  A fast, lightweight Kubernetes IDE built with <a href="https://v2.tauri.app">Tauri v2</a> and a pure-Rust core —
-  every backend capability is also exposed as an <a href="https://modelcontextprotocol.io">MCP</a> tool,
-  so AI agents can drive your clusters through the same code paths as the UI.
+  A local-first Kubernetes desktop workspace for SREs, platform engineers, and DevOps engineers.
+  Investigate, analyse, and take safe action across clusters from one application, built with
+  <a href="https://v2.tauri.app">Tauri v2</a> and a pure-Rust core. Supported backend capabilities
+  are also available to AI agents through <a href="https://modelcontextprotocol.io">MCP</a>.
 </p>
 
 <p align="center">
