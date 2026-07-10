@@ -403,6 +403,26 @@ describe("ManifestEditor", () => {
     expect(btn.getAttribute("title")).toBe("You don't have permission to patch deployments in prod");
   });
 
+  it("edit mode: does NOT gate Apply when the manifest declares no namespace (avoids a wrong-scope false-disable)", async () => {
+    // A namespaced resource whose YAML omits metadata.namespace relies on the
+    // context's default namespace. Building the SSAR with an empty namespace
+    // makes it cluster-scoped and can FALSE-disable Apply. With no declared
+    // namespace we skip gating (server still enforces) — Apply stays ENABLED
+    // even though useAccess would deny.
+    vi.mocked(useAccess).mockReturnValue({ allowed: () => false, reason: () => "", known: () => true, loading: false });
+    render(
+      <ManifestEditor
+        context="ctx"
+        yaml={"apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n"}
+        onYamlChange={() => {}}
+        confirm={{ kind: "Deployment", name: "web" }}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /apply/i });
+    expect(isDisabled(btn)).toBe(false);
+    expect(btn.getAttribute("title")).toBeNull();
+  });
+
   it("names the authorized action in the edit-apply confirm dialog", async () => {
     render(
       <ManifestEditor

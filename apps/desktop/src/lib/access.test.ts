@@ -21,7 +21,7 @@ vi.mock("./notify", () => ({ notify: notifyMock }));
 
 describe("canI", () => {
   it("posts checks and returns results", async () => {
-    const invoke = vi.fn().mockResolvedValue({ results: [{ allowed: true, denied: false, reason: "" }] });
+    const invoke = vi.fn().mockResolvedValue({ results: [{ allowed: true, denied: false, reason: "", error: false }] });
     const checks = [{ verb: "delete", resource: "pods", namespace: "prod" }];
     const out = await canI("ctx", checks, invoke);
     expect(invoke).toHaveBeenCalledWith("k8s.canI", { context: "ctx", checks });
@@ -84,7 +84,7 @@ describe("reportActionError", () => {
 
   it("clears the context's access cache on a 403 so the control re-gates", async () => {
     const check: AccessCheck = { verb: "delete", resource: "pods", namespace: "prod" };
-    const invoke = vi.fn().mockResolvedValue({ results: [{ allowed: true, denied: false, reason: "" }] });
+    const invoke = vi.fn().mockResolvedValue({ results: [{ allowed: true, denied: false, reason: "", error: false }] });
     const { result } = renderHook(() => useAccess("ctx", [check], invoke));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.known(check)).toBe(true);
@@ -97,7 +97,7 @@ describe("reportActionError", () => {
 
   it("keeps the cache when the error is not a 403", async () => {
     const check: AccessCheck = { verb: "delete", resource: "pods", namespace: "prod" };
-    const invoke = vi.fn().mockResolvedValue({ results: [{ allowed: true, denied: false, reason: "" }] });
+    const invoke = vi.fn().mockResolvedValue({ results: [{ allowed: true, denied: false, reason: "", error: false }] });
     const { result } = renderHook(() => useAccess("ctx", [check], invoke));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -125,6 +125,17 @@ describe("denyReason", () => {
     expect(denyReason(access(false, true), check)).toBe("You don't have permission to patch nodes");
   });
 
+  it("includes the subresource so Evict/Scale name the real permission", () => {
+    const evict: AccessCheck = { verb: "create", resource: "pods", subresource: "eviction", namespace: "prod" };
+    expect(denyReason(access(false, true), evict)).toBe(
+      "You don't have permission to create pods/eviction in prod",
+    );
+    const scale: AccessCheck = { verb: "patch", group: "apps", resource: "deployments", subresource: "scale", namespace: "prod" };
+    expect(denyReason(access(false, true), scale)).toBe(
+      "You don't have permission to patch deployments/scale in prod",
+    );
+  });
+
   it("returns undefined when allowed or still unknown", () => {
     const check: AccessCheck = { verb: "delete", resource: "pods", namespace: "prod" };
     expect(denyReason(access(true, true), check)).toBeUndefined();
@@ -140,8 +151,8 @@ describe("useAccess", () => {
   it("batches only uncached checks into one canI call, and allowed() reflects the result once resolved", async () => {
     const checkA: AccessCheck = { verb: "delete", resource: "pods", namespace: "prod" };
     const checkB: AccessCheck = { verb: "get", resource: "pods", namespace: "prod" };
-    const resultA: AccessResult = { allowed: true, denied: false, reason: "" };
-    const resultB: AccessResult = { allowed: false, denied: true, reason: "forbidden" };
+    const resultA: AccessResult = { allowed: true, denied: false, reason: "", error: false };
+    const resultB: AccessResult = { allowed: false, denied: true, reason: "forbidden", error: false };
 
     const invoke = vi
       .fn()
@@ -183,11 +194,59 @@ describe("useAccess", () => {
     expect(result.current.known(check)).toBe(false);
     expect(result.current.allowed(check)).toBe(false);
 
-    resolve({ results: [{ allowed: true, denied: false, reason: "" }] });
+    resolve({ results: [{ allowed: true, denied: false, reason: "", error: false }] });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.known(check)).toBe(true);
     expect(result.current.allowed(check)).toBe(true);
+  });
+
+  it("does NOT cache a failed check (error:true) and retries until it resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      const check: AccessCheck = { verb: "delete", resource: "pods", namespace: "prod" };
+      const invoke = vi
+        .fn()
+        // First attempt FAILS (timeout/call error, not a real RBAC denial).
+        .mockResolvedValueOnce({ results: [{ allowed: false, denied: false, reason: "", error: true }] })
+        // Retry succeeds with a definitive answer.
+        .mockResolvedValue({ results: [{ allowed: true, denied: false, reason: "", error: false }] });
+
+      const { result } = renderHook(() => useAccess("ctx", [check], invoke));
+
+      // Flush the first (errored) response.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(invoke).toHaveBeenCalledTimes(1);
+      // A failed check is NOT cached: known() stays false so denyReason renders
+      // no false "no permission" tooltip and the control re-checks.
+      expect(result.current.known(check)).toBe(false);
+
+      // The bounded retry timer (1500ms * attempt) fires and re-checks.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      expect(invoke).toHaveBeenCalledTimes(2);
+      expect(result.current.known(check)).toBe(true);
+      expect(result.current.allowed(check)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caches a definitive denial (error:false, allowed:false) as known — no retry", async () => {
+    const check: AccessCheck = { verb: "delete", resource: "pods", namespace: "prod" };
+    const invoke = vi
+      .fn()
+      .mockResolvedValue({ results: [{ allowed: false, denied: true, reason: "forbidden", error: false }] });
+
+    const { result } = renderHook(() => useAccess("ctx", [check], invoke));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.known(check)).toBe(true);
+    expect(result.current.allowed(check)).toBe(false);
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it("does not collide checks that differ only by `name` (resourceNames-scoped RBAC)", async () => {
@@ -195,8 +254,8 @@ describe("useAccess", () => {
     const checkPodB: AccessCheck = { verb: "get", resource: "pods", namespace: "ns", name: "pod-b" };
     const invoke = vi.fn().mockResolvedValue({
       results: [
-        { allowed: true, denied: false, reason: "" },
-        { allowed: false, denied: true, reason: "forbidden" },
+        { allowed: true, denied: false, reason: "", error: false },
+        { allowed: false, denied: true, reason: "forbidden", error: false },
       ],
     });
 

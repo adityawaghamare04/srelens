@@ -640,7 +640,7 @@ export function ResourceBrowser({
         // would just 403 again). Prefer the namespace the context's kubeconfig
         // entry declares; if it declares none, fall back to the ServiceAccount's
         // namespace named in the Forbidden error itself.
-        void listContexts()
+        void listContexts(kubeconfigFiles)
           .then((ctxOutcome) => {
             if (!active) return null;
             return ctxOutcome.contexts?.find((c) => c.name === context)?.namespace?.trim();

@@ -110,11 +110,14 @@ impl WatchStatus {
     }
 }
 
-/// A watcher error that will never self-heal (authentication/authorization) —
+/// A watcher error that will never self-heal (an RBAC Forbidden denial) —
 /// surface it and stop, instead of reconnecting forever.
 fn is_permanent_watch_error(msg: &str) -> bool {
-    let m = msg.to_ascii_lowercase();
-    m.contains("forbidden") || m.contains("unauthorized") || m.contains("401") || m.contains("403")
+    // Only a Forbidden (RBAC) denial is stable and won't self-heal. 401/token
+    // expiry IS recoverable (kube-rs refreshes creds and re-lists), so we keep
+    // reconnecting on it; and matching bare "401"/"403" substrings risks false
+    // positives (e.g. an id or byte count containing those digits).
+    msg.to_ascii_lowercase().contains("forbidden")
 }
 
 /// Generic watch loop: stream `K`, summarise to `T`, key by `key_of`, call
@@ -771,20 +774,29 @@ mod tests {
     }
 
     #[test]
-    fn permanent_watch_errors_are_auth_failures() {
-        // Authentication/authorization failures never self-heal — surface them.
+    fn only_forbidden_is_a_permanent_watch_error() {
+        // A genuine RBAC Forbidden denial is stable and won't self-heal — stop.
         assert!(is_permanent_watch_error(
             "watch deployments is forbidden: User cannot watch"
         ));
-        assert!(is_permanent_watch_error("Forbidden (ErrorResponse { code: 403 })"));
-        assert!(is_permanent_watch_error("Unauthorized"));
-        assert!(is_permanent_watch_error("server responded with 401"));
-        assert!(is_permanent_watch_error("server responded with 403"));
+        assert!(is_permanent_watch_error(
+            "deployments.apps is forbidden: ..."
+        ));
+        assert!(is_permanent_watch_error(
+            "Forbidden (ErrorResponse { code: 403 })"
+        ));
+
+        // 401 / token expiry IS recoverable: kube-rs refreshes creds and re-lists,
+        // so we keep reconnecting rather than permanently stopping the watch.
+        assert!(!is_permanent_watch_error("Unauthorized"));
+        assert!(!is_permanent_watch_error("server responded with 401"));
 
         // Transient failures must NOT be treated as permanent (they self-heal).
         assert!(!is_permanent_watch_error("list deployments timed out"));
         assert!(!is_permanent_watch_error(
             "error trying to connect: connection refused"
         ));
+        // A benign message with a "14030" substring must not false-positive.
+        assert!(!is_permanent_watch_error("read 14030 bytes"));
     }
 }

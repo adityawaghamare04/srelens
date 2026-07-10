@@ -138,7 +138,12 @@ export function ManifestEditor({
       if (!first?.kind) return null;
       const res = kindToResource(first.kind);
       if (!res) return null;
-      return rbac.edit(res.group, res.resource, first.metadata?.namespace ?? "");
+      const namespace = first.metadata?.namespace;
+      // No declared namespace: the resource relies on the context's default, so
+      // a preflight built with an empty namespace would be cluster-scoped and
+      // could FALSE-disable Apply. Skip gating — the API server still enforces.
+      if (!namespace) return null;
+      return rbac.edit(res.group, res.resource, namespace);
     } catch {
       return null;
     }
