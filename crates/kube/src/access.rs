@@ -54,6 +54,10 @@ pub struct AccessResult {
     pub allowed: bool,
     pub denied: bool,
     pub reason: String,
+    /// The check FAILED (network error / timeout) rather than completing. A
+    /// completed review with `allowed:false` is a real denial; `error:true`
+    /// means the frontend should retry, not cache a permanent "no permission".
+    pub error: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -94,11 +98,13 @@ fn result_from_status(status: Option<&SubjectAccessReviewStatus>) -> AccessResul
             allowed: s.allowed,
             denied: s.denied.unwrap_or(false),
             reason: s.reason.clone().unwrap_or_default(),
+            error: false,
         },
         None => AccessResult {
             allowed: false,
             denied: false,
             reason: String::new(),
+            error: false,
         },
     }
 }
@@ -132,11 +138,13 @@ pub fn can_i_capability(cache: Arc<ClientCache>) -> Capability {
                                 allowed: false,
                                 denied: false,
                                 reason: e.to_string(),
+                                error: true,
                             },
                             Err(_) => AccessResult {
                                 allowed: false,
                                 denied: false,
                                 reason: "access check timed out".into(),
+                                error: true,
                             },
                         }
                     }
@@ -183,6 +191,8 @@ mod tests {
             evaluation_error: None,
         }));
         assert!(allowed.allowed && !allowed.denied);
+        // A completed review is authoritative — never an error, even when allowed.
+        assert!(!allowed.error);
 
         let denied = result_from_status(Some(&SubjectAccessReviewStatus {
             allowed: false,
@@ -192,9 +202,12 @@ mod tests {
         }));
         assert!(!denied.allowed && denied.denied);
         assert_eq!(denied.reason, "RBAC: no rule");
+        // A completed denial is authoritative, not a failed check.
+        assert!(!denied.error);
 
         let unknown = result_from_status(None);
         assert!(!unknown.allowed && !unknown.denied);
+        assert!(!unknown.error);
     }
 
     #[test]

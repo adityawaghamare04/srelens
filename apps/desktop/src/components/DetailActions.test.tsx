@@ -286,7 +286,7 @@ describe("PodActions RBAC gating", () => {
     render(<PodActions context="kind-dev" pod={prodPod} onDeleted={() => {}} />);
     const evict = screen.getByRole("button", { name: "Evict" });
     expect(isDisabled(evict)).toBe(true);
-    expect(titleOf(evict)).toEqual(expect.stringContaining("permission to create pods in prod"));
+    expect(titleOf(evict)).toEqual(expect.stringContaining("permission to create pods/eviction in prod"));
   });
 
   it("disables the pod Edit control and explains why when the user can't patch pods", () => {
@@ -373,7 +373,7 @@ describe("ResourceActions RBAC gating", () => {
     );
     const scale = screen.getByRole("button", { name: "Scale" });
     expect(isDisabled(scale)).toBe(true);
-    expect(titleOf(scale)).toEqual(expect.stringContaining("permission to patch deployments in prod"));
+    expect(titleOf(scale)).toEqual(expect.stringContaining("permission to patch deployments/scale in prod"));
   });
 
   it("disables Restart when the user can't patch the workload", () => {

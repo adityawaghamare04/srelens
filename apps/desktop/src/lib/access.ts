@@ -16,6 +16,10 @@ export interface AccessResult {
   allowed: boolean;
   denied: boolean;
   reason: string;
+  /** True when the check itself FAILED (timeout/call error) — NOT a real RBAC
+   * denial. Failed checks are left uncached so the control fail-closes but
+   * re-checks, and no false "no permission" tooltip is shown. */
+  error: boolean;
 }
 
 /** Batched SelfSubjectAccessReview via `k8s.canI`. Results align 1:1 with `checks`. */
@@ -76,7 +80,7 @@ export function denyReason(
   c: AccessCheck,
 ): string | undefined {
   return access.known(c) && !access.allowed(c)
-    ? `You don't have permission to ${c.verb} ${c.resource}${c.namespace ? ` in ${c.namespace}` : ""}`
+    ? `You don't have permission to ${c.verb} ${c.resource}${c.subresource ? `/${c.subresource}` : ""}${c.namespace ? ` in ${c.namespace}` : ""}`
     : undefined;
 }
 
@@ -99,16 +103,35 @@ export function useAccess(
   const checksKey = checks.map((c) => keyOf(context, c)).join(";");
 
   useEffect(() => {
-    const missing = checks.filter((c) => !cache.has(keyOf(context, c)));
-    if (missing.length === 0) return;
     let active = true;
-    void canI(context, missing, invoke).then((out) => {
-      if (!active || !out.results) return;
-      missing.forEach((c, i) => cache.set(keyOf(context, c), out.results![i]));
-      forceUpdate();
-    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const run = () => {
+      const missing = checks.filter((c) => !cache.has(keyOf(context, c)));
+      if (missing.length === 0) return;
+      void canI(context, missing, invoke).then((out) => {
+        if (!active) return;
+        if (out.results) {
+          // Cache only DEFINITIVE results; a failed check (r.error) stays
+          // uncached so the control is fail-closed (disabled) but re-checks,
+          // and denyReason won't render a false "no permission".
+          missing.forEach((c, i) => {
+            const r = out.results![i];
+            if (r && !r.error) cache.set(keyOf(context, c), r);
+          });
+          forceUpdate();
+        }
+        const unresolved = checks.some((c) => !cache.has(keyOf(context, c)));
+        if (unresolved && attempts < 3) {
+          attempts += 1;
+          timer = setTimeout(run, 1500 * attempts);
+        }
+      });
+    };
+    run();
     return () => {
       active = false;
+      if (timer) clearTimeout(timer);
     };
     // Deps are intentionally [context, checksKey], not [invoke, checks]: a
     // fresh `invoke` function or `checks` array reference on every render

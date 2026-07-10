@@ -853,6 +853,37 @@ describe("ResourceBrowser", () => {
     );
   });
 
+  it("looks up the context's declared namespace using the CONFIGURED kubeconfig files when scoping a forbidden view", async () => {
+    // A restricted context that lives in a PASTED/additional kubeconfig file:
+    // its declared namespace is only discoverable when listContexts is passed
+    // the configured file paths. A bare listContexts() wouldn't find it, so the
+    // scoping lookup must forward `kubeconfigFiles`.
+    listNamespacesMock.mockResolvedValue({
+      error:
+        'handler error: ApiError: namespaces is forbidden: User "system:serviceaccount:clavik-dev:viewer" cannot list resource "namespaces" in API group "" at the cluster scope: Forbidden (ErrorResponse { code: 403, reason: "Forbidden", message: "..." })',
+    });
+    // The context's declared namespace (team-a) is ONLY returned when the paths
+    // are provided; a bare call yields nothing (and would fall back to the SA's
+    // namespace, clavik-dev, parsed from the error).
+    listContextsMock.mockImplementation(async (paths?: string[]) => {
+      if (paths && paths.length) {
+        return { contexts: [{ name: "kind-dev", cluster: "kind-dev", server: "https://x", namespace: "team-a" }] };
+      }
+      return { contexts: [] };
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "team-a", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" kubeconfigFiles={["/some/pasted.yaml"]} />);
+
+    // Scoped to the DECLARED namespace (found via the configured files), not the
+    // SA fallback — proving listContexts was called WITH the kubeconfig paths.
+    expect(await screen.findByText(/Scoped to namespace team-a/)).toBeDefined();
+    expect(screen.queryByText(/Scoped to namespace clavik-dev/)).toBeNull();
+    expect(listContextsMock).toHaveBeenCalledWith(["/some/pasted.yaml"]);
+    expect(listContextsMock).not.toHaveBeenCalledWith();
+  });
+
   it("shows a friendly ErrorState (not raw text) when the resource list itself is forbidden", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["prod"] });
     listResourceMock.mockResolvedValue({
