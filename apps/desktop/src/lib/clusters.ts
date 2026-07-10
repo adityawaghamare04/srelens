@@ -14,6 +14,8 @@ export interface ClusterContext {
   isLocal?: boolean;
   /** The detected local provider (e.g. "kind", "vind"), when `isLocal`. */
   provider?: string;
+  /** The context's default namespace from the kubeconfig; empty/absent when unset. */
+  namespace?: string;
 }
 
 export interface ContextsOutcome {

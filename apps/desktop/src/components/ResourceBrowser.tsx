@@ -7,6 +7,7 @@ import {
   type DeploymentSummary,
   type ServiceSummary,
 } from "../lib/workloads";
+import { listContexts } from "../lib/clusters";
 import {
   listNodes,
   listResource,
@@ -58,6 +59,8 @@ import { PodActions, ResourceActions, ServiceForwardAction } from "./DetailActio
 import { NodeCordonAction } from "./NodeCordonAction";
 import { ResourceDetail } from "./ResourceDetail";
 import type { OpenResource } from "../lib/resourceNavigation";
+import { describeError, serviceAccountNamespace } from "../lib/errors";
+import { isForbidden } from "../lib/access";
 import {
   Table,
   filterTableData,
@@ -68,6 +71,7 @@ import {
   ColumnPicker,
   useColumnVisibility,
   Drawer,
+  ErrorState,
   StatusPill,
   TextInput,
   Toolbar,
@@ -547,6 +551,7 @@ export function ResourceBrowser({
   initialNamespace = "",
   onNamespaceChange,
   detailDrawerWidth = 480,
+  kubeconfigFiles = [],
 }: {
   context: string;
   kind: ResourceKind;
@@ -567,9 +572,20 @@ export function ResourceBrowser({
   /** Notified when the namespace filter changes, so the parent can preserve it. */
   onNamespaceChange?: (namespace: string) => void;
   detailDrawerWidth?: number;
+  /**
+   * All configured kubeconfig files (default path + pasted/additional). Used to
+   * register their paths in the backend client cache before we build a client
+   * for this context — otherwise a restored tab for a context from an additional
+   * file races the app's initial listContexts and fails with "failed to load
+   * current context".
+   */
+  kubeconfigFiles?: string[];
 }) {
   const [namespaces, setNamespaces] = useState<string[] | null>(null);
   const [nsError, setNsError] = useState("");
+  // Set when namespace listing was forbidden but the kubeconfig context
+  // declares a bound namespace — the view is scoped to it instead of "all".
+  const [nsScope, setNsScope] = useState("");
   // Namespace selection is a set (empty = all namespaces), serialized to/from
   // the persisted comma string. One selected namespace watches that namespace
   // directly; none or many watch all namespaces, filtered client-side.
@@ -593,6 +609,10 @@ export function ResourceBrowser({
   const viewKeyRef = useRef("");
 
   const namespaced = isNamespaced(kind);
+  // Stable dependency for the effect below: a fresh `kubeconfigFiles` array
+  // identity every render must not refire the effect (which would restart the
+  // watch); only a real change to the set of files should.
+  const kubeconfigFilesKey = kubeconfigFiles.join(" ");
 
   useEffect(() => setFilterColumn(null), [kind]);
 
@@ -600,16 +620,66 @@ export function ResourceBrowser({
     let active = true;
     setNamespaces(null);
     setNsError("");
-    void listNamespaces(context).then((outcome) => {
+    setNsScope("");
+    // Ensure the client cache knows about all configured kubeconfig files (incl.
+    // pasted/additional) before we build a client for this context. Otherwise a
+    // restored tab for a context from an additional file races the app's initial
+    // listContexts and fails with "failed to load current context". We only need
+    // the side effect (cache.set_paths); ignore the return, and if it errors
+    // still proceed to listNamespaces (which surfaces its own error).
+    const ready = kubeconfigFiles.length
+      ? listContexts(kubeconfigFiles).then(() => undefined)
+      : Promise.resolve(undefined);
+    void ready.then(() => {
       if (!active) return;
-      if (outcome.error) setNsError(outcome.error);
-      else setNamespaces(outcome.namespaces ?? []);
+      return listNamespaces(context).then((outcome) => {
+      if (!active) return;
+      if (outcome.error && isForbidden(outcome.error)) {
+        // Forbidden — a namespace-restricted credential. Scope the view to a
+        // single namespace instead of falling back to "all namespaces" (which
+        // would just 403 again). Prefer the namespace the context's kubeconfig
+        // entry declares; if it declares none, fall back to the ServiceAccount's
+        // namespace named in the Forbidden error itself.
+        void listContexts()
+          .then((ctxOutcome) => {
+            if (!active) return null;
+            return ctxOutcome.contexts?.find((c) => c.name === context)?.namespace?.trim();
+          })
+          .catch(() => undefined)
+          .then((declared) => {
+            if (!active) return;
+            const ns = declared || serviceAccountNamespace(outcome.error!);
+            if (ns) {
+              setNsError("");
+              setNsScope(ns);
+              setNamespaces([ns]);
+              setSelection([ns]);
+            } else {
+              setNsScope("");
+              setNsError(outcome.error!);
+              setNamespaces([]); // non-fatal: still render the toolbar + resource list
+            }
+          });
+      } else if (outcome.error) {
+        // A genuine failure (timeout, 5xx) — NOT a permission problem. Keep it
+        // non-fatal (render the view against all namespaces), but surface the
+        // REAL error rather than mischaracterizing it as an RBAC restriction,
+        // and do NOT auto-scope to the context's declared namespace.
+        setNsScope("");
+        setNsError(outcome.error);
+        setNamespaces([]);
+      } else {
+        setNsError("");
+        setNsScope("");
+        setNamespaces(outcome.namespaces ?? []);
+      }
       // namespace stays "" = All namespaces by default
+      });
     });
     return () => {
       active = false;
     };
-  }, [context]);
+  }, [context, kubeconfigFilesKey]);
 
   useEffect(() => {
     if (namespaced && namespaces === null) return; // wait for the namespace list
@@ -639,6 +709,10 @@ export function ResourceBrowser({
         (status) => {
           if (!cancelled) setWatchStatus(status);
         },
+        (err) => {
+          if (!cancelled) setRes({ rows: [], error: err, loading: false });
+        },
+        kubeconfigFiles,
       )
         .then((h) => (cancelled ? h.stop() : (handle = h)))
         .catch((e) => {
@@ -883,14 +957,23 @@ export function ResourceBrowser({
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {nsError && <p className="px-3 py-2 text-sm text-destructive">Error: {nsError}</p>}
-        {!nsError && namespaces === null && (
+        {namespaces === null && (
           <div className="p-3">
             <Spinner label="Loading namespaces" />
           </div>
         )}
-        {!nsError && namespaces !== null && (
+        {namespaces !== null && (
           <>
+            {nsScope && (
+              <p className="px-3 py-1 text-xs text-muted-foreground" role="status">
+                Scoped to namespace {nsScope} — you don’t have permission to list all namespaces.
+              </p>
+            )}
+            {nsError && (
+              <p className="px-3 py-1 text-xs text-muted-foreground" role="status">
+                {describeError(nsError).title} — can’t list namespaces; showing all.
+              </p>
+            )}
             <Toolbar className="fl-resource-toolbar shrink-0 flex-wrap">
               {namespaced && (
                 <div className="fl-resource-toolbar__namespace flex items-center gap-2">
@@ -952,7 +1035,13 @@ export function ResourceBrowser({
             </Toolbar>
 
             <div className="min-h-0 flex-1 overflow-auto">
-              {res.error && <p className="px-3 py-2 text-sm text-destructive">Error: {res.error}</p>}
+              {res.error && (
+                <ErrorState
+                  title={describeError(res.error).title}
+                  detail={describeError(res.error).detail}
+                  onRetry={() => setReloadKey((k) => k + 1)}
+                />
+              )}
               {!res.error && res.loading && filtered.length === 0 && (
                 <LoadingState label={`Loading ${kind}`} />
               )}

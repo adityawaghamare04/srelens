@@ -3,6 +3,7 @@ import { ArrowDownToLine, CircleCheck, CircleSlash2 } from "lucide-react";
 import { getObject } from "../lib/manifest";
 import { cordonNode, drainNode } from "../lib/actions";
 import { notify } from "../lib/notify";
+import { useAccess, rbac, denyReason, reportActionError } from "../lib/access";
 import { IconButton, ConfirmDialog } from "../ui";
 
 /**
@@ -28,6 +29,10 @@ export function NodeCordonAction({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  const cordonCheck = rbac.cordon();
+  const drainCheck = rbac.drain();
+  const access = useAccess(context, [cordonCheck, drainCheck]);
+
   useEffect(() => {
     let active = true;
     void getObjectFn(context, "Node", null, name).then((o) => {
@@ -48,7 +53,7 @@ export function NodeCordonAction({
     setBusy(false);
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to ${cordoned ? "uncordon" : "cordon"} ${name}`, r.error);
+      reportActionError(context, `Failed to ${cordoned ? "uncordon" : "cordon"} ${name}`, r.error);
       return;
     }
     setDialog(null);
@@ -63,7 +68,7 @@ export function NodeCordonAction({
     setBusy(false);
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to drain ${name}`, r.error);
+      reportActionError(context, `Failed to drain ${name}`, r.error);
       return;
     }
     setDialog(null);
@@ -76,6 +81,8 @@ export function NodeCordonAction({
       <IconButton
         icon={cordoned ? CircleCheck : CircleSlash2}
         label={cordoned ? "Uncordon" : "Cordon"}
+        disabled={!access.allowed(cordonCheck)}
+        title={denyReason(access, cordonCheck)}
         onClick={() => {
           setErr("");
           setDialog("cordon");
@@ -84,6 +91,8 @@ export function NodeCordonAction({
       <IconButton
         icon={ArrowDownToLine}
         label="Drain"
+        disabled={!access.allowed(drainCheck)}
+        title={denyReason(access, drainCheck)}
         onClick={() => {
           setErr("");
           setDialog("drain");

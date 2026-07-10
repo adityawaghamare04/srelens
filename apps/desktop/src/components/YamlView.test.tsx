@@ -25,6 +25,16 @@ vi.mock("../ui/CodeEditor", () => ({
     <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange?.(e.target.value)} />
   ),
 }));
+// ManifestEditor gates Apply (fail-closed) on a preflight access check in edit
+// mode; stub the hook to "allowed" so these tests exercise the apply flow
+// rather than the RBAC gate (covered in ManifestEditor.test.tsx).
+vi.mock("../lib/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/access")>();
+  return {
+    ...actual,
+    useAccess: () => ({ allowed: () => true, reason: () => "", known: () => true, loading: false }),
+  };
+});
 
 import { YamlView } from "./YamlView";
 

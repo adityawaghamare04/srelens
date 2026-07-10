@@ -35,6 +35,13 @@ const { notifyMock } = vi.hoisted(() => ({
 }));
 vi.mock("../lib/notify", () => ({ notify: notifyMock }));
 
+vi.mock("../lib/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/access")>();
+  return { ...actual, useAccess: vi.fn() };
+});
+import { useAccess } from "../lib/access";
+import { describeError } from "../lib/errors";
+
 import { PodActions, ResourceActions } from "./DetailActions";
 
 const pod = {
@@ -47,6 +54,15 @@ const pod = {
   age: "2d",
 };
 
+// This repo doesn't pull in @testing-library/jest-dom, so assert directly on
+// DOM properties instead of `toBeDisabled`/`toHaveAttribute` sugar.
+function isDisabled(el: HTMLElement): boolean {
+  return (el as HTMLButtonElement).disabled;
+}
+function titleOf(el: HTMLElement): string | null {
+  return el.getAttribute("title");
+}
+
 beforeEach(() => {
   deletePodMock.mockReset();
   evictPodMock.mockReset();
@@ -57,6 +73,14 @@ beforeEach(() => {
   cronjobTriggerNowMock.mockReset();
   notifyMock.success.mockReset();
   notifyMock.error.mockReset();
+  // Default: everything allowed, so pre-existing behavioural tests (written
+  // before RBAC gating existed) keep exercising enabled controls.
+  vi.mocked(useAccess).mockReturnValue({
+    allowed: () => true,
+    reason: () => "",
+    known: () => true,
+    loading: false,
+  });
 });
 
 describe("PodActions", () => {
@@ -121,7 +145,7 @@ describe("ResourceActions", () => {
     await waitFor(() => expect(notifyMock.success).toHaveBeenCalledWith(expect.stringMatching(/Scaled web to 3/)));
   });
 
-  it("shows an error toast when an operation fails", async () => {
+  it("shows an actionable error toast (mapped, not raw) when an operation fails", async () => {
     scaleResourceMock.mockResolvedValue({ error: "forbidden" });
     render(
       <ResourceActions context="kind-dev" kind="Deployment" namespace="default" name="web" onDeleted={() => {}} />,
@@ -129,7 +153,11 @@ describe("ResourceActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Scale" }));
     fireEvent.change(screen.getByLabelText("Replicas"), { target: { value: "3" } });
     fireEvent.click(screen.getByRole("button", { name: "Scale" }));
-    await waitFor(() => expect(notifyMock.error).toHaveBeenCalledWith(expect.any(String), "forbidden"));
+    // The toast carries the friendly detail from describeError, not the raw "forbidden".
+    await waitFor(() =>
+      expect(notifyMock.error).toHaveBeenCalledWith("Failed to scale web", describeError("forbidden").detail),
+    );
+    expect(notifyMock.error).not.toHaveBeenCalledWith(expect.anything(), "forbidden");
     expect(notifyMock.success).not.toHaveBeenCalled();
   });
 
@@ -218,5 +246,211 @@ describe("ResourceActions", () => {
     await waitFor(() =>
       expect(cronjobSetSuspendMock).toHaveBeenCalledWith("kind-dev", "ops", "nightly", true),
     );
+  });
+});
+
+describe("PodActions RBAC gating", () => {
+  const prodPod = { ...pod, namespace: "prod" };
+
+  it("disables the Delete control and explains why when the user can't delete", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(<PodActions context="kind-dev" pod={prodPod} onDeleted={() => {}} />);
+    const del = screen.getByRole("button", { name: "Delete" });
+    expect(isDisabled(del)).toBe(true);
+    expect(titleOf(del)).toEqual(expect.stringContaining("permission to delete pods in prod"));
+  });
+
+  it("enables Delete when allowed", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => true,
+      reason: () => "",
+      known: () => true,
+      loading: false,
+    });
+    render(<PodActions context="kind-dev" pod={prodPod} onDeleted={() => {}} />);
+    expect(isDisabled(screen.getByRole("button", { name: "Delete" }))).toBe(false);
+  });
+
+  it("disables Evict and explains why when the user can't evict", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(<PodActions context="kind-dev" pod={prodPod} onDeleted={() => {}} />);
+    const evict = screen.getByRole("button", { name: "Evict" });
+    expect(isDisabled(evict)).toBe(true);
+    expect(titleOf(evict)).toEqual(expect.stringContaining("permission to create pods in prod"));
+  });
+
+  it("disables the pod Edit control and explains why when the user can't patch pods", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(<PodActions context="kind-dev" pod={prodPod} onDeleted={() => {}} onEdit={() => {}} />);
+    const edit = screen.getByRole("button", { name: "Edit" });
+    expect(isDisabled(edit)).toBe(true);
+    expect(titleOf(edit)).toEqual(expect.stringContaining("permission to patch pods in prod"));
+  });
+
+  it("enables the pod Edit control when allowed", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => true,
+      reason: () => "",
+      known: () => true,
+      loading: false,
+    });
+    render(<PodActions context="kind-dev" pod={prodPod} onDeleted={() => {}} onEdit={() => {}} />);
+    expect(isDisabled(screen.getByRole("button", { name: "Edit" }))).toBe(false);
+  });
+});
+
+describe("ResourceActions RBAC gating", () => {
+  it("disables the Delete control and explains why when the user can't delete", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="Deployment"
+        namespace="prod"
+        name="web"
+        onDeleted={() => {}}
+      />,
+    );
+    const del = screen.getByRole("button", { name: "Delete" });
+    expect(isDisabled(del)).toBe(true);
+    expect(titleOf(del)).toEqual(expect.stringContaining("permission to delete deployments in prod"));
+  });
+
+  it("enables Delete when allowed", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => true,
+      reason: () => "",
+      known: () => true,
+      loading: false,
+    });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="Deployment"
+        namespace="prod"
+        name="web"
+        onDeleted={() => {}}
+      />,
+    );
+    expect(isDisabled(screen.getByRole("button", { name: "Delete" }))).toBe(false);
+  });
+
+  it("disables Scale when the user can't patch the scale subresource", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="Deployment"
+        namespace="prod"
+        name="web"
+        onDeleted={() => {}}
+      />,
+    );
+    const scale = screen.getByRole("button", { name: "Scale" });
+    expect(isDisabled(scale)).toBe(true);
+    expect(titleOf(scale)).toEqual(expect.stringContaining("permission to patch deployments in prod"));
+  });
+
+  it("disables Restart when the user can't patch the workload", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="Deployment"
+        namespace="prod"
+        name="web"
+        onDeleted={() => {}}
+      />,
+    );
+    expect(isDisabled(screen.getByRole("button", { name: "Restart" }))).toBe(true);
+  });
+
+  it("disables Edit when the user can't patch the resource", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="Deployment"
+        namespace="prod"
+        name="web"
+        onDeleted={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+    expect(isDisabled(screen.getByRole("button", { name: "Edit" }))).toBe(true);
+  });
+
+  it("disables cronjob Run now / Suspend when denied", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="CronJob"
+        namespace="ops"
+        name="nightly"
+        onDeleted={() => {}}
+      />,
+    );
+    expect(isDisabled(screen.getByRole("button", { name: "Run now" }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: "Suspend" }))).toBe(true);
+  });
+
+  it("leaves controls enabled for an unknown/CRD kind, regardless of RBAC checks", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    render(
+      <ResourceActions
+        context="kind-dev"
+        kind="Widget"
+        namespace="prod"
+        name="thing"
+        onDeleted={() => {}}
+      />,
+    );
+    expect(isDisabled(screen.getByRole("button", { name: "Delete" }))).toBe(false);
   });
 });

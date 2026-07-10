@@ -109,16 +109,43 @@ pub fn single_context_kubeconfig_yaml(paths: &[PathBuf], context: &str) -> Resul
     serde_yaml::to_string(&config).map_err(|e| e.to_string())
 }
 
-pub(crate) async fn build_client(paths: &[PathBuf], context: &str) -> Result<Client, String> {
+/// Resolve a kube `Config` for `context`, preferring the file that declares it
+/// (so merge "first-file-wins" can't shadow its cluster/user), else the merge.
+pub(crate) async fn config_for_context(paths: &[PathBuf], context: &str) -> Result<Config, String> {
+    // Prefer the specific kubeconfig file that declares `context`: kube-rs merge
+    // is "first file wins" by name, so a same-named cluster/user in another
+    // merged file can shadow (or drop) this context's own entries. Building from
+    // the owning file uses that context's real cluster + user.
+    for path in paths {
+        let Ok(kc) = Kubeconfig::read_from(path) else {
+            continue;
+        };
+        if !kc.contexts.iter().any(|c| c.name == context) {
+            continue;
+        }
+        let options = KubeConfigOptions {
+            context: Some(context.to_string()),
+            cluster: None,
+            user: None,
+        };
+        if let Ok(config) = Config::from_custom_kubeconfig(kc, &options).await {
+            return Ok(config);
+        }
+    }
+    // Fallback: merged resolution (handles configs split across files).
     let kubeconfig = load_kubeconfigs(paths)?;
     let options = KubeConfigOptions {
         context: Some(context.to_string()),
         cluster: None,
         user: None,
     };
-    let config = Config::from_custom_kubeconfig(kubeconfig, &options)
+    Config::from_custom_kubeconfig(kubeconfig, &options)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn build_client(paths: &[PathBuf], context: &str) -> Result<Client, String> {
+    let config = config_for_context(paths, context).await?;
     Client::try_from(config).map_err(|e| e.to_string())
 }
 
@@ -247,6 +274,49 @@ mod tests {
         let yaml = "apiVersion: v1\nkind: Config\nclusters:\n- name: a\n  cluster: { server: https://a }\ncontexts:\n- name: ctx-a\n  context: { cluster: a, user: user-a }\n";
         assert_eq!(validate_kubeconfig_yaml(yaml), Ok(1));
         assert!(validate_kubeconfig_yaml("apiVersion: v1\nkind: Config\ncontexts: []\n").is_err());
+    }
+
+    /// Write `contents` to a unique temp file (pid + nanos) and return its path.
+    fn write_temp_kubeconfig(tag: &str, contents: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "srelens-config-for-context-{tag}-{}-{}.yaml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn config_for_context_prefers_the_owning_files_cluster() {
+        // fileA and fileB both declare a cluster named `shared`, but with
+        // different servers. kube-rs merge is "first file wins" by name, so a
+        // merge-only resolution of ctx-b would wrongly pick fileA's server.
+        let file_a = write_temp_kubeconfig(
+            "a",
+            "apiVersion: v1\nkind: Config\ncurrent-context: ctx-a\nclusters:\n  - name: shared\n    cluster: { server: https://a.example:6443 }\nusers:\n  - name: ua\n    user: {}\ncontexts:\n  - name: ctx-a\n    context: { cluster: shared, user: ua }\n",
+        );
+        let file_b = write_temp_kubeconfig(
+            "b",
+            "apiVersion: v1\nkind: Config\nclusters:\n  - name: shared\n    cluster: { server: https://b.example:6443 }\nusers:\n  - name: ub\n    user: {}\ncontexts:\n  - name: ctx-b\n    context: { cluster: shared, user: ub }\n",
+        );
+
+        let config = config_for_context(&[file_a.clone(), file_b.clone()], "ctx-b")
+            .await
+            .unwrap();
+
+        // ctx-b must resolve to fileB's own `shared` cluster, not fileA's.
+        let url = config.cluster_url.to_string();
+        assert!(
+            url.starts_with("https://b.example"),
+            "expected fileB's server, got {url}"
+        );
+
+        let _ = std::fs::remove_file(&file_a);
+        let _ = std::fs::remove_file(&file_b);
     }
 
     #[tokio::test(flavor = "multi_thread")]
