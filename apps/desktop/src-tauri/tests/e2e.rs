@@ -104,6 +104,15 @@ impl Harness {
         self.covered.insert(id.to_string());
     }
 
+    /// Probe `id` WITHOUT recording coverage — for deciding how to assert (e.g.
+    /// whether a metrics API is serving). The real call still has to happen.
+    async fn try_call(&self, id: &str, input: Value) -> Result<Value, String> {
+        self.reg
+            .invoke(id, input)
+            .await
+            .map_err(|e| format!("{e:?}"))
+    }
+
     /// Invoke `id`, recording it covered; panics with a clear message on Err.
     async fn ok(&mut self, id: &str, input: Value) -> Value {
         self.mark(id);
@@ -1143,11 +1152,50 @@ async fn run_suite() {
         "expected the busybox loop's output: {out}"
     );
 
-    // === 6. Metrics (best-effort: kind ships no metrics-server) ===============
+    // === 6. Metrics ============================================================
+    // A bare kind cluster ships no metrics-server, so the metrics API may be
+    // absent. Don't let that make the happy path vacuous: probe once, and when
+    // the API IS serving, assert we actually get readings back. Install it with:
+    //   helm install metrics-server metrics-server/metrics-server -n kube-system \
+    //     --set 'args={--kubelet-insecure-tls}'
     println!("=== metrics ===");
-    h.any("k8s.nodeMetrics", json!({ "context": ctx })).await;
-    h.any("k8s.podMetrics", json!({ "context": ctx, "namespace": NS }))
-        .await;
+    let metrics_available = h
+        .try_call("k8s.nodeMetrics", json!({ "context": ctx }))
+        .await
+        .is_ok();
+
+    if metrics_available {
+        let nodes = h.ok("k8s.nodeMetrics", json!({ "context": ctx })).await;
+        let items = nodes["metrics"]
+            .as_array()
+            .expect("nodeMetrics should return a metrics array");
+        assert!(
+            !items.is_empty(),
+            "metrics API is serving but nodeMetrics returned nothing"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|n| n["cpuMillicores"].as_i64().unwrap_or(0) > 0
+                    || n["memoryMib"].as_i64().unwrap_or(0) > 0),
+            "nodeMetrics returned nodes with no readings: {items:?}"
+        );
+        println!("  k8s.nodeMetrics: {} node(s) with readings", items.len());
+
+        let pods = h
+            .ok("k8s.podMetrics", json!({ "context": ctx, "namespace": NS }))
+            .await;
+        let items = pods["metrics"]
+            .as_array()
+            .expect("podMetrics should return a metrics array");
+        println!("  k8s.podMetrics: {} pod(s) with readings", items.len());
+    } else {
+        // No metrics-server: the capabilities must degrade cleanly, not hang or panic.
+        h.any("k8s.nodeMetrics", json!({ "context": ctx })).await;
+        h.any("k8s.podMetrics", json!({ "context": ctx, "namespace": NS }))
+            .await;
+        println!("  metrics API absent — asserted clean degradation only");
+    }
 
     // === 7. Writes ==============================================================
     println!("=== writes ===");
