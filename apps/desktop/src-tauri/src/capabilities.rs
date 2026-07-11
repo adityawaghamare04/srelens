@@ -7,9 +7,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde_json::json;
 use srelens_capability::{Capability, Registry};
 use srelens_kube::client_cache::ClientCache;
-use serde_json::json;
 
 /// Resolve kubeconfig paths: every `$KUBECONFIG` entry, else `$HOME/.kube/config`.
 pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
@@ -27,7 +27,10 @@ pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
 
 #[cfg(test)]
 pub fn default_kubeconfig_path() -> PathBuf {
-    default_kubeconfig_paths().into_iter().next().unwrap_or_default()
+    default_kubeconfig_paths()
+        .into_iter()
+        .next()
+        .unwrap_or_default()
 }
 
 /// Build the registry with a freshly-created client cache. Used by the MCP
@@ -51,9 +54,13 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
         cache.clone(),
         default_kubeconfig_paths(),
     ));
-    reg.register(srelens_kube::contexts::delete_context_capability(cache.clone()));
+    reg.register(srelens_kube::contexts::delete_context_capability(
+        cache.clone(),
+    ));
 
-    reg.register(srelens_kube::connect::cluster_info_capability(cache.clone()));
+    reg.register(srelens_kube::connect::cluster_info_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::workloads::list_namespaces_capability(
         cache.clone(),
     ));
@@ -87,10 +94,10 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::configmaps::list_configmaps_capability(
         cache.clone(),
     ));
-    reg.register(srelens_kube::secrets::list_secrets_capability(cache.clone()));
-    reg.register(srelens_kube::resourcequotas::list_resourcequotas_capability(
+    reg.register(srelens_kube::secrets::list_secrets_capability(
         cache.clone(),
     ));
+    reg.register(srelens_kube::resourcequotas::list_resourcequotas_capability(cache.clone()));
     reg.register(srelens_kube::limitranges::list_limitranges_capability(
         cache.clone(),
     ));
@@ -100,25 +107,19 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::ingresses::list_ingresses_capability(
         cache.clone(),
     ));
-    reg.register(srelens_kube::endpointslices::list_endpointslices_capability(
-        cache.clone(),
-    ));
-    reg.register(srelens_kube::networkpolicies::list_networkpolicies_capability(
-        cache.clone(),
-    ));
+    reg.register(srelens_kube::endpointslices::list_endpointslices_capability(cache.clone()));
+    reg.register(srelens_kube::networkpolicies::list_networkpolicies_capability(cache.clone()));
     reg.register(srelens_kube::pvcs::list_pvcs_capability(cache.clone()));
     reg.register(srelens_kube::pvcs::pods_for_pvc_capability(cache.clone()));
     reg.register(srelens_kube::persistentvolumes::list_pvs_capability(
         cache.clone(),
     ));
-    reg.register(srelens_kube::storageclasses::list_storageclasses_capability(
-        cache.clone(),
-    ));
-    reg.register(srelens_kube::serviceaccounts::list_serviceaccounts_capability(
-        cache.clone(),
-    ));
+    reg.register(srelens_kube::storageclasses::list_storageclasses_capability(cache.clone()));
+    reg.register(srelens_kube::serviceaccounts::list_serviceaccounts_capability(cache.clone()));
     reg.register(srelens_kube::serviceaccounts::pods_for_service_account_capability(cache.clone()));
-    reg.register(srelens_kube::serviceaccounts::bindings_for_service_account_capability(cache.clone()));
+    reg.register(
+        srelens_kube::serviceaccounts::bindings_for_service_account_capability(cache.clone()),
+    );
     reg.register(srelens_kube::roles::list_roles_capability(cache.clone()));
     reg.register(srelens_kube::roles::list_clusterroles_capability(
         cache.clone(),
@@ -129,28 +130,79 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     reg.register(srelens_kube::rolebindings::list_clusterrolebindings_capability(cache.clone()));
     reg.register(srelens_kube::actions::delete_pod_capability(cache.clone()));
     reg.register(srelens_kube::actions::evict_pod_capability(cache.clone()));
-    reg.register(srelens_kube::actions::delete_resource_capability(cache.clone()));
+    reg.register(srelens_kube::actions::delete_resource_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::actions::scale_capability(cache.clone()));
-    reg.register(srelens_kube::actions::rollout_restart_capability(cache.clone()));
-    reg.register(srelens_kube::actions::update_config_data_capability(cache.clone()));
+    reg.register(srelens_kube::actions::rollout_restart_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::actions::update_config_data_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::actions::cordon_node_capability(cache.clone()));
     reg.register(srelens_kube::actions::drain_node_capability(cache.clone()));
     reg.register(srelens_kube::events::list_events_capability(cache.clone()));
-    reg.register(srelens_kube::metrics::node_metrics_capability(cache.clone()));
+    reg.register(srelens_kube::metrics::node_metrics_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::metrics::pod_metrics_capability(cache.clone()));
     reg.register(srelens_kube::nodes::list_nodes_capability(cache.clone()));
-    reg.register(srelens_kube::manifest::get_manifest_capability(cache.clone()));
+    reg.register(srelens_kube::manifest::get_manifest_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::manifest::get_object_capability(cache.clone()));
     reg.register(srelens_kube::secrets::get_secret_capability(cache.clone()));
-    reg.register(srelens_kube::manifest::apply_manifest_capability(cache.clone()));
-    reg.register(srelens_kube::manifest::validate_manifest_capability(cache.clone()));
-    reg.register(srelens_kube::manifest::diff_manifest_capability(cache.clone()));
+    reg.register(srelens_kube::manifest::apply_manifest_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::manifest::validate_manifest_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::manifest::diff_manifest_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::access::can_i_capability(cache.clone()));
-    reg.register(srelens_kube::schema::open_api_schema_capability(cache.clone()));
+    reg.register(srelens_kube::schema::open_api_schema_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::crds::list_crds_capability(cache.clone()));
-    reg.register(srelens_kube::crds::list_custom_resource_capability(cache.clone()));
-    reg.register(srelens_kube::helm::list_helm_releases_capability(cache.clone()));
-    reg.register(srelens_kube::helm::get_helm_release_capability(cache.clone()));
+    reg.register(srelens_kube::crds::list_custom_resource_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm::list_helm_releases_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm::get_helm_release_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_version_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_template_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_install_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_upgrade_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_rollback_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_uninstall_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_repo_add_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_repo_update_capability(
+        cache.clone(),
+    ));
+    reg.register(srelens_kube::helm_cli::helm_search_repo_capability(
+        cache.clone(),
+    ));
     reg.register(srelens_kube::manifest::list_resource_capability(cache));
 
     reg
@@ -191,6 +243,8 @@ mod tests {
     fn kubeconfig_path_prefers_env() {
         // Default falls back to a path under HOME when KUBECONFIG is unset.
         let path = default_kubeconfig_path();
-        assert!(path.to_string_lossy().contains(".kube/config") || std::env::var("KUBECONFIG").is_ok());
+        assert!(
+            path.to_string_lossy().contains(".kube/config") || std::env::var("KUBECONFIG").is_ok()
+        );
     }
 }

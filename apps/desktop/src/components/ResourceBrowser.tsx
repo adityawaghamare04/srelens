@@ -1,13 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import {
-  listNamespaces,
   podMetrics,
   type PodSummary,
   type DeploymentSummary,
   type ServiceSummary,
 } from "../lib/workloads";
-import { listContexts } from "../lib/clusters";
+import { useNamespaceOptions } from "../lib/useNamespaceOptions";
 import {
   listNodes,
   listResource,
@@ -59,8 +58,7 @@ import { PodActions, ResourceActions, ServiceForwardAction } from "./DetailActio
 import { NodeCordonAction } from "./NodeCordonAction";
 import { ResourceDetail } from "./ResourceDetail";
 import type { OpenResource } from "../lib/resourceNavigation";
-import { describeError, serviceAccountNamespace } from "../lib/errors";
-import { isForbidden } from "../lib/access";
+import { describeError } from "../lib/errors";
 import {
   Table,
   filterTableData,
@@ -581,11 +579,7 @@ export function ResourceBrowser({
    */
   kubeconfigFiles?: string[];
 }) {
-  const [namespaces, setNamespaces] = useState<string[] | null>(null);
-  const [nsError, setNsError] = useState("");
-  // Set when namespace listing was forbidden but the kubeconfig context
-  // declares a bound namespace — the view is scoped to it instead of "all".
-  const [nsScope, setNsScope] = useState("");
+  const { namespaces, scope: nsScope, error: nsError } = useNamespaceOptions(context, kubeconfigFiles);
   // Namespace selection is a set (empty = all namespaces), serialized to/from
   // the persisted comma string. One selected namespace watches that namespace
   // directly; none or many watch all namespaces, filtered client-side.
@@ -594,6 +588,11 @@ export function ResourceBrowser({
     setSelection(next);
     onNamespaceChange?.(serializeNamespaceSelection(next));
   };
+  // Restricted credentials scope the view to a single namespace — force the
+  // selection to match rather than leaving it at whatever was selected before.
+  useEffect(() => {
+    if (nsScope) setSelection([nsScope]);
+  }, [nsScope]);
   const watchNamespace = watchNamespaceForSelection(selection);
   const selectionKey = serializeNamespaceSelection(selection);
   const [res, setRes] = useState<ResourceState>({ rows: [], error: "", loading: false });
@@ -609,77 +608,8 @@ export function ResourceBrowser({
   const viewKeyRef = useRef("");
 
   const namespaced = isNamespaced(kind);
-  // Stable dependency for the effect below: a fresh `kubeconfigFiles` array
-  // identity every render must not refire the effect (which would restart the
-  // watch); only a real change to the set of files should.
-  const kubeconfigFilesKey = kubeconfigFiles.join(" ");
 
   useEffect(() => setFilterColumn(null), [kind]);
-
-  useEffect(() => {
-    let active = true;
-    setNamespaces(null);
-    setNsError("");
-    setNsScope("");
-    // Ensure the client cache knows about all configured kubeconfig files (incl.
-    // pasted/additional) before we build a client for this context. Otherwise a
-    // restored tab for a context from an additional file races the app's initial
-    // listContexts and fails with "failed to load current context". We only need
-    // the side effect (cache.set_paths); ignore the return, and if it errors
-    // still proceed to listNamespaces (which surfaces its own error).
-    const ready = kubeconfigFiles.length
-      ? listContexts(kubeconfigFiles).then(() => undefined)
-      : Promise.resolve(undefined);
-    void ready.then(() => {
-      if (!active) return;
-      return listNamespaces(context).then((outcome) => {
-      if (!active) return;
-      if (outcome.error && isForbidden(outcome.error)) {
-        // Forbidden — a namespace-restricted credential. Scope the view to a
-        // single namespace instead of falling back to "all namespaces" (which
-        // would just 403 again). Prefer the namespace the context's kubeconfig
-        // entry declares; if it declares none, fall back to the ServiceAccount's
-        // namespace named in the Forbidden error itself.
-        void listContexts(kubeconfigFiles)
-          .then((ctxOutcome) => {
-            if (!active) return null;
-            return ctxOutcome.contexts?.find((c) => c.name === context)?.namespace?.trim();
-          })
-          .catch(() => undefined)
-          .then((declared) => {
-            if (!active) return;
-            const ns = declared || serviceAccountNamespace(outcome.error!);
-            if (ns) {
-              setNsError("");
-              setNsScope(ns);
-              setNamespaces([ns]);
-              setSelection([ns]);
-            } else {
-              setNsScope("");
-              setNsError(outcome.error!);
-              setNamespaces([]); // non-fatal: still render the toolbar + resource list
-            }
-          });
-      } else if (outcome.error) {
-        // A genuine failure (timeout, 5xx) — NOT a permission problem. Keep it
-        // non-fatal (render the view against all namespaces), but surface the
-        // REAL error rather than mischaracterizing it as an RBAC restriction,
-        // and do NOT auto-scope to the context's declared namespace.
-        setNsScope("");
-        setNsError(outcome.error);
-        setNamespaces([]);
-      } else {
-        setNsError("");
-        setNsScope("");
-        setNamespaces(outcome.namespaces ?? []);
-      }
-      // namespace stays "" = All namespaces by default
-      });
-    });
-    return () => {
-      active = false;
-    };
-  }, [context, kubeconfigFilesKey]);
 
   useEffect(() => {
     if (namespaced && namespaces === null) return; // wait for the namespace list

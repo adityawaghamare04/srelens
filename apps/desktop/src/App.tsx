@@ -445,6 +445,7 @@ export function App() {
       container?: string;
       workload?: { kind: string; name: string };
       kubeconfigFiles?: string[];
+      helm?: { args: string[]; title: string; values?: string; onComplete?: () => void };
     },
   ) {
     const id = dockIdRef.current++;
@@ -561,6 +562,12 @@ export function App() {
                       key={activeTab.id}
                       context={activeCluster}
                       detailDrawerWidth={layout.rightSidebarWidth}
+                      openHelmDock={(s) =>
+                        openDock("helm", { context: s.context, namespace: s.namespace, helm: s.helm, kubeconfigFiles })
+                      }
+                      initialNamespace={activeTab.namespace ?? ""}
+                      onNamespaceChange={(ns) => setTabNamespace(activeTab.id, activeCluster, ns)}
+                      kubeconfigFiles={kubeconfigFiles}
                     />
                   ) : activeCluster && activeKind === "newresource" ? (
                     <NewResourceEditor

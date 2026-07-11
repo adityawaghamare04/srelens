@@ -3,8 +3,9 @@ import { Logs, Plus, SquareTerminal, X } from "lucide-react";
 import { PodTerminal } from "./PodTerminal";
 import { LocalTerminal } from "./LocalTerminal";
 import { LogsView, type LogsSource } from "./LogsView";
+import { HelmOpPane } from "./HelmOpPane";
 
-export type DockKind = "terminal" | "logs" | "shell";
+export type DockKind = "terminal" | "logs" | "shell" | "helm";
 
 export interface DockSession {
   id: number;
@@ -19,11 +20,14 @@ export interface DockSession {
   workload?: { kind: string; name: string };
   /** Extra kubeconfig files, for a local `shell` terminal scoped to the context. */
   kubeconfigFiles?: string[];
+  /** Present for streamed helm operations. */
+  helm?: { args: string[]; title: string; values?: string; onComplete?: () => void };
 }
 
 /** Tab/session label: the pod name, the workload kind/name, or the context for a shell. */
 function sessionLabel(s: DockSession): string {
   if (s.kind === "shell") return `kubectl · ${s.context}`;
+  if (s.kind === "helm") return s.helm?.title ?? "Helm";
   if (s.pod) return s.pod;
   if (s.workload) return `${s.workload.kind}/${s.workload.name}`;
   return "session";
@@ -149,7 +153,9 @@ export function Dock({
             className="fl-dock__pane"
             style={{ display: s.id === activeId ? "block" : "none" }}
           >
-            {s.kind === "shell" ? (
+            {s.kind === "helm" ? (
+              <HelmOpPane session={s} />
+            ) : s.kind === "shell" ? (
               <LocalTerminal context={s.context} kubeconfigFiles={s.kubeconfigFiles ?? []} />
             ) : s.kind === "terminal" && s.pod ? (
               <PodTerminal
