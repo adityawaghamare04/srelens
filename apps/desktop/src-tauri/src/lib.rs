@@ -1,5 +1,5 @@
 mod bridge;
-mod capabilities;
+pub mod capabilities;
 mod exec;
 mod files;
 mod forward;

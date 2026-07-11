@@ -4180,7 +4180,9 @@ dependencies = [
 name = "srelens-desktop"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
  "fix-path-env",
+ "futures",
  "log",
  "portable-pty",
  "serde",
