@@ -20,6 +20,8 @@ export { useColumnVisibility } from "./useColumnVisibility";
 export type { ColumnVisibility } from "./useColumnVisibility";
 export { TextInput } from "./TextInput";
 export type { TextInputProps } from "./TextInput";
+export { Field } from "./Field";
+export type { FieldProps } from "./Field";
 export { Panel } from "./Panel";
 export type { PanelProps } from "./Panel";
 export { Badge } from "./Badge";

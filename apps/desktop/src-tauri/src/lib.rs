@@ -3,6 +3,7 @@ mod capabilities;
 mod exec;
 mod files;
 mod forward;
+mod helm;
 mod logs;
 mod mcp;
 mod settings;
@@ -11,16 +12,17 @@ mod updater;
 mod watch;
 
 use bridge::{invoke_capability, AppRegistry};
-use files::{pick_kubeconfig_files, save_pasted_kubeconfig, save_text_file};
 use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
+use files::{pick_kubeconfig_files, save_pasted_kubeconfig, save_text_file};
 use forward::{start_port_forward, stop_port_forward, ForwardManager};
-use srelens_kube::client_cache::ClientCache;
+use helm::{helm_op_close, start_helm_op, HelmManager};
 use logs::{start_log_stream, stop_log_stream, LogStreamManager};
 use mcp::{
     install_srelens_cli, mcp_http_start, mcp_http_status, mcp_http_stop, srelens_cli_status,
     McpHttpManager,
 };
 use settings::{get_request_timeout, set_request_timeout};
+use srelens_kube::client_cache::ClientCache;
 use terminal::{start_terminal, terminal_close, terminal_input, terminal_resize, TerminalManager};
 use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch, WatchManager};
@@ -226,6 +228,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
 
+            // Best-effort: remove stale helm temp files (kubeconfig/values) left
+            // behind by a crashed/killed prior run so they don't accumulate.
+            srelens_kube::helm_cli::sweep_stale_temp_files();
+
             // Use Tauri's managed async runtime — `tokio::spawn` here panics
             // ("no reactor running") because `setup` runs before/outside a Tokio
             // runtime context.
@@ -243,6 +249,7 @@ pub fn run() {
         .manage(McpHttpManager::new(cache.clone()))
         .manage(LogStreamManager::new(cache))
         .manage(TerminalManager::new())
+        .manage(HelmManager::new())
         .invoke_handler(tauri::generate_handler![
             invoke_capability,
             start_resource_watch,
@@ -269,7 +276,9 @@ pub fn run() {
             start_terminal,
             terminal_input,
             terminal_resize,
-            terminal_close
+            terminal_close,
+            start_helm_op,
+            helm_op_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

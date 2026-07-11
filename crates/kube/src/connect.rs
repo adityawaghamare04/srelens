@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use srelens_capability::{Annotations, Capability};
 use kube::config::{Config, KubeConfigOptions, Kubeconfig};
 use kube::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use srelens_capability::{Annotations, Capability};
 
 use crate::client_cache::ClientCache;
 
@@ -64,10 +64,12 @@ pub fn init_timeout_from_env() -> u64 {
 /// Build an authenticated kube-rs client for a named kubeconfig context.
 /// Authentication (certs, tokens, exec plugins) is resolved by kube-rs.
 pub(crate) fn load_kubeconfigs(paths: &[PathBuf]) -> Result<Kubeconfig, String> {
-    paths.iter().try_fold(Kubeconfig::default(), |merged, path| {
-        let next = Kubeconfig::read_from(path).map_err(|e| e.to_string())?;
-        merged.merge(next).map_err(|e| e.to_string())
-    })
+    paths
+        .iter()
+        .try_fold(Kubeconfig::default(), |merged, path| {
+            let next = Kubeconfig::read_from(path).map_err(|e| e.to_string())?;
+            merged.merge(next).map_err(|e| e.to_string())
+        })
 }
 
 pub fn validate_kubeconfig_yaml(yaml: &str) -> Result<usize, String> {
@@ -107,6 +109,40 @@ pub fn single_context_kubeconfig_yaml(paths: &[PathBuf], context: &str) -> Resul
         config.api_version = Some("v1".to_string());
     }
     serde_yaml::to_string(&config).map_err(|e| e.to_string())
+}
+
+static SCOPED_KUBECONFIG_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Write a standalone kubeconfig containing only `context` to a private temp
+/// file (atomic create, mode 0600) and return its path. Callers point
+/// `KUBECONFIG` at it to scope a child process (e.g. `helm`) to one cluster,
+/// then delete it when done.
+pub fn write_single_context_kubeconfig(
+    paths: &[PathBuf],
+    context: &str,
+) -> Result<PathBuf, String> {
+    let yaml = single_context_kubeconfig_yaml(paths, context)?;
+    let id = SCOPED_KUBECONFIG_SEQ.fetch_add(1, Ordering::SeqCst);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "srelens-helm-{}-{nanos}-{}.kubeconfig",
+        std::process::id(),
+        id
+    ));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&path).map_err(|e| e.to_string())?;
+    use std::io::Write as _;
+    file.write_all(yaml.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 /// Resolve a kube `Config` for `context`, preferring the file that declares it
@@ -209,8 +245,8 @@ pub fn cluster_info_capability(cache: Arc<ClientCache>) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use srelens_capability::Registry;
     use serde_json::json;
+    use srelens_capability::Registry;
     use std::path::PathBuf;
 
     #[test]
@@ -225,6 +261,32 @@ mod tests {
         assert_eq!(request_timeout_secs(), 20);
         // Restore the default so other tests see a known value.
         set_request_timeout_secs(DEFAULT_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn writes_scoped_kubeconfig_file_0600_single_context() {
+        use std::io::Write as _;
+        // Two-context kubeconfig fixture.
+        let dir = std::env::temp_dir().join(format!("srelens-cfgtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config");
+        let mut f = std::fs::File::create(&cfg).unwrap();
+        f.write_all(
+            b"apiVersion: v1\nkind: Config\ncurrent-context: a\nclusters:\n- name: ca\n  cluster: {server: https://a}\n- name: cb\n  cluster: {server: https://b}\ncontexts:\n- name: a\n  context: {cluster: ca, user: ua}\n- name: b\n  context: {cluster: cb, user: ub}\nusers:\n- name: ua\n  user: {}\n- name: ub\n  user: {}\n",
+        )
+        .unwrap();
+
+        let out = write_single_context_kubeconfig(&[cfg], "b").unwrap();
+        let written = std::fs::read_to_string(&out).unwrap();
+        assert!(written.contains("name: b"));
+        assert!(!written.contains("name: a\n"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&out).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_file(&out);
     }
 
     #[test]

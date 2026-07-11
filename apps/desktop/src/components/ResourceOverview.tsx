@@ -95,7 +95,8 @@ function plural(n: number, one: string, many = `${one}s`): string {
 type Pair = [label: string, value: React.ReactNode];
 
 /** Render a definition-list grid, skipping rows whose value is empty. */
-function KV({ pairs }: { pairs: Pair[] }) {
+/** Property rows (label/value) for a detail section. Empty values are dropped. */
+export function KV({ pairs }: { pairs: Pair[] }) {
   const rows = pairs.filter(([, v]) => v !== null && v !== undefined && v !== "" && v !== "—");
   if (rows.length === 0) return null;
   return (
@@ -110,7 +111,8 @@ function KV({ pairs }: { pairs: Pair[] }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** A titled card section in a detail view (accent-barred header + bordered surface). */
+export function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="fl-detail-section">
       <h4 className="fl-detail-section__title">{title}</h4>

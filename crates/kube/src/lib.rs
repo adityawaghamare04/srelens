@@ -106,6 +106,7 @@ pub mod events;
 pub mod exec;
 pub mod forward;
 pub mod helm;
+pub mod helm_cli;
 pub mod ingresses;
 pub mod jobs;
 pub mod kubeconfig;
