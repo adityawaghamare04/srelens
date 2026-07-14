@@ -80,10 +80,10 @@ The automation cannot run until a human claims the package name on the AUR:
    - `AUR_EMAIL` — the email on that account
    - `AUR_SSH_PRIVATE_KEY` — the private half of the key from step 1
 
-**Blocked on a stable release.** Every release so far is a rolling `dev`
-pre-release (`srelens-v0.2.1-68`); an Arch `pkgver` cannot carry the `-<run>`
-suffix. The first publish has to wait for a stable `srelens-v<version>` tag cut
-from `main`.
+The current stable release is **`srelens-v0.2.0`**, so the initial import can be
+done against it today (the PKGBUILD builds cleanly against its published `.deb`).
+Rolling `dev` pre-releases (`srelens-v<version>-<run>`) are never published: AUR
+expects released versions, and an Arch `pkgver` cannot carry the `-<run>` suffix.
 
 ## Verifying a change locally (on Arch)
 
