@@ -898,9 +898,16 @@ export function SettingsView({
                     {updateState.update.notes && (
                       <pre className="fl-settings-update__notes">{updateState.update.notes}</pre>
                     )}
-                    <Button onClick={() => void startInstall()}>
-                      <Download data-icon="inline-start" /> Download &amp; install
-                    </Button>
+                    {updateState.update.external ? (
+                      <p className="fl-settings-update__status">
+                        This install is managed by your system package manager — update it there
+                        (AUR: <code>paru -Syu</code> or <code>yay -Syu</code>).
+                      </p>
+                    ) : (
+                      <Button onClick={() => void startInstall()}>
+                        <Download data-icon="inline-start" /> Download &amp; install
+                      </Button>
+                    )}
                   </div>
                 )}
 

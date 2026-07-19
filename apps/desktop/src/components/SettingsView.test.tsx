@@ -303,6 +303,37 @@ describe("SettingsView", () => {
     await waitFor(() => expect(transportMocks.relaunchApp).toHaveBeenCalledTimes(1));
   });
 
+  it("offers package-manager guidance instead of install for external installs", async () => {
+    updaterMocks.checkForUpdate.mockResolvedValue({
+      version: "0.2.0",
+      currentVersion: "0.1.0",
+      notes: "New things",
+      external: true,
+    });
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/0\.2\.0/)).toBeDefined();
+    expect(screen.getByText(/system package manager/)).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Download & install/ })).toBeNull();
+  });
+
   it("surfaces update check failures", async () => {
     updaterMocks.checkForUpdate.mockRejectedValue(new Error("endpoint unreachable"));
     render(

@@ -33,6 +33,11 @@ for (const f of sigFiles) {
   if (/aarch64\.app\.tar\.gz$/.test(artifact)) add('darwin-aarch64', artifact);
   else if (/(x64|x86_64)\.app\.tar\.gz$/.test(artifact)) add('darwin-x86_64', artifact);
   else if (/\.AppImage(\.tar\.gz)?$/.test(artifact)) add('linux-x86_64', artifact);
+  // The updater looks up "{os}-{arch}-{installer}" before "{os}-{arch}", and a
+  // .deb/.rpm install is stamped with its bundle type — without these keys it
+  // would download the AppImage and fail with InvalidUpdaterFormat.
+  else if (/\.deb$/.test(artifact)) add('linux-x86_64-deb', artifact);
+  else if (/\.rpm$/.test(artifact)) add('linux-x86_64-rpm', artifact);
   else if (/(-setup\.exe|\.nsis\.zip)$/.test(artifact)) add('windows-x86_64', artifact);
   else if (/\.msi(\.zip)?$/.test(artifact)) add('windows-x86_64', artifact); // MSI fallback
 }
