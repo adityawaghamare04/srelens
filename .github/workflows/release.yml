@@ -365,3 +365,98 @@ jobs:
           if ls *.asc >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "${{ github.repository }}" *.asc --clobber
           fi
+
+  # Arch / CachyOS / Manjaro install path. Deliberately STABLE-ONLY: AUR users
+  # expect released versions, and an Arch `pkgver` cannot carry the `-<run>`
+  # suffix that dev pre-release tags use.
+  #
+  # This also sidesteps a real bug class: the AppImage vendors libwayland-*, which
+  # the host's newer Mesa then resolves against, breaking EGL and yielding a blank
+  # window. A -bin package linking the SYSTEM webkit2gtk/gtk3/wayland/mesa cannot
+  # hit that. See packaging/aur/README.md.
+  #
+  # Requires (one-time, see packaging/aur/README.md): the srelens-bin name claimed
+  # on the AUR, plus AUR_USERNAME / AUR_EMAIL / AUR_SSH_PRIVATE_KEY secrets. The
+  # job no-ops when the key isn't configured, so it can land before that's done.
+  aur:
+    name: publish AUR (srelens-bin)
+    needs: [version, build]
+    if: ${{ github.ref_name == 'main' && needs.build.result == 'success' && needs.version.outputs.release == 'true' }}
+    runs-on: ubuntu-22.04
+    # Do the AUR push ourselves rather than via a third-party action: an AUR
+    # PKGBUILD executes arbitrary code on a user's machine at build time, so
+    # push access to the package is a high-value target. Handing the AUR SSH key
+    # to an external action would put that entirely in someone else's supply
+    # chain for the sake of ~20 lines of shell.
+    container:
+      image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip when the AUR key isn't configured
+        id: gate
+        shell: bash
+        env:
+          KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "${KEY:-}" ]; then
+            echo "AUR_SSH_PRIVATE_KEY not set — skipping AUR publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install toolchain
+        if: steps.gate.outputs.publish == 'true'
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib namcap
+
+      - name: Build, lint and publish
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+        run: |
+          set -euo pipefail
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
+
+          git config --global user.name "$AUR_USERNAME"
+          git config --global user.email "$AUR_EMAIL"
+          git config --global --add safe.directory '*'
+
+          git clone ssh://aur@aur.archlinux.org/srelens-bin.git aur
+          cp packaging/aur/PKGBUILD aur/PKGBUILD
+          cd aur
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+
+          # makepkg refuses to run as root.
+          useradd -m builder
+          chown -R builder:builder .
+
+          # Pin real checksums from the published release assets, then regenerate
+          # .SRCINFO (the AUR reads metadata from it, not the PKGBUILD).
+          su builder -c 'updpkgsums'
+          su builder -c 'makepkg --printsrcinfo > .SRCINFO'
+
+          # Actually BUILD it before publishing. A PKGBUILD that does not build
+          # would otherwise reach users as a broken AUR package; --nodeps keeps
+          # this to a packaging check, not a full GUI dependency install.
+          su builder -c 'makepkg -f --nodeps --noconfirm'
+          su builder -c 'namcap PKGBUILD' || true
+          rm -f ./*.pkg.tar.* 
+
+          if git diff --quiet PKGBUILD .SRCINFO; then
+            echo "AUR package already at ${VERSION} — nothing to push."
+            exit 0
+          fi
+          git add PKGBUILD .SRCINFO
+          git commit -m "srelens-bin ${VERSION}"
+          git push origin master
