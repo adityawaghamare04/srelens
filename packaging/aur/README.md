@@ -35,6 +35,18 @@ around.
 - The `.desktop` entry upstream ships an empty `Categories=`, which can hide the
   app from desktop menus; the package fills it in until that's fixed upstream.
 
+## In-app updates
+
+srelens's built-in updater cannot drive this install — the binary is repacked
+from the `.deb`, so it self-identifies as a dpkg bundle on a system with no
+dpkg, and self-replacing `/usr/bin/srelens` would desync pacman's database
+anyway. The app detects this and, when a new version is out, points at the
+package manager (`paru -Syu` / `yay -Syu`) instead of offering an in-app
+install; the update itself arrives through the `aur` job below, which bumps the
+AUR package on every stable release. (Builds up to 0.2.0 predate that detection
+and show a "Download & install" button that fails with `InvalidUpdaterFormat` —
+harmless, but update via the package manager.)
+
 ## How it's published
 
 `PKGBUILD` here is the source of truth. On every **stable** release (cut from
