@@ -123,6 +123,7 @@ pub mod resourcequotas;
 pub mod rolebindings;
 pub mod roles;
 pub mod schema;
+pub mod toolbox;
 pub mod secrets;
 pub mod serviceaccounts;
 pub mod services;
