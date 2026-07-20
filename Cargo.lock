@@ -4217,6 +4217,7 @@ dependencies = [
  "sha2",
  "similar",
  "srelens-capability",
+ "tar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",

@@ -26,6 +26,10 @@ pub enum InstallError {
     ChecksumMismatch { expected: String, actual: String },
     #[error("malformed checksum file")]
     BadChecksumFile,
+    #[error("could not read archive: {0}")]
+    BadArchive(String),
+    #[error("archive did not contain {member}")]
+    MemberNotFound { member: String },
     #[error("filesystem error: {0}")]
     Io(String),
 }
@@ -130,15 +134,84 @@ pub fn install_binary(
 
     let bytes = fetch(&plan.binary_url)?;
     verify_sha256(&bytes, &expected)?;
+    write_binary(&plan.target, &bytes)
+}
 
-    if let Some(dir) = plan.target.parent() {
+/// Atomically place `bytes` as an executable at `target`: create the parent dir,
+/// write a `.partial` sibling, set the exec bit, then rename in. The rename is
+/// the last step, so a caller never observes a half-written binary.
+fn write_binary(target: &Path, bytes: &[u8]) -> Result<PathBuf, InstallError> {
+    if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(io)?;
     }
-    let tmp = plan.target.with_extension("partial");
-    std::fs::write(&tmp, &bytes).map_err(io)?;
+    let tmp = target.with_extension("partial");
+    std::fs::write(&tmp, bytes).map_err(io)?;
     set_executable(&tmp)?;
-    std::fs::rename(&tmp, &plan.target).map_err(io)?;
-    Ok(plan.target.clone())
+    std::fs::rename(&tmp, target).map_err(io)?;
+    Ok(target.to_path_buf())
+}
+
+/// A resolved tarball download: the archive, its checksum, the member to extract,
+/// and where that member should land.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveInstall {
+    pub archive_url: String,
+    pub sha256_url: String,
+    /// Path of the binary inside the tar (e.g. `linux-amd64/helm`).
+    pub member: String,
+    pub target: PathBuf,
+}
+
+/// Plan a helm install for `version` (a `vX.Y.Z` tag) into `install_dir`.
+pub fn helm_install(version: &str, platform: &Platform, install_dir: &Path) -> ArchiveInstall {
+    let ext = if platform.os == "windows" { ".exe" } else { "" };
+    let archive_url =
+        format!("https://get.helm.sh/helm-{version}-{}-{}.tar.gz", platform.os, platform.arch);
+    ArchiveInstall {
+        sha256_url: format!("{archive_url}.sha256sum"),
+        member: format!("{}-{}/helm{ext}", platform.os, platform.arch),
+        target: install_dir.join(format!("helm{ext}")),
+        archive_url,
+    }
+}
+
+/// Download a `.tar.gz`, verify it against the vendor checksum (which covers the
+/// whole archive), extract the single planned member, and install it. Uses the
+/// same temp-then-rename as [`install_binary`], so an unverified or corrupt
+/// archive never yields an installed binary.
+pub fn install_from_targz(
+    plan: &ArchiveInstall,
+    fetch: &impl Fn(&str) -> Result<Vec<u8>, InstallError>,
+) -> Result<PathBuf, InstallError> {
+    let checksum_raw = fetch(&plan.sha256_url)?;
+    let checksum = std::str::from_utf8(&checksum_raw).map_err(|_| InstallError::BadChecksumFile)?;
+    let expected = parse_sha256(checksum)?;
+
+    let archive = fetch(&plan.archive_url)?;
+    verify_sha256(&archive, &expected)?;
+
+    let bytes = extract_member(&archive, &plan.member)?;
+    write_binary(&plan.target, &bytes)
+}
+
+/// Read one member's bytes out of a gzip-compressed tar.
+fn extract_member(targz: &[u8], member: &str) -> Result<Vec<u8>, InstallError> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+    use tar::Archive;
+
+    let mut archive = Archive::new(GzDecoder::new(targz));
+    let entries = archive.entries().map_err(|e| InstallError::BadArchive(e.to_string()))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|e| InstallError::BadArchive(e.to_string()))?;
+        let path = entry.path().map_err(|e| InstallError::BadArchive(e.to_string()))?;
+        if path.to_string_lossy() == member {
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf).map_err(|e| InstallError::BadArchive(e.to_string()))?;
+            return Ok(buf);
+        }
+    }
+    Err(InstallError::MemberNotFound { member: member.to_string() })
 }
 
 fn io(e: std::io::Error) -> InstallError {
@@ -296,5 +369,90 @@ mod tests {
         let plan = kubectl_install("v1.30.2", &Platform { os: "linux", arch: "amd64" }, dir.path());
         let fetch = net(&[]); // nothing resolves
         assert!(matches!(install_binary(&plan, &fetch), Err(InstallError::Download(_))));
+    }
+
+    #[test]
+    fn helm_plan_builds_the_get_helm_urls_member_and_target() {
+        let p = helm_install(
+            "v3.16.2",
+            &Platform { os: "darwin", arch: "arm64" },
+            Path::new("/home/u/.srelens/bin"),
+        );
+        assert_eq!(p.archive_url, "https://get.helm.sh/helm-v3.16.2-darwin-arm64.tar.gz");
+        assert_eq!(p.sha256_url, "https://get.helm.sh/helm-v3.16.2-darwin-arm64.tar.gz.sha256sum");
+        assert_eq!(p.member, "darwin-arm64/helm");
+        assert_eq!(p.target, Path::new("/home/u/.srelens/bin/helm"));
+    }
+
+    /// Build a real gzip-compressed tar with the given (path, bytes) members.
+    fn make_targz(members: &[(&str, &[u8])]) -> Vec<u8> {
+        use flate2::{write::GzEncoder, Compression};
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        for (name, bytes) in members {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, *bytes).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn install_from_targz_extracts_and_installs_the_planned_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan =
+            helm_install("v3.16.2", &Platform { os: "linux", arch: "amd64" }, &dir.path().join("bin"));
+        let payload = b"#!/bin/sh\necho helm\n";
+        let archive = make_targz(&[
+            ("linux-amd64/LICENSE", b"license"),
+            (plan.member.as_str(), payload),
+            ("linux-amd64/README.md", b"readme"),
+        ]);
+        let fetch = net(&[
+            (plan.sha256_url.as_str(), sha256_hex(&archive).as_bytes()),
+            (plan.archive_url.as_str(), &archive),
+        ]);
+
+        let path = install_from_targz(&plan, &fetch).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), payload);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "not executable");
+        }
+    }
+
+    #[test]
+    fn install_from_targz_errors_when_the_member_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = helm_install("v3.16.2", &Platform { os: "linux", arch: "amd64" }, dir.path());
+        let archive = make_targz(&[("linux-amd64/NOT_HELM", b"x")]);
+        let fetch = net(&[
+            (plan.sha256_url.as_str(), sha256_hex(&archive).as_bytes()),
+            (plan.archive_url.as_str(), &archive),
+        ]);
+        assert!(matches!(
+            install_from_targz(&plan, &fetch),
+            Err(InstallError::MemberNotFound { .. })
+        ));
+        assert!(!plan.target.exists());
+    }
+
+    #[test]
+    fn install_from_targz_refuses_a_tampered_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = helm_install("v3.16.2", &Platform { os: "linux", arch: "amd64" }, dir.path());
+        let archive = make_targz(&[(plan.member.as_str(), b"payload")]);
+        let fetch = net(&[
+            (plan.sha256_url.as_str(), sha256_hex(b"different bytes").as_bytes()),
+            (plan.archive_url.as_str(), &archive),
+        ]);
+        assert!(matches!(
+            install_from_targz(&plan, &fetch),
+            Err(InstallError::ChecksumMismatch { .. })
+        ));
+        assert!(!plan.target.exists());
     }
 }
