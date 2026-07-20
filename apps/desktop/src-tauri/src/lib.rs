@@ -1,3 +1,4 @@
+mod appimage;
 mod bridge;
 pub mod capabilities;
 mod exec;
@@ -27,6 +28,7 @@ use terminal::{start_terminal, terminal_close, terminal_input, terminal_resize, 
 use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch, WatchManager};
 
+pub use appimage::gio_module_dir_for_appimage;
 pub use capabilities::build_registry;
 
 /// Size the main window to a comfortable default, clamped to the screen it

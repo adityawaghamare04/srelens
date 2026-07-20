@@ -16,6 +16,22 @@ fn main() {
     // stdio, and MCP HTTP — honors it (the GUI can adjust it further at runtime).
     srelens_kube::connect::init_timeout_from_env();
 
+    // Running from a Linux AppImage, keep the bundled GLib from scanning the
+    // host's GIO modules (its gvfs modules use symbols the bundled GLib lacks,
+    // spamming "undefined symbol" on startup). Must happen before anything
+    // touches GLib/GTK; we're still single-threaded here. No-op off AppImage.
+    #[cfg(target_os = "linux")]
+    {
+        let extra = std::env::var("GIO_EXTRA_MODULES").ok();
+        let existing = std::env::var("GIO_MODULE_DIR").ok();
+        if let Some(dir) = srelens_desktop_lib::gio_module_dir_for_appimage(
+            extra.as_deref(),
+            existing.as_deref(),
+        ) {
+            std::env::set_var("GIO_MODULE_DIR", dir);
+        }
+    }
+
     let args: Vec<String> = std::env::args().collect();
     // `--mcp-stdio` / `--mcp-http [addr]` run the MCP server instead of the GUI,
     // so external MCP clients/agents can drive every capability.
