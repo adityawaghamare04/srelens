@@ -4206,6 +4206,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "futures",
+ "hex",
  "http",
  "k8s-openapi",
  "kube",
@@ -4213,8 +4214,10 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "similar",
  "srelens-capability",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
 ]
