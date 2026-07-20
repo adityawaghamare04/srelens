@@ -12,7 +12,7 @@ use srelens_capability::{Annotations, Capability, CapabilityError};
 
 /// Find `program` on the `PATH`-style `path_var`; first existing candidate wins.
 /// `is_file` is injected so this is unit-testable without touching the disk.
-fn resolve_on_path(
+pub(crate) fn resolve_on_path(
     program: &str,
     path_var: &str,
     is_file: impl Fn(&Path) -> bool,
