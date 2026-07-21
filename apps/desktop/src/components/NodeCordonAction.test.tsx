@@ -86,4 +86,39 @@ describe("NodeCordonAction RBAC gating", () => {
     const cordon = await screen.findByRole("button", { name: "Cordon" });
     expect((cordon as HTMLButtonElement).disabled).toBe(false);
   });
+
+  it("opens a node shell: creates a debug pod and opens a terminal that deletes it on close", async () => {
+    const getObjectFn = vi.fn().mockResolvedValue({ object: { spec: {} } });
+    const createNodeDebugPodFn = vi.fn().mockResolvedValue({ namespace: "default", pod: "srelens-node-debug-x1" });
+    const onOpenShell = vi.fn();
+    render(
+      <NodeCordonAction
+        context="kind-dev"
+        name="node-a"
+        getObjectFn={getObjectFn}
+        createNodeDebugPodFn={createNodeDebugPodFn}
+        onOpenShell={onOpenShell}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Node shell" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open shell" }));
+    await waitFor(() => expect(createNodeDebugPodFn).toHaveBeenCalledWith("kind-dev", "node-a", null, null));
+    await waitFor(() =>
+      expect(onOpenShell).toHaveBeenCalledWith({
+        context: "kind-dev",
+        namespace: "default",
+        pod: "srelens-node-debug-x1",
+        container: "debug",
+        deleteOnClose: { context: "kind-dev", namespace: "default", pod: "srelens-node-debug-x1" },
+      }),
+    );
+  });
+
+  it("hides Node shell when no opener is provided", async () => {
+    const getObjectFn = vi.fn().mockResolvedValue({ object: { spec: {} } });
+    render(<NodeCordonAction context="kind-dev" name="node-a" getObjectFn={getObjectFn} />);
+    await screen.findByRole("button", { name: "Cordon" });
+    expect(screen.queryByRole("button", { name: "Node shell" })).toBeNull();
+  });
+
 });

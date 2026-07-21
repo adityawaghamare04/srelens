@@ -559,7 +559,13 @@ export function ResourceBrowser({
   kind: ResourceKind;
   query?: string;
   onQueryChange?: (q: string) => void;
-  onOpenTerminal?: (s: { context: string; namespace: string; pod: string; container?: string }) => void;
+  onOpenTerminal?: (s: {
+    context: string;
+    namespace: string;
+    pod: string;
+    container?: string;
+    deleteOnClose?: { context: string; namespace: string; pod: string };
+  }) => void;
   onOpenLogs?: (s: { context: string; namespace: string; pod: string; container?: string }) => void;
   onOpenWorkloadLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
   /** Open a "new resource" editor tab, optionally seeded with this kind's template. */
@@ -879,7 +885,7 @@ export function ResourceBrowser({
   ) : otherDetail ? (
     <>
       {otherDetail.kind === "Node" && (
-        <NodeCordonAction context={context} name={otherDetail.name} />
+        <NodeCordonAction context={context} name={otherDetail.name} onOpenShell={onOpenTerminal} />
       )}
       {otherDetail.kind === "Service" && (
         <ServiceForwardAction

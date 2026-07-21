@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { ArrowDownToLine, CircleCheck, CircleSlash2 } from "lucide-react";
+import { ArrowDownToLine, CircleCheck, CircleSlash2, SquareTerminal } from "lucide-react";
 import { getObject } from "../lib/manifest";
-import { cordonNode, drainNode } from "../lib/actions";
+import { cordonNode, drainNode, createNodeDebugPod } from "../lib/actions";
 import { notify } from "../lib/notify";
 import { useAccess, rbac, denyReason, reportActionError } from "../lib/access";
 import { IconButton, ConfirmDialog } from "../ui";
@@ -14,20 +14,52 @@ import { IconButton, ConfirmDialog } from "../ui";
 export function NodeCordonAction({
   context,
   name,
+  onOpenShell,
   getObjectFn = getObject,
   cordonFn = cordonNode,
   drainFn = drainNode,
+  createNodeDebugPodFn = createNodeDebugPod,
 }: {
   context: string;
   name: string;
+  /** Open a terminal, deleting `deleteOnClose.pod` when the session closes. */
+  onOpenShell?: (s: {
+    context: string;
+    namespace: string;
+    pod: string;
+    container?: string;
+    deleteOnClose?: { context: string; namespace: string; pod: string };
+  }) => void;
   getObjectFn?: typeof getObject;
   cordonFn?: typeof cordonNode;
   drainFn?: typeof drainNode;
+  createNodeDebugPodFn?: typeof createNodeDebugPod;
 }) {
   const [cordoned, setCordoned] = useState<boolean | null>(null);
-  const [dialog, setDialog] = useState<"cordon" | "drain" | null>(null);
+  const [dialog, setDialog] = useState<"cordon" | "drain" | "shell" | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+
+  async function doNodeShell() {
+    setBusy(true);
+    setErr("");
+    const out = await createNodeDebugPodFn(context, name, null, null);
+    setBusy(false);
+    if (out.error || !out.pod || !out.namespace) {
+      setErr(out.error ?? "no pod created");
+      reportActionError(context, `Failed to open node shell on ${name}`, out.error ?? "");
+      return;
+    }
+    setDialog(null);
+    notify.success(`Node debug pod ${out.pod} created`);
+    onOpenShell?.({
+      context,
+      namespace: out.namespace,
+      pod: out.pod,
+      container: "debug",
+      deleteOnClose: { context, namespace: out.namespace, pod: out.pod },
+    });
+  }
 
   const cordonCheck = rbac.cordon();
   const drainCheck = rbac.drain();
@@ -98,6 +130,38 @@ export function NodeCordonAction({
           setDialog("drain");
         }}
       />
+      {onOpenShell && (
+        <IconButton
+          icon={SquareTerminal}
+          label="Node shell"
+          title="Open a privileged shell on this node"
+          onClick={() => {
+            setErr("");
+            setDialog("shell");
+          }}
+        />
+      )}
+
+      {dialog === "shell" && (
+        <ConfirmDialog
+          title="Open node shell?"
+          message={
+            <>
+              <p style={{ marginTop: 0 }}>
+                Create a <strong>privileged</strong> debug pod on <code>{name}</code> that enters
+                the host namespaces, and open a root shell. The pod is deleted when you close the
+                terminal.
+              </p>
+              {err && <p className="text-destructive">Error: {err}</p>}
+            </>
+          }
+          confirmLabel="Open shell"
+          danger
+          busy={busy}
+          onConfirm={() => void doNodeShell()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
 
       {dialog === "cordon" && (
         <ConfirmDialog

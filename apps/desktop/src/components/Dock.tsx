@@ -22,6 +22,8 @@ export interface DockSession {
   kubeconfigFiles?: string[];
   /** Present for streamed helm operations. */
   helm?: { args: string[]; title: string; values?: string; onComplete?: () => void };
+  /** A pod to delete when this session closes (node debug shell cleanup). */
+  deleteOnClose?: { context: string; namespace: string; pod: string };
 }
 
 /** Tab/session label: the pod name, the workload kind/name, or the context for a shell. */

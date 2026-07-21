@@ -19,13 +19,14 @@ import {
   rolloutRestart,
   cronjobSetSuspend,
   cronjobTriggerNow,
+  debugPod,
 } from "../lib/actions";
 import { notify } from "../lib/notify";
 import { useAccess, rbac, kindToResource, denyReason, reportActionError, type AccessCheck } from "../lib/access";
 import { IconButton, ConfirmDialog, TextInput } from "../ui";
 import { ForwardDialog } from "./ForwardDialog";
 
-type Opener = (s: { context: string; namespace: string; pod: string }) => void;
+type Opener = (s: { context: string; namespace: string; pod: string; container?: string }) => void;
 
 const SCALABLE = ["Deployment", "StatefulSet", "ReplicaSet"];
 const RESTARTABLE = ["Deployment", "StatefulSet", "DaemonSet"];
@@ -48,9 +49,11 @@ export function PodActions({
   onOpenLogs?: Opener;
   onEdit?: () => void;
 }) {
-  const [dialog, setDialog] = useState<"delete" | "evict" | "forward" | null>(null);
+  const [dialog, setDialog] = useState<"delete" | "evict" | "forward" | "debug" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [debugImage, setDebugImage] = useState("busybox");
+  const [debugTarget, setDebugTarget] = useState("");
 
   const deleteCheck = rbac.deletePod(pod.namespace);
   const evictCheck = rbac.evictPod(pod.namespace);
@@ -74,6 +77,21 @@ export function PodActions({
     onDeleted?.();
   }
 
+  async function doDebug() {
+    setBusy(true);
+    setError("");
+    const out = await debugPod(context, pod.namespace, pod.name, debugImage.trim() || "busybox", debugTarget.trim() || null);
+    setBusy(false);
+    if (out.error || !out.container) {
+      setError(out.error ?? "no container returned");
+      reportActionError(context, `Failed to debug ${pod.name}`, out.error ?? "");
+      return;
+    }
+    setDialog(null);
+    notify.success(`Debug container ${out.container} added to ${pod.name}`);
+    onOpenTerminal?.({ context, namespace: pod.namespace, pod: pod.name, container: out.container });
+  }
+
   async function doEvict() {
     setBusy(true);
     setError("");
@@ -93,6 +111,15 @@ export function PodActions({
     <>
       <IconButton icon={Logs} label="Logs" onClick={() => onOpenLogs?.(target)} />
       <IconButton icon={SquareTerminal} label="Shell" onClick={() => onOpenTerminal?.(target)} />
+      <IconButton
+        icon={Zap}
+        label="Debug"
+        title="Attach an ephemeral debug container"
+        onClick={() => {
+          setError("");
+          setDialog("debug");
+        }}
+      />
       {onEdit && (
         <IconButton
           icon={Pencil}
@@ -149,6 +176,38 @@ export function PodActions({
           danger
           busy={busy}
           onConfirm={() => void doDelete()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog === "debug" && (
+        <ConfirmDialog
+          title="Attach debug container?"
+          message={
+            <>
+              <p style={{ marginTop: 0 }}>
+                Add an ephemeral debug container to <code>{pod.name}</code> and open a shell into
+                it. Ephemeral containers cannot be removed until the pod restarts.
+              </p>
+              <label className="fl-debug-field">
+                <span>Image</span>
+                <TextInput value={debugImage} onValueChange={setDebugImage} placeholder="busybox" aria-label="Debug image" />
+              </label>
+              <label className="fl-debug-field">
+                <span>Share process namespace with (optional)</span>
+                <TextInput
+                  value={debugTarget}
+                  onValueChange={setDebugTarget}
+                  placeholder="target container name"
+                  aria-label="Target container"
+                />
+              </label>
+              {error && <p className="text-destructive">Error: {error}</p>}
+            </>
+          }
+          confirmLabel="Attach & open shell"
+          danger
+          busy={busy}
+          onConfirm={() => void doDebug()}
           onCancel={() => setDialog(null)}
         />
       )}
