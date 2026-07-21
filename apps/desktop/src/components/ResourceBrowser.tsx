@@ -55,6 +55,7 @@ import {
 } from "../lib/namespaces";
 import { NamespaceMultiSelect } from "../ui/NamespaceMultiSelect";
 import { PodActions, ResourceActions, ServiceForwardAction } from "./DetailActions";
+import { BulkActionBar } from "./BulkActionBar";
 import { NodeCordonAction } from "./NodeCordonAction";
 import { ResourceDetail } from "./ResourceDetail";
 import type { OpenResource } from "../lib/resourceNavigation";
@@ -603,6 +604,9 @@ export function ResourceBrowser({
   const [selectedPod, setSelectedPod] = useState<PodSummary | null>(null);
   const [otherDetail, setOtherDetail] = useState<OtherDetail | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Bulk-selection: keys are namespace-qualified so all-namespace views can't
+  // confuse two same-named resources.
+  const [bulkKeys, setBulkKeys] = useState<Set<string>>(new Set());
   // Bumped after a write action so the open detail overview re-fetches.
   const [detailReload, setDetailReload] = useState(0);
   const [filterColumn, setFilterColumn] = useState<string | null>(null);
@@ -809,7 +813,13 @@ export function ResourceBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, res.rows]);
 
-  const selectedKey = kind === "pods" ? selectedPod?.name : otherDetail?.name;
+  const rowKeyOf = (r: { name: string; namespace?: string }) =>
+    r.namespace ? `${r.namespace}/${r.name}` : r.name;
+  const selectedKey =
+    kind === "pods"
+      ? selectedPod && rowKeyOf(selectedPod)
+      : otherDetail && rowKeyOf({ name: otherDetail.name, namespace: otherDetail.namespace ?? undefined });
+  const bulkEnabled = kind !== "events";
 
   // Merge live pod metrics into the pod rows, and restrict namespaced rows to
   // the selected namespaces (when watching all-namespaces for a multi-select).
@@ -831,6 +841,17 @@ export function ResourceBrowser({
     () => filterTableData(tableRows, visibleColumns, query, filterColumn),
     [visibleColumns, filterColumn, query, tableRows],
   );
+
+  // The selected rows that still exist (drop keys for rows that scrolled out of
+  // the current view / namespace / filter is fine — we act on what's known).
+  const bulkRows = useMemo(
+    () => tableRows.filter((r) => bulkKeys.has(rowKeyOf(r))),
+    // rowKeyOf is stable string work; deps intentionally on the inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tableRows, bulkKeys],
+  );
+  // Clear the selection whenever the underlying list changes shape.
+  useEffect(() => setBulkKeys(new Set()), [context, kind, watchNamespace, selectionKey]);
   const filterLabel = filterColumn
     ? visibleColumns.find((column) => column.key === filterColumn)?.header
     : null;
@@ -967,6 +988,16 @@ export function ResourceBrowser({
               )}
             </Toolbar>
 
+            {bulkEnabled && bulkRows.length > 0 && (
+              <BulkActionBar
+                context={context}
+                kind={K8S_KIND[kind]}
+                rows={bulkRows}
+                onClear={() => setBulkKeys(new Set())}
+                onDone={() => setReloadKey((k) => k + 1)}
+              />
+            )}
+
             <div className="min-h-0 flex-1 overflow-auto">
               {res.error && (
                 <ErrorState
@@ -982,8 +1013,9 @@ export function ResourceBrowser({
                 <Table
                   columns={visibleColumns}
                   data={filtered}
-                  getRowKey={(r) => r.name}
-                  selectedKey={selectedKey}
+                  getRowKey={rowKeyOf}
+                  selectedKey={selectedKey ?? undefined}
+                  selection={bulkEnabled ? { selected: bulkKeys, onChange: setBulkKeys } : undefined}
                   onRowClick={kind === "events" ? undefined : onRowClick}
                   activeFilterKey={filterColumn}
                   onActiveFilterKeyChange={setFilterColumn}

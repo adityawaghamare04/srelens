@@ -3514,6 +3514,38 @@ body {
   opacity: 1;
 }
 
+/* Bulk action bar (shown above the table when rows are selected). */
+.fl-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--fl-color-surface);
+  border-bottom: 1px solid var(--fl-color-border-faint);
+}
+.fl-bulk-bar__count {
+  font-size: 13px;
+  font-weight: 500;
+  margin-right: 4px;
+}
+.fl-bulk-bar__list {
+  margin: 8px 0;
+  padding-left: 18px;
+  max-height: 220px;
+  overflow: auto;
+}
+/* Checkbox column in the data table. */
+.fl-data-table__checkbox {
+  width: 36px;
+  text-align: center;
+  padding-right: 0;
+}
+.fl-data-table__checkbox input {
+  cursor: pointer;
+  margin: 0;
+  vertical-align: middle;
+}
+
 .fl-resource-toolbar {
   min-height: 52px;
   gap: 8px;

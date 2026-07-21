@@ -23,6 +23,14 @@ export interface Column<T> {
   minWidth?: number;
 }
 
+/** Opt-in multi-selection: the parent holds the set of selected row keys, the
+ *  Table owns the interaction (toggle, shift-click range over the sorted order,
+ *  select-all-of-filtered) and reports the new set. */
+export interface TableSelection {
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+}
+
 export interface TableProps<T> {
   columns: Column<T>[];
   data: T[];
@@ -30,6 +38,8 @@ export interface TableProps<T> {
   onRowClick?: (row: T) => void;
   /** Row key currently selected (highlighted). */
   selectedKey?: string;
+  /** When set, renders a leading checkbox column for bulk selection. */
+  selection?: TableSelection;
   /** Shown when `data` is empty. */
   emptyText?: React.ReactNode;
   /** Column currently used by the toolbar search; null searches every column. */
@@ -94,11 +104,14 @@ export function Table<T>({
   getRowKey,
   onRowClick,
   selectedKey,
+  selection,
   emptyText = "No items",
   activeFilterKey = null,
   onActiveFilterKeyChange,
 }: TableProps<T>) {
   const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
+  // Anchor for shift-click range selection (a key in sorted/visible order).
+  const selectionAnchor = useRef<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const columnSignature = columns.map((column) => column.key).join("|");
   const rootRef = useRef<HTMLDivElement>(null);
@@ -124,6 +137,38 @@ export function Table<T>({
       .map(({ row }) => row);
   }, [columns, data, sort]);
 
+  // Selection: keys in the order the user sees them (for shift-range + select-all).
+  const visibleKeys = useMemo(() => visibleData.map(getRowKey), [visibleData, getRowKey]);
+  const colCount = columns.length + (selection ? 1 : 0);
+  const allVisibleSelected =
+    !!selection && visibleKeys.length > 0 && visibleKeys.every((k) => selection.selected.has(k));
+
+  const toggleAllVisible = () => {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    if (allVisibleSelected) visibleKeys.forEach((k) => next.delete(k));
+    else visibleKeys.forEach((k) => next.add(k));
+    selection.onChange(next);
+  };
+
+  const toggleRow = (key: string, shift: boolean) => {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    const anchor = selectionAnchor.current;
+    const from = anchor ? visibleKeys.indexOf(anchor) : -1;
+    const to = visibleKeys.indexOf(key);
+    if (shift && from >= 0 && to >= 0) {
+      const [lo, hi] = from < to ? [from, to] : [to, from];
+      for (let i = lo; i <= hi; i++) next.add(visibleKeys[i]);
+    } else if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    selectionAnchor.current = key;
+    selection.onChange(next);
+  };
+
   const cycleSort = (key: string) => {
     setSort((current) => {
       if (!current || current.key !== key) return { key, direction: "asc" };
@@ -137,10 +182,16 @@ export function Table<T>({
     event.stopPropagation();
     const table = event.currentTarget.closest("table");
     const headers = table?.querySelectorAll<HTMLTableCellElement>("thead tr:first-child th");
+    // The checkbox column (when present) is th[0], so data columns are offset.
+    const headOffset = selection ? 1 : 0;
     const measured = Object.fromEntries(
       columns.map((candidate, index) => [
         candidate.key,
-        Math.round(headers?.[index]?.getBoundingClientRect().width || columnWidths[candidate.key] || 120),
+        Math.round(
+          headers?.[index + headOffset]?.getBoundingClientRect().width ||
+            columnWidths[candidate.key] ||
+            120,
+        ),
       ]),
     );
     const startWidth = measured[column.key];
@@ -172,10 +223,16 @@ export function Table<T>({
     event.preventDefault();
     const table = event.currentTarget.closest("table");
     const headers = table?.querySelectorAll<HTMLTableCellElement>("thead tr:first-child th");
+    // The checkbox column (when present) is th[0], so data columns are offset.
+    const headOffset = selection ? 1 : 0;
     const measured = Object.fromEntries(
       columns.map((candidate, index) => [
         candidate.key,
-        Math.round(headers?.[index]?.getBoundingClientRect().width || columnWidths[candidate.key] || 120),
+        Math.round(
+          headers?.[index + headOffset]?.getBoundingClientRect().width ||
+            columnWidths[candidate.key] ||
+            120,
+        ),
       ]),
     );
     const delta = event.key === "ArrowRight" ? 16 : -16;
@@ -255,6 +312,7 @@ export function Table<T>({
       style={tableWidth ? { width: tableWidth, minWidth: "100%" } : undefined}
     >
       <colgroup>
+        {selection && <col style={{ width: 36 }} />}
         {columns.map((column) => (
           <col
             key={column.key}
@@ -264,6 +322,19 @@ export function Table<T>({
       </colgroup>
       <TableHeader className="sticky top-0 z-10">
         <TableRow className="hover:bg-transparent">
+          {selection && (
+            <TableHead className="fl-data-table__head fl-data-table__checkbox">
+              <input
+                type="checkbox"
+                aria-label="Select all"
+                checked={allVisibleSelected}
+                ref={(el) => {
+                  if (el) el.indeterminate = !allVisibleSelected && visibleKeys.some((k) => selection.selected.has(k));
+                }}
+                onChange={toggleAllVisible}
+              />
+            </TableHead>
+          )}
           {columns.map((c) => (
             <TableHead key={c.key} className="fl-data-table__head">
               <div className="fl-data-table__head-content">
@@ -314,20 +385,35 @@ export function Table<T>({
       <TableBody>
         {topPad > 0 && (
           <tr aria-hidden="true" className="fl-data-table__spacer">
-            <td colSpan={columns.length} style={{ height: topPad, padding: 0, border: 0 }} />
+            <td colSpan={colCount} style={{ height: topPad, padding: 0, border: 0 }} />
           </tr>
         )}
         {windowRows.map((row) => {
           const rowKey = getRowKey(row);
           const selected = selectedKey === rowKey;
+          const checked = selection?.selected.has(rowKey) ?? false;
           return (
             <TableRow
               key={rowKey}
               aria-selected={selected}
-              data-state={selected ? "selected" : undefined}
+              data-state={selected || checked ? "selected" : undefined}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               className={cn("fl-data-table__row", onRowClick && "cursor-pointer")}
             >
+              {selection && (
+                <TableCell
+                  className="fl-data-table__cell fl-data-table__checkbox"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${rowKey}`}
+                    checked={checked}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => toggleRow(rowKey, (e.nativeEvent as MouseEvent).shiftKey)}
+                  />
+                </TableCell>
+              )}
               {columns.map((c) => (
                 <TableCell key={c.key} className="fl-data-table__cell">
                   {c.render ? c.render(row) : String((row as Record<string, unknown>)[c.key])}
@@ -338,12 +424,12 @@ export function Table<T>({
         })}
         {bottomPad > 0 && (
           <tr aria-hidden="true" className="fl-data-table__spacer">
-            <td colSpan={columns.length} style={{ height: bottomPad, padding: 0, border: 0 }} />
+            <td colSpan={colCount} style={{ height: bottomPad, padding: 0, border: 0 }} />
           </tr>
         )}
         {visibleData.length === 0 && (
           <TableRow>
-            <TableCell colSpan={columns.length} className="fl-data-table__no-results">
+            <TableCell colSpan={colCount} className="fl-data-table__no-results">
               No matching items
             </TableCell>
           </TableRow>
