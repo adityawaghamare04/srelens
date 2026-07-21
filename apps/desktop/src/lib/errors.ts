@@ -30,10 +30,53 @@ export function cleanErrorMessage(input: unknown): string {
   return raw.replace(HANDLER_PREFIX, "").trim();
 }
 
+/**
+ * Parse an apiserver Forbidden message into an actionable sentence naming the
+ * verb, resource, and namespace (or cluster scope). Returns null when the text
+ * doesn't match the standard shape.
+ */
+export function describeForbidden(raw: string): string | null {
+  const m = raw.match(/cannot (\w+) resource "([^"]+)"(?:.*?in the namespace "([^"]+)"|.*?at the cluster scope)/s);
+  if (!m) return null;
+  const [, verb, resource, namespace] = m;
+  const where = namespace ? `in ${namespace}` : "at the cluster scope";
+  return `You don't have permission to ${verb} ${resource} ${where}.`;
+}
+
+/**
+ * The ServiceAccount's namespace named in a Forbidden error, if the denied user
+ * is a service account (`system:serviceaccount:<namespace>:<name>`). This is the
+ * namespace such a credential is typically scoped to — useful when the kubeconfig
+ * context doesn't declare a namespace.
+ */
+export function serviceAccountNamespace(error: string): string | null {
+  const m = error.match(/system:serviceaccount:([a-z0-9][a-z0-9-]*):/i);
+  return m ? m[1] : null;
+}
+
+/** True when an error looks like an exec-auth credential plugin failing to run
+ *  (a missing kubectl-oidc_login / aws / gke-gcloud-auth-plugin, etc.) — the
+ *  case the Toolbox diagnoses and can often fix. */
+export function isExecAuthError(input: unknown): boolean {
+  const lower = cleanErrorMessage(input).toLowerCase();
+  return /auth exec|exec plugin|getting credentials|executable .* not found|exec: .*not found|no such file or directory/.test(
+    lower,
+  );
+}
+
 /** Classify a raw error into a friendly, actionable message. */
 export function describeError(input: unknown): FriendlyError {
   const raw = cleanErrorMessage(input);
   const lower = raw.toLowerCase();
+
+  if (isExecAuthError(raw)) {
+    return {
+      title: "Auth plugin couldn't run",
+      detail:
+        "This context authenticates through an exec credential plugin (e.g. kubectl-oidc_login, aws, or gke-gcloud-auth-plugin) that couldn't be found or run. Open the Toolbox to see exactly which tool is missing and install it.",
+      raw,
+    };
+  }
 
   if (/timed out|timeout|deadline exceeded/.test(lower)) {
     return {
@@ -71,6 +114,7 @@ export function describeError(input: unknown): FriendlyError {
     return {
       title: "Access denied",
       detail:
+        describeForbidden(raw) ??
         "Your account doesn't have permission for this on the cluster. Check your RBAC roles, or switch to a context with the right access.",
       raw,
     };

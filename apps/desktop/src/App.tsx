@@ -17,6 +17,7 @@ import { HelmReleasesView } from "./components/HelmReleasesView";
 import { NewResourceEditor } from "./components/NewResourceEditor";
 import { EditResourceTab } from "./components/EditResourceTab";
 import { SettingsView } from "./components/SettingsView";
+import { ToolboxView } from "./components/ToolboxView";
 import { CommandPalette } from "./components/CommandPalette";
 import { Toaster } from "./components/ui/sonner";
 import { Dock, type DockSession, type DockKind } from "./components/Dock";
@@ -49,6 +50,9 @@ import { startMcpHttp } from "./lib/mcp";
 import { checkForUpdateAndNotify } from "./lib/updateNotifier";
 import { notify } from "./lib/notify";
 import type { SettingsSection } from "./components/SettingsView";
+import { listContexts, deleteContext, type ClusterContext } from "./lib/clusters";
+import { deletePod } from "./lib/workloads";
+import { clearAccessCache } from "./lib/access";
 
 interface ViewTab {
   id: number;
@@ -94,6 +98,67 @@ export function App() {
   // nonce bumps to remount SettingsView at the requested section when asked.
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>("appearance");
   const [settingsSectionNonce, setSettingsSectionNonce] = useState(0);
+  // The context to pre-diagnose when the Toolbox opens via a "Diagnose" deep-link.
+  const [toolboxContext, setToolboxContext] = useState<string | null>(null);
+
+  const [contexts, setContexts] = useState<ClusterContext[] | null>(null);
+  const [contextsError, setContextsError] = useState("");
+
+  const refreshContexts = () => {
+    listContexts(kubeconfigFiles).then((o) => {
+      setContexts(o.contexts ?? []);
+      setContextsError(o.error ?? "");
+
+      // Auto close any tabs of clusters/contexts that no longer exist!
+      if (o.contexts) {
+        const existingNames = new Set(o.contexts.map((c) => c.name));
+        setTabs((ts) => ts.filter((t) => !t.cluster || existingNames.has(t.cluster)));
+      }
+    });
+  };
+
+  useEffect(() => {
+    refreshContexts();
+  }, [kubeconfigFiles]);
+
+  // Listen to external/internal kubeconfig changes
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const unlistenPromise = listen("kubeconfig-changed", () => {
+      refreshContexts();
+    }).catch(() => () => {});
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  const handleDeleteContext = async (name: string) => {
+    try {
+      await deleteContext(name);
+
+      // Clean up profiles
+      const nextProfiles = { ...contextProfiles };
+      delete nextProfiles[name];
+      changeContextProfiles(nextProfiles);
+
+      // Clean up order
+      const nextOrder = contextOrder.filter((item) => item !== name);
+      changeContextOrder(nextOrder);
+
+      // Clean up namespace preference
+      const nextNs = { ...clusterNs };
+      delete nextNs[name];
+      setClusterNs(nextNs);
+
+      // Close open tabs for this cluster
+      setTabs((ts) => ts.filter((t) => t.cluster !== name));
+
+      // Refresh list
+      refreshContexts();
+    } catch (e) {
+      notify.error("Failed to remove context", String(e));
+    }
+  };
 
   // Persist per-cluster namespace whenever it changes.
   useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
@@ -201,10 +266,21 @@ export function App() {
     contextOrder,
   ).map(({ name }) => name);
 
+  // RBAC preflight results are cached per (context, check) — clear them on
+  // context switch so a stale cache from a previous cluster (or an admin who
+  // just changed the user's bindings) can't leave controls mis-gated.
+  useEffect(() => {
+    clearAccessCache();
+  }, [activeCluster]);
+
   /** Open (or focus, if already open) a resource view for a cluster + kind. */
   function openView(cluster: string, kind: ResourceKind) {
     if (kind === "settings") {
       openSettings();
+      return;
+    }
+    if (kind === "toolbox") {
+      openToolbox();
       return;
     }
     const existing = tabs.find((t) => t.cluster === cluster && t.kind === kind && !t.crd);
@@ -233,6 +309,22 @@ export function App() {
     }
     const id = tabIdRef.current++;
     setTabs((ts) => [...ts, { id, cluster: null, kind: "settings" }]);
+    setActiveTabId(id);
+    setQuery("");
+  }
+
+  /** Open (or focus) the single workspace-level Toolbox tab. When `context` is
+   *  given (from a "Diagnose in Toolbox" deep-link), that context is
+   *  pre-diagnosed in the health section. */
+  function openToolbox(context?: string) {
+    setToolboxContext(context ?? null);
+    const existing = tabs.find((t) => t.kind === "toolbox" && !t.cluster);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = tabIdRef.current++;
+    setTabs((ts) => [...ts, { id, cluster: null, kind: "toolbox" }]);
     setActiveTabId(id);
     setQuery("");
   }
@@ -376,21 +468,39 @@ export function App() {
       pod?: string;
       container?: string;
       workload?: { kind: string; name: string };
+      kubeconfigFiles?: string[];
+      helm?: { args: string[]; title: string; values?: string; onComplete?: () => void };
+      /** A pod to delete when this dock session closes (node debug shell). */
+      deleteOnClose?: { context: string; namespace: string; pod: string };
+      /** Override the terminal's exec command (node shell `nsenter …`). */
+      execCommand?: string[];
     },
   ) {
     const id = dockIdRef.current++;
     setDockSessions((t) => [...t, { id, kind, ...s }]);
     setActiveDock(id);
   }
+  /** Tear down any pod tied to a closing dock session (e.g. node debug shell). */
+  function teardownDock(sessions: DockSession[]) {
+    for (const s of sessions) {
+      if (s.deleteOnClose) {
+        void deletePod(s.deleteOnClose.context, s.deleteOnClose.namespace, s.deleteOnClose.pod);
+      }
+    }
+  }
   function closeDockTab(id: number) {
     setDockSessions((t) => {
+      teardownDock(t.filter((x) => x.id === id));
       const remaining = t.filter((x) => x.id !== id);
       setActiveDock((a) => (a === id ? (remaining.at(-1)?.id ?? null) : a));
       return remaining;
     });
   }
   function closeDock() {
-    setDockSessions([]);
+    setDockSessions((t) => {
+      teardownDock(t);
+      return [];
+    });
     setActiveDock(null);
   }
 
@@ -414,9 +524,11 @@ export function App() {
         theme={theme}
         onToggleTheme={toggleThemeMode}
         onOpenSettings={openSettings}
+        onOpenToolbox={openToolbox}
         contextProfiles={contextProfiles}
         kubeconfigFiles={kubeconfigFiles}
         contextOrder={contextOrder}
+        contexts={contexts ?? []}
       />
       {activeCluster && (
         <Sidebar
@@ -463,7 +575,12 @@ export function App() {
                       onKubeconfigFilesChange={changeKubeconfigFiles}
                       contextOrder={contextOrder}
                       onContextOrderChange={changeContextOrder}
+                      contexts={contexts}
+                      contextsError={contextsError}
+                      onDeleteContext={handleDeleteContext}
                     />
+                  ) : activeKind === "toolbox" ? (
+                    <ToolboxView key={activeTab.id} initialContext={toolboxContext} />
                   ) : activeTab.crd && activeCluster ? (
                     <CustomResourceBrowser
                       key={activeTab.id}
@@ -479,6 +596,7 @@ export function App() {
                         key={activeTab.id}
                         context={activeCluster}
                         onOpenView={(kind) => openView(activeCluster, kind)}
+                        onDiagnose={() => openToolbox(activeCluster)}
                       />
                     </div>
                   ) : activeCluster && activeKind === "portforwards" ? (
@@ -488,6 +606,12 @@ export function App() {
                       key={activeTab.id}
                       context={activeCluster}
                       detailDrawerWidth={layout.rightSidebarWidth}
+                      openHelmDock={(s) =>
+                        openDock("helm", { context: s.context, namespace: s.namespace, helm: s.helm, kubeconfigFiles })
+                      }
+                      initialNamespace={activeTab.namespace ?? ""}
+                      onNamespaceChange={(ns) => setTabNamespace(activeTab.id, activeCluster, ns)}
+                      kubeconfigFiles={kubeconfigFiles}
                     />
                   ) : activeCluster && activeKind === "newresource" ? (
                     <NewResourceEditor
@@ -526,6 +650,7 @@ export function App() {
                       initialNamespace={activeTab.namespace ?? ""}
                       onNamespaceChange={(ns) => setTabNamespace(activeTab.id, activeCluster, ns)}
                       detailDrawerWidth={layout.rightSidebarWidth}
+                      kubeconfigFiles={kubeconfigFiles}
                     />
                   ) : (
                     <LandingPage
@@ -534,6 +659,8 @@ export function App() {
                       contextProfiles={contextProfiles}
                       kubeconfigFiles={kubeconfigFiles}
                       contextOrder={contextOrder}
+                      contexts={contexts}
+                      contextsError={contextsError}
                     />
                   )}
                 </div>
@@ -546,6 +673,17 @@ export function App() {
                     onCloseTab={closeDockTab}
                     onClose={closeDock}
                     onResize={setDockHeight}
+                    onNewTerminal={(() => {
+                      // "+" opens another terminal for the active shell's context,
+                      // falling back to the connected cluster.
+                      const active = dockSessions.find((s) => s.id === activeDock);
+                      const ctx = active?.kind === "shell" ? active.context : activeCluster;
+                      const files =
+                        active?.kind === "shell" ? active.kubeconfigFiles ?? kubeconfigFiles : kubeconfigFiles;
+                      return ctx
+                        ? () => openDock("shell", { context: ctx, namespace: "", kubeconfigFiles: files })
+                        : undefined;
+                    })()}
                   />
                 )}
               </>
@@ -558,6 +696,8 @@ export function App() {
             contextProfiles={contextProfiles}
             kubeconfigFiles={kubeconfigFiles}
             contextOrder={contextOrder}
+            contexts={contexts}
+            contextsError={contextsError}
           />
         )}
       </div>
@@ -567,12 +707,24 @@ export function App() {
           activeTab ? (activeTab.crd ? activeTab.crd.kind : RESOURCE_LABELS[activeKind]) : undefined
         }
         tabCount={tabs.length}
+        onOpenTerminal={
+          activeCluster
+            ? () =>
+                openDock("shell", { context: activeCluster, namespace: "", kubeconfigFiles })
+            : undefined
+        }
       />
       <CommandPalette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         context={activeCluster}
-        onOpenView={(kind) => (kind === "settings" ? openSettings() : activeCluster && openView(activeCluster, kind))}
+        onOpenView={(kind) =>
+          kind === "settings"
+            ? openSettings()
+            : kind === "toolbox"
+              ? openToolbox()
+              : activeCluster && openView(activeCluster, kind)
+        }
         onOpenResource={openResource}
         onOpenCrd={(crd) => activeCluster && openCrdView(activeCluster, crd)}
       />

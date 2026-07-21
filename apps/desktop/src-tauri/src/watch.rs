@@ -39,10 +39,28 @@ pub async fn start_resource_watch(
     namespace: String,
     kind: String,
     channel: String,
+    kubeconfig_paths: Vec<String>,
     app: AppHandle,
     manager: State<'_, WatchManager>,
 ) -> Result<String, String> {
     manager.abort(&channel);
+
+    // The watched context may live in a pasted/added kubeconfig the cache
+    // hasn't been told about yet (its `set_paths` can race this call). Register
+    // those paths WITHOUT clearing cached clients so `build_client` below can
+    // resolve the context instead of failing with "failed to load current
+    // context".
+    if !kubeconfig_paths.is_empty() {
+        manager
+            .cache
+            .ensure_paths(
+                kubeconfig_paths
+                    .into_iter()
+                    .map(std::path::PathBuf::from)
+                    .collect(),
+            )
+            .await;
+    }
 
     let cache = manager.cache.clone();
     let emit_channel = channel.clone();
@@ -363,8 +381,11 @@ pub async fn start_resource_watch(
             }
             other => Err(format!("kind not watchable: {other}")),
         };
-        if let Err(e) = result {
-            eprintln!("resource watch error: {e}");
+        if let Err(msg) = result {
+            eprintln!("resource watch error: {msg}");
+            // Surface the failure to the WebView on the same channel so a
+            // permanent (403/401) error stops the perpetual "Loading" state.
+            let _ = app_out.emit(&emit_channel, serde_json::json!({ "error": msg }));
         }
     });
 

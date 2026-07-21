@@ -1,28 +1,36 @@
+mod appimage;
 mod bridge;
-mod capabilities;
+pub mod capabilities;
 mod exec;
 mod files;
 mod forward;
+mod helm;
 mod logs;
 mod mcp;
 mod settings;
+mod terminal;
+mod toolbox;
 mod updater;
 mod watch;
 
 use bridge::{invoke_capability, AppRegistry};
-use files::{pick_kubeconfig_files, save_pasted_kubeconfig, save_text_file};
 use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
+use files::{pick_kubeconfig_files, save_pasted_kubeconfig, save_text_file};
 use forward::{start_port_forward, stop_port_forward, ForwardManager};
-use srelens_kube::client_cache::ClientCache;
+use helm::{helm_op_close, start_helm_op, HelmManager};
 use logs::{start_log_stream, stop_log_stream, LogStreamManager};
 use mcp::{
     install_srelens_cli, mcp_http_start, mcp_http_status, mcp_http_stop, srelens_cli_status,
     McpHttpManager,
 };
 use settings::{get_request_timeout, set_request_timeout};
+use srelens_kube::client_cache::ClientCache;
+use terminal::{start_terminal, terminal_close, terminal_input, terminal_resize, TerminalManager};
+use toolbox::start_tool_install;
 use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch, WatchManager};
 
+pub use appimage::gio_module_dir_for_appimage;
 pub use capabilities::build_registry;
 
 /// Size the main window to a comfortable default, clamped to the screen it
@@ -136,6 +144,63 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+async fn watch_kubeconfig_files(app_handle: tauri::AppHandle, cache: std::sync::Arc<ClientCache>) {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use tauri::Emitter;
+
+    let mut last_modified: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
+
+    // Initialize the map with current files
+    let initial_paths = cache.paths().await;
+    for path in initial_paths {
+        let modified = tokio::fs::metadata(&path)
+            .await
+            .and_then(|m| m.modified())
+            .ok();
+        last_modified.insert(path, modified);
+    }
+
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+
+        let current_paths = cache.paths().await;
+        let mut changed = false;
+
+        let mut next_modified = HashMap::new();
+        for path in current_paths {
+            let current_mod = tokio::fs::metadata(&path)
+                .await
+                .and_then(|m| m.modified())
+                .ok();
+
+            if let Some(prev) = last_modified.get(&path) {
+                if *prev != current_mod {
+                    changed = true;
+                }
+            } else {
+                changed = true;
+            }
+            next_modified.insert(path.clone(), current_mod);
+        }
+
+        // Check if any path was removed
+        for path in last_modified.keys() {
+            if !next_modified.contains_key(path) {
+                changed = true;
+            }
+        }
+
+        last_modified = next_modified;
+
+        if changed {
+            cache.clear().await;
+            let _ = app_handle.emit("kubeconfig-changed", ());
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // The SRELENS_TIMEOUT_SECS override is applied in `main()` before dispatch,
@@ -152,8 +217,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
+    let watcher_cache = cache.clone();
     builder
-        .setup(|app| {
+        .setup(move |app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -165,6 +231,19 @@ pub fn run() {
             size_main_window(app);
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
+
+            // Best-effort: remove stale helm temp files (kubeconfig/values) left
+            // behind by a crashed/killed prior run so they don't accumulate.
+            srelens_kube::helm_cli::sweep_stale_temp_files();
+
+            // Use Tauri's managed async runtime — `tokio::spawn` here panics
+            // ("no reactor running") because `setup` runs before/outside a Tokio
+            // runtime context.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                watch_kubeconfig_files(handle, watcher_cache).await;
+            });
+
             Ok(())
         })
         .manage(AppRegistry(registry))
@@ -173,6 +252,8 @@ pub fn run() {
         .manage(ForwardManager::new(cache.clone()))
         .manage(McpHttpManager::new(cache.clone()))
         .manage(LogStreamManager::new(cache))
+        .manage(TerminalManager::new())
+        .manage(HelmManager::new())
         .invoke_handler(tauri::generate_handler![
             invoke_capability,
             start_resource_watch,
@@ -187,6 +268,7 @@ pub fn run() {
             save_text_file,
             pick_kubeconfig_files,
             save_pasted_kubeconfig,
+            start_tool_install,
             update_check,
             update_install,
             set_request_timeout,
@@ -195,7 +277,13 @@ pub fn run() {
             mcp_http_stop,
             mcp_http_status,
             install_srelens_cli,
-            srelens_cli_status
+            srelens_cli_status,
+            start_terminal,
+            terminal_input,
+            terminal_resize,
+            terminal_close,
+            start_helm_op,
+            helm_op_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

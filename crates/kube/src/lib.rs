@@ -90,11 +90,13 @@ mod age_tests {
     }
 }
 
+pub mod access;
 pub mod actions;
 pub mod client_cache;
 pub mod cluster;
 pub mod crds;
 pub mod connect;
+pub mod debug;
 pub mod contexts;
 pub mod configmaps;
 pub mod cronjobs;
@@ -105,10 +107,12 @@ pub mod events;
 pub mod exec;
 pub mod forward;
 pub mod helm;
+pub mod helm_cli;
 pub mod ingresses;
 pub mod jobs;
 pub mod kubeconfig;
 pub mod limitranges;
+pub mod local_cluster;
 pub mod logs;
 pub mod manifest;
 pub mod metrics;
@@ -120,6 +124,8 @@ pub mod resourcequotas;
 pub mod rolebindings;
 pub mod roles;
 pub mod schema;
+pub mod toolbox;
+pub mod toolbox_install;
 pub mod secrets;
 pub mod serviceaccounts;
 pub mod services;

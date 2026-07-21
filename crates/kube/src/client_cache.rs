@@ -37,6 +37,20 @@ impl ClientCache {
         self.clients.lock().await.clear();
     }
 
+    /// Add any kubeconfig paths not already present, WITHOUT clearing cached
+    /// clients (adding a path can't invalidate an existing client). Used by
+    /// operations that know about additional files (e.g. a resource watch for a
+    /// context that lives in a pasted/added kubeconfig) so they can't race the
+    /// app's initial `set_paths`.
+    pub async fn ensure_paths(&self, additional: Vec<PathBuf>) {
+        let mut current = self.paths.write().await;
+        for p in additional {
+            if !current.contains(&p) {
+                current.push(p);
+            }
+        }
+    }
+
     pub async fn paths(&self) -> Vec<PathBuf> {
         self.paths.read().await.clone()
     }
@@ -58,6 +72,11 @@ impl ClientCache {
     /// Drop any cached client for a context (e.g. after a connection failure).
     pub async fn invalidate(&self, context: &str) {
         self.clients.lock().await.remove(context);
+    }
+
+    /// Clear all cached clients (e.g. after a kubeconfig change).
+    pub async fn clear(&self) {
+        self.clients.lock().await.clear();
     }
 }
 
@@ -85,5 +104,20 @@ mod tests {
     async fn invalidate_is_safe_on_empty_cache() {
         let cache = ClientCache::new(PathBuf::from("/x"));
         cache.invalidate("nope").await; // must not panic
+    }
+
+    #[tokio::test]
+    async fn ensure_paths_adds_missing_without_duplicating_or_reordering() {
+        let a = PathBuf::from("/a");
+        let b = PathBuf::from("/b");
+        let cache = ClientCache::new(a.clone());
+        // `b` is new so it's appended; `a` already present so it's not
+        // duplicated and the existing order (a first) is preserved.
+        cache.ensure_paths(vec![b.clone(), a.clone()]).await;
+        assert_eq!(cache.paths().await, vec![a.clone(), b.clone()]);
+
+        // Ensuring an already-present set is a no-op on order/contents.
+        cache.ensure_paths(vec![a.clone(), b.clone()]).await;
+        assert_eq!(cache.paths().await, vec![a, b]);
     }
 }

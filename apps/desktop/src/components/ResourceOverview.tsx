@@ -6,6 +6,8 @@ import { listEndpointSlices } from "../lib/network";
 import { podsForPvc, formatStorageSize } from "../lib/storage";
 import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from "../lib/rbac";
 import { updateConfigData } from "../lib/actions";
+import { useAccess, denyReason, reportActionError, type AccessCheck } from "../lib/access";
+import { describeError } from "../lib/errors";
 import {
   Spinner,
   StatusPill,
@@ -93,7 +95,8 @@ function plural(n: number, one: string, many = `${one}s`): string {
 type Pair = [label: string, value: React.ReactNode];
 
 /** Render a definition-list grid, skipping rows whose value is empty. */
-function KV({ pairs }: { pairs: Pair[] }) {
+/** Property rows (label/value) for a detail section. Empty values are dropped. */
+export function KV({ pairs }: { pairs: Pair[] }) {
   const rows = pairs.filter(([, v]) => v !== null && v !== undefined && v !== "" && v !== "—");
   if (rows.length === 0) return null;
   return (
@@ -108,7 +111,8 @@ function KV({ pairs }: { pairs: Pair[] }) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** A titled card section in a detail view (accent-barred header + bordered surface). */
+export function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="fl-detail-section">
       <h4 className="fl-detail-section__title">{title}</h4>
@@ -176,6 +180,22 @@ function Chips({ map }: { map?: Record<string, string> }) {
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * A labels/annotations/selector map shown as a collapsed count summary
+ * ("42 Labels ⌄") that expands to the chips on click — so large maps (node
+ * feature labels, last-applied annotations) don't dominate the detail panel.
+ * The single source of truth for how these maps render across every detail view.
+ */
+function ChipMap({ map, singular }: { map?: Record<string, string>; singular: string }) {
+  const count = Object.keys(map ?? {}).length;
+  if (count === 0) return <span className="fl-detail-empty">None</span>;
+  return (
+    <Expandable summary={plural(count, singular)}>
+      <Chips map={map} />
+    </Expandable>
   );
 }
 
@@ -855,26 +875,8 @@ function PodDetailView({
                 ""
               ),
             ],
-            [
-              "Labels",
-              Object.keys(labels).length ? (
-                <Expandable summary={plural(Object.keys(labels).length, "Label")}>
-                  <Chips map={labels} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
-            [
-              "Annotations",
-              Object.keys(annotations).length ? (
-                <Expandable summary={plural(Object.keys(annotations).length, "Annotation")}>
-                  <Chips map={annotations} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
+            ["Labels", <ChipMap map={labels} singular="Label" />],
+            ["Annotations", <ChipMap map={annotations} singular="Annotation" />],
             [
               "Controlled By",
               ownerTargets.length ? (
@@ -1120,26 +1122,8 @@ function WorkloadDetailView({
                 ""
               ),
             ],
-            [
-              "Labels",
-              Object.keys(labels).length ? (
-                <Expandable summary={plural(Object.keys(labels).length, "Label")}>
-                  <Chips map={labels} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
-            [
-              "Annotations",
-              Object.keys(annotations).length ? (
-                <Expandable summary={plural(Object.keys(annotations).length, "Annotation")}>
-                  <Chips map={annotations} />
-                </Expandable>
-              ) : (
-                ""
-              ),
-            ],
+            ["Labels", <ChipMap map={labels} singular="Label" />],
+            ["Annotations", <ChipMap map={annotations} singular="Annotation" />],
             ["Replicas", replicaText],
             ["Selector", <Chips key="s" map={selector} />],
             [
@@ -1859,6 +1843,15 @@ export function ConfigDataEditor({
 
   const keys = Object.keys(data);
 
+  // Preflight the mutating RBAC (verb `update` on configmaps/secrets in this
+  // namespace) so Save fails closed until the check resolves allowed.
+  const updateCheck: AccessCheck = {
+    verb: "update",
+    resource: kind === "Secret" ? "secrets" : "configmaps",
+    namespace,
+  };
+  const access = useAccess(context, [updateCheck]);
+
   // Baseline follows the data (Secret values arrive asynchronously via the
   // gated fetch); updating it here must NOT clobber the user's reveal/edit
   // state, so those reset only when the target object itself changes.
@@ -1898,7 +1891,8 @@ export function ConfigDataEditor({
     const r = await updateConfigData(context, kind, namespace, name, patch);
     setBusy(false);
     if (r.error) {
-      setErr(r.error);
+      setErr(describeError(r.error).detail);
+      reportActionError(context, `Failed to save ${name}`, r.error);
       return;
     }
     setEdited({});
@@ -1954,7 +1948,13 @@ export function ConfigDataEditor({
       })}
       {editable && changedKeys.length > 0 && (
         <div className="fl-config-editor__actions">
-          <Button size="sm" onClick={() => void save()} busy={busy}>
+          <Button
+            size="sm"
+            onClick={() => void save()}
+            busy={busy}
+            disabled={busy || !access.allowed(updateCheck)}
+            title={denyReason(access, updateCheck)}
+          >
             Save
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setEdited({})} disabled={busy}>
@@ -2874,9 +2874,9 @@ function GenericDetail({
           ]}
         />
         <div className="fl-detail-subhead">Labels</div>
-        <Chips map={meta.labels as Record<string, string>} />
+        <ChipMap map={meta.labels as Record<string, string>} singular="Label" />
         <div className="fl-detail-subhead">Annotations</div>
-        <Chips map={meta.annotations as Record<string, string>} />
+        <ChipMap map={meta.annotations as Record<string, string>} singular="Annotation" />
       </Section>
 
       <KindBody kind={kind} obj={obj} context={context} now={now} onEdited={onEdited} onOpenResource={onOpenResource} />

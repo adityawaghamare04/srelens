@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use srelens_capability::{Annotations, Capability};
 use kube::config::{Config, KubeConfigOptions, Kubeconfig};
 use kube::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use srelens_capability::{Annotations, Capability};
 
 use crate::client_cache::ClientCache;
 
@@ -64,10 +64,12 @@ pub fn init_timeout_from_env() -> u64 {
 /// Build an authenticated kube-rs client for a named kubeconfig context.
 /// Authentication (certs, tokens, exec plugins) is resolved by kube-rs.
 pub(crate) fn load_kubeconfigs(paths: &[PathBuf]) -> Result<Kubeconfig, String> {
-    paths.iter().try_fold(Kubeconfig::default(), |merged, path| {
-        let next = Kubeconfig::read_from(path).map_err(|e| e.to_string())?;
-        merged.merge(next).map_err(|e| e.to_string())
-    })
+    paths
+        .iter()
+        .try_fold(Kubeconfig::default(), |merged, path| {
+            let next = Kubeconfig::read_from(path).map_err(|e| e.to_string())?;
+            merged.merge(next).map_err(|e| e.to_string())
+        })
 }
 
 pub fn validate_kubeconfig_yaml(yaml: &str) -> Result<usize, String> {
@@ -78,16 +80,108 @@ pub fn validate_kubeconfig_yaml(yaml: &str) -> Result<usize, String> {
     Ok(config.contexts.len())
 }
 
-pub(crate) async fn build_client(paths: &[PathBuf], context: &str) -> Result<Client, String> {
+/// Build a standalone kubeconfig (YAML) containing ONLY `context` plus the one
+/// cluster and user it references, with `current-context` pinned to it.
+///
+/// Used to lock the in-app terminal to a single cluster: pointing `KUBECONFIG`
+/// at this file means `kubectl config get-contexts` lists just that context and
+/// `use-context` can't switch to any other.
+pub fn single_context_kubeconfig_yaml(paths: &[PathBuf], context: &str) -> Result<String, String> {
+    let mut config = load_kubeconfigs(paths)?;
+    let named = config
+        .contexts
+        .iter()
+        .find(|c| c.name == context)
+        .ok_or_else(|| format!("context '{context}' not found in kubeconfig"))?;
+    let inner = named
+        .context
+        .clone()
+        .ok_or_else(|| format!("context '{context}' has no cluster/user"))?;
+
+    config.contexts.retain(|c| c.name == context);
+    config.clusters.retain(|c| c.name == inner.cluster);
+    config.auth_infos.retain(|a| a.name == inner.user);
+    config.current_context = Some(context.to_string());
+    if config.kind.is_none() {
+        config.kind = Some("Config".to_string());
+    }
+    if config.api_version.is_none() {
+        config.api_version = Some("v1".to_string());
+    }
+    serde_yaml::to_string(&config).map_err(|e| e.to_string())
+}
+
+static SCOPED_KUBECONFIG_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Write a standalone kubeconfig containing only `context` to a private temp
+/// file (atomic create, mode 0600) and return its path. Callers point
+/// `KUBECONFIG` at it to scope a child process (e.g. `helm`) to one cluster,
+/// then delete it when done.
+pub fn write_single_context_kubeconfig(
+    paths: &[PathBuf],
+    context: &str,
+) -> Result<PathBuf, String> {
+    let yaml = single_context_kubeconfig_yaml(paths, context)?;
+    let id = SCOPED_KUBECONFIG_SEQ.fetch_add(1, Ordering::SeqCst);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!(
+        "srelens-helm-{}-{nanos}-{}.kubeconfig",
+        std::process::id(),
+        id
+    ));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&path).map_err(|e| e.to_string())?;
+    use std::io::Write as _;
+    file.write_all(yaml.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Resolve a kube `Config` for `context`, preferring the file that declares it
+/// (so merge "first-file-wins" can't shadow its cluster/user), else the merge.
+pub(crate) async fn config_for_context(paths: &[PathBuf], context: &str) -> Result<Config, String> {
+    // Prefer the specific kubeconfig file that declares `context`: kube-rs merge
+    // is "first file wins" by name, so a same-named cluster/user in another
+    // merged file can shadow (or drop) this context's own entries. Building from
+    // the owning file uses that context's real cluster + user.
+    for path in paths {
+        let Ok(kc) = Kubeconfig::read_from(path) else {
+            continue;
+        };
+        if !kc.contexts.iter().any(|c| c.name == context) {
+            continue;
+        }
+        let options = KubeConfigOptions {
+            context: Some(context.to_string()),
+            cluster: None,
+            user: None,
+        };
+        if let Ok(config) = Config::from_custom_kubeconfig(kc, &options).await {
+            return Ok(config);
+        }
+    }
+    // Fallback: merged resolution (handles configs split across files).
     let kubeconfig = load_kubeconfigs(paths)?;
     let options = KubeConfigOptions {
         context: Some(context.to_string()),
         cluster: None,
         user: None,
     };
-    let config = Config::from_custom_kubeconfig(kubeconfig, &options)
+    Config::from_custom_kubeconfig(kubeconfig, &options)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+pub(crate) async fn build_client(paths: &[PathBuf], context: &str) -> Result<Client, String> {
+    let config = config_for_context(paths, context).await?;
     Client::try_from(config).map_err(|e| e.to_string())
 }
 
@@ -151,8 +245,8 @@ pub fn cluster_info_capability(cache: Arc<ClientCache>) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use srelens_capability::Registry;
     use serde_json::json;
+    use srelens_capability::Registry;
     use std::path::PathBuf;
 
     #[test]
@@ -170,6 +264,66 @@ mod tests {
     }
 
     #[test]
+    fn writes_scoped_kubeconfig_file_0600_single_context() {
+        use std::io::Write as _;
+        // Two-context kubeconfig fixture.
+        let dir = std::env::temp_dir().join(format!("srelens-cfgtest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("config");
+        let mut f = std::fs::File::create(&cfg).unwrap();
+        f.write_all(
+            b"apiVersion: v1\nkind: Config\ncurrent-context: a\nclusters:\n- name: ca\n  cluster: {server: https://a}\n- name: cb\n  cluster: {server: https://b}\ncontexts:\n- name: a\n  context: {cluster: ca, user: ua}\n- name: b\n  context: {cluster: cb, user: ub}\nusers:\n- name: ua\n  user: {}\n- name: ub\n  user: {}\n",
+        )
+        .unwrap();
+
+        let out = write_single_context_kubeconfig(&[cfg], "b").unwrap();
+        let written = std::fs::read_to_string(&out).unwrap();
+        assert!(written.contains("name: b"));
+        assert!(!written.contains("name: a\n"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&out).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn single_context_kubeconfig_keeps_only_the_named_context() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "srelens-single-context-{}-{}.yaml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(
+            &path,
+            "apiVersion: v1\nkind: Config\ncurrent-context: ctx-a\nclusters:\n  - name: cluster-a\n    cluster: { server: https://a:6443 }\n  - name: cluster-b\n    cluster: { server: https://b:6443 }\nusers:\n  - name: user-a\n    user: {}\n  - name: user-b\n    user: {}\ncontexts:\n  - name: ctx-a\n    context: { cluster: cluster-a, user: user-a }\n  - name: ctx-b\n    context: { cluster: cluster-b, user: user-b }\n",
+        )
+        .unwrap();
+
+        let yaml = single_context_kubeconfig_yaml(&[path.clone()], "ctx-b").unwrap();
+        let locked = Kubeconfig::from_yaml(&yaml).unwrap();
+
+        // Only ctx-b (and its cluster/user) survive, and it's the current context.
+        assert_eq!(locked.current_context.as_deref(), Some("ctx-b"));
+        assert_eq!(locked.contexts.len(), 1);
+        assert_eq!(locked.contexts[0].name, "ctx-b");
+        assert_eq!(locked.clusters.len(), 1);
+        assert_eq!(locked.clusters[0].name, "cluster-b");
+        assert_eq!(locked.auth_infos.len(), 1);
+        assert_eq!(locked.auth_infos[0].name, "user-b");
+
+        // A missing context is an error, not a full config.
+        assert!(single_context_kubeconfig_yaml(&[path.clone()], "nope").is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn capability_has_expected_id_and_annotations() {
         let cache = ClientCache::new(PathBuf::from("/nonexistent"));
         let cap = cluster_info_capability(cache);
@@ -182,6 +336,49 @@ mod tests {
         let yaml = "apiVersion: v1\nkind: Config\nclusters:\n- name: a\n  cluster: { server: https://a }\ncontexts:\n- name: ctx-a\n  context: { cluster: a, user: user-a }\n";
         assert_eq!(validate_kubeconfig_yaml(yaml), Ok(1));
         assert!(validate_kubeconfig_yaml("apiVersion: v1\nkind: Config\ncontexts: []\n").is_err());
+    }
+
+    /// Write `contents` to a unique temp file (pid + nanos) and return its path.
+    fn write_temp_kubeconfig(tag: &str, contents: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "srelens-config-for-context-{tag}-{}-{}.yaml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn config_for_context_prefers_the_owning_files_cluster() {
+        // fileA and fileB both declare a cluster named `shared`, but with
+        // different servers. kube-rs merge is "first file wins" by name, so a
+        // merge-only resolution of ctx-b would wrongly pick fileA's server.
+        let file_a = write_temp_kubeconfig(
+            "a",
+            "apiVersion: v1\nkind: Config\ncurrent-context: ctx-a\nclusters:\n  - name: shared\n    cluster: { server: https://a.example:6443 }\nusers:\n  - name: ua\n    user: {}\ncontexts:\n  - name: ctx-a\n    context: { cluster: shared, user: ua }\n",
+        );
+        let file_b = write_temp_kubeconfig(
+            "b",
+            "apiVersion: v1\nkind: Config\nclusters:\n  - name: shared\n    cluster: { server: https://b.example:6443 }\nusers:\n  - name: ub\n    user: {}\ncontexts:\n  - name: ctx-b\n    context: { cluster: shared, user: ub }\n",
+        );
+
+        let config = config_for_context(&[file_a.clone(), file_b.clone()], "ctx-b")
+            .await
+            .unwrap();
+
+        // ctx-b must resolve to fileB's own `shared` cluster, not fileA's.
+        let url = config.cluster_url.to_string();
+        assert!(
+            url.starts_with("https://b.example"),
+            "expected fileB's server, got {url}"
+        );
+
+        let _ = std::fs::remove_file(&file_a);
+        let _ = std::fs::remove_file(&file_b);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -6,12 +6,18 @@ export interface UpdateMeta {
   version: string;
   currentVersion: string;
   notes: string;
+  /**
+   * The install is owned by a system package manager the updater can't drive
+   * (e.g. pacman for the AUR package) — offer guidance, not an install button.
+   */
+  external: boolean;
 }
 
 interface RawUpdateMeta {
   version: string;
   current_version: string;
   notes: string | null;
+  external?: boolean;
 }
 
 interface RawProgress {
@@ -27,6 +33,7 @@ export async function checkForUpdate(channel: UpdateChannel): Promise<UpdateMeta
     version: meta.version,
     currentVersion: meta.current_version,
     notes: meta.notes ?? "",
+    external: meta.external ?? false,
   };
 }
 

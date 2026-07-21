@@ -643,6 +643,13 @@ body {
   position: relative;
   border-radius: var(--fl-radius-md);
 }
+.fl-hotbar__divider {
+  width: 24px;
+  height: 1px;
+  margin: 4px auto;
+  flex: 0 0 auto;
+  background: var(--fl-color-border-faint);
+}
 .fl-hotbar__item--active::before {
   content: "";
   position: absolute;
@@ -860,6 +867,17 @@ body {
   height: 32px;
   border-bottom: 1px solid var(--fl-color-border);
 }
+/* Tabs scroll horizontally so many long-named terminals never break layout;
+   the +/close buttons stay pinned to the right of this scroll area. */
+.fl-dock__tablist {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
 .fl-dock__tab {
   display: inline-flex;
   align-items: center;
@@ -870,6 +888,23 @@ body {
   border-right: 1px solid var(--fl-color-border);
   font-size: 13px;
   background: transparent;
+  flex: 0 0 auto;
+  max-width: 240px;
+}
+.fl-dock__tab-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.fl-dock__tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fl-dock__new,
+.fl-dock__close {
+  flex: 0 0 auto;
 }
 .fl-dock__tab--active {
   background: var(--fl-dock-tab-active);
@@ -918,7 +953,23 @@ body {
   padding: 0 2px;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
+.fl-dock__new {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+  padding: 0 8px;
+}
+.fl-dock__new svg {
+  width: 15px;
+  height: 15px;
+}
 .fl-dock__tab-close:hover,
+.fl-dock__new:hover,
 .fl-dock__close:hover {
   opacity: 1;
 }
@@ -945,6 +996,11 @@ body {
   min-height: 0;
   background: var(--fl-color-bg);
   overflow: hidden;
+  position: relative;
+}
+.fl-dock__pane {
+  height: 100%;
+  width: 100%;
 }
 .fl-sidebar__cluster {
   display: flex;
@@ -2258,6 +2314,131 @@ body {
   font-size: 13px;
   line-height: 1.5;
 }
+.fl-error-state__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* --- Toolbox page --- */
+.fl-toolbox {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  overflow: auto;
+  min-height: 0;
+}
+.fl-toolbox-error {
+  margin: 0;
+  color: var(--fl-color-danger, #dc2626);
+  font-size: 13px;
+}
+.fl-toolbox-empty {
+  margin: 0;
+  color: var(--fl-color-text-muted);
+  font-size: 13px;
+}
+.fl-toolbox-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.fl-toolbox-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--fl-color-border);
+  border-radius: 10px;
+  background: var(--fl-color-surface, transparent);
+}
+.fl-toolbox-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fl-toolbox-card__head strong {
+  font-size: 14px;
+  text-transform: capitalize;
+}
+.fl-toolbox-card__meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fl-color-text-muted);
+}
+.fl-toolbox-card__path {
+  color: var(--fl-color-text-muted);
+  font-size: 11px;
+  word-break: break-all;
+}
+.fl-toolbox-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.fl-toolbox-search > :first-child {
+  flex: 1;
+}
+.fl-toolbox-plugins {
+  width: 100%;
+  border-collapse: collapse;
+}
+.fl-toolbox-plugins td {
+  padding: 8px 0;
+  border-top: 1px solid var(--fl-color-border);
+  vertical-align: middle;
+}
+.fl-toolbox-plugins td strong {
+  display: block;
+  font-size: 13px;
+}
+.fl-toolbox-plugins td small {
+  color: var(--fl-color-text-muted);
+  font-size: 12px;
+}
+.fl-toolbox-plugins__action {
+  text-align: right;
+  white-space: nowrap;
+}
+.fl-toolbox-contexts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fl-toolbox-context {
+  border: 1px solid var(--fl-color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.fl-toolbox-context__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.fl-toolbox-reqs {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fl-toolbox-req {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.fl-toolbox-req__hint {
+  color: var(--fl-color-text-muted);
+}
 
 .fl-settings-page {
   overflow: hidden;
@@ -3174,13 +3355,17 @@ body {
   border-bottom-style: solid;
   border-bottom-width: 1px;
 }
-/* Thin, unobtrusive horizontal scrollbar so an overflowing strip stays usable. */
+/* Ultra-thin horizontal scrollbar; the thumb only shows on hover so the strip
+   stays clean (wheel/trackpad scroll and auto-scroll-to-active still work). */
 .fl-ctabs::-webkit-scrollbar {
-  height: 6px;
+  height: 3px;
 }
 .fl-ctabs::-webkit-scrollbar-thumb {
-  background: var(--fl-color-border);
+  background: transparent;
   border-radius: 3px;
+}
+.fl-ctabs:hover::-webkit-scrollbar-thumb {
+  background: var(--fl-color-border);
 }
 .fl-ctabs::-webkit-scrollbar-track {
   background: transparent;
@@ -3327,6 +3512,47 @@ body {
 .fl-sidebar__resource-row--active .fl-nav__icon,
 .fl-sidebar__resource-row:hover .fl-nav__icon {
   opacity: 1;
+}
+
+/* Bulk action bar (shown above the table when rows are selected). */
+.fl-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--fl-color-surface);
+  border-bottom: 1px solid var(--fl-color-border-faint);
+}
+.fl-bulk-bar__count {
+  font-size: 13px;
+  font-weight: 500;
+  margin-right: 4px;
+}
+.fl-bulk-bar__list {
+  margin: 8px 0;
+  padding-left: 18px;
+  max-height: 220px;
+  overflow: auto;
+}
+/* Checkbox column in the data table. */
+.fl-data-table__checkbox {
+  width: 36px;
+  text-align: center;
+  padding-right: 0;
+}
+.fl-data-table__checkbox input {
+  cursor: pointer;
+  margin: 0;
+  vertical-align: middle;
+}
+/* Debug-container dialog fields. */
+.fl-debug-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--fl-color-text-muted);
 }
 
 .fl-resource-toolbar {
@@ -3854,6 +4080,47 @@ body {
   color: var(--fl-color-text-muted);
   font-size: 11px;
 }
+.fl-landing__context-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fl-landing__context-group + .fl-landing__context-group {
+  margin-top: 14px;
+}
+.fl-landing__context-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 2px 2px;
+  color: var(--fl-color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.fl-landing__context-group-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--fl-color-surface-alt);
+  color: var(--fl-color-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.fl-landing__context-badge {
+  text-transform: lowercase;
+}
+.fl-landing__current-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .fl-landing__capabilities {
   display: grid;
   grid-template-columns: minmax(240px, 0.7fr) minmax(0, 1.3fr);
@@ -3955,4 +4222,52 @@ body {
   .fl-resource-toolbar__search {
     width: 100%;
   }
+}
+
+.fl-diff { display: flex; flex-direction: column; gap: 6px; }
+.fl-diff__title { display: flex; align-items: center; gap: 6px; padding: 6px 8px; }
+.fl-diff__badge { font-size: 11px; padding: 1px 6px; border-radius: 999px; }
+.fl-diff__badge--new { background: color-mix(in srgb, var(--fl-color-success, #22c55e) 18%, transparent); }
+.fl-diff__empty { padding: 8px; color: var(--fl-color-muted-foreground, #888); font-size: 13px; }
+.fl-diff__table { width: 100%; border-collapse: collapse; table-layout: fixed; font-family: var(--fl-font-mono, ui-monospace, monospace); font-size: 12px; }
+.fl-diff__cell { width: 50%; white-space: pre-wrap; word-break: break-word; padding: 0 8px; vertical-align: top; border-left: 1px solid var(--fl-color-border, #e5e7eb); }
+.fl-diff__row--same { color: color-mix(in srgb, currentColor 55%, transparent); }
+.fl-diff__row--replace .fl-diff__cell--left,
+.fl-diff__row--delete .fl-diff__cell--left { background: color-mix(in srgb, var(--fl-color-danger, #ef4444) 14%, transparent); }
+.fl-diff__row--replace .fl-diff__cell--right,
+.fl-diff__row--insert .fl-diff__cell--right { background: color-mix(in srgb, var(--fl-color-success, #22c55e) 16%, transparent); }
+
+.fl-apply-conflict { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--fl-color-border, #e5e7eb); background: color-mix(in srgb, var(--fl-color-danger, #ef4444) 10%, transparent); font-size: 13px; }
+.fl-apply-conflict > p { flex: 1 1 auto; }
+.fl-apply-conflict__list { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; }
+.fl-apply-conflict__item { margin: 0; }
+.fl-apply-stale { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--fl-color-warning, #f59e0b) 20%, transparent); }
+.fl-changes-panel { padding: 4px 0; }
+.fl-changes-panel__resize {
+  position: relative;
+  flex: 0 0 8px;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+}
+.fl-changes-panel__resize:hover {
+  background: transparent;
+}
+.fl-changes-panel__resize::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 44px;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.45);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.fl-changes-panel__resize:hover::after {
+  background: rgba(128, 128, 128, 0.65);
+  opacity: 1;
 }

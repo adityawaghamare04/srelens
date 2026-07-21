@@ -35,6 +35,7 @@ describe("startPodExec", () => {
       pod: "web-1",
       container: null,
       shell: null,
+      command: null,
     });
     expect(onMock).toHaveBeenCalledWith("exec:out:7", expect.any(Function));
     expect(onMock).toHaveBeenCalledWith("exec:exit:7", expect.any(Function));
@@ -60,6 +61,7 @@ describe("startPodExec", () => {
       pod: "web-1",
       container: "sidecar",
       shell: null,
+      command: null,
     });
   });
 });

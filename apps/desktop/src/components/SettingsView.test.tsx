@@ -303,6 +303,37 @@ describe("SettingsView", () => {
     await waitFor(() => expect(transportMocks.relaunchApp).toHaveBeenCalledTimes(1));
   });
 
+  it("offers package-manager guidance instead of install for external installs", async () => {
+    updaterMocks.checkForUpdate.mockResolvedValue({
+      version: "0.2.0",
+      currentVersion: "0.1.0",
+      notes: "New things",
+      external: true,
+    });
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/0\.2\.0/)).toBeDefined();
+    expect(screen.getByText(/system package manager/)).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Download & install/ })).toBeNull();
+  });
+
   it("surfaces update check failures", async () => {
     updaterMocks.checkForUpdate.mockRejectedValue(new Error("endpoint unreachable"));
     render(
@@ -325,5 +356,75 @@ describe("SettingsView", () => {
     fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
     expect(await screen.findByText(/endpoint unreachable/)).toBeDefined();
+  });
+
+  it("shows a delete context button and triggers onDeleteContext on click", async () => {
+    const onDeleteContext = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+        onDeleteContext={onDeleteContext}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    // Wait for the context details panel to render for the default selection (prod-eu)
+    const removeButton = await screen.findByRole("button", { name: "Remove context" });
+    fireEvent.click(removeButton);
+
+    const confirmButton = await screen.findByRole("button", { name: "Remove" });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(onDeleteContext).toHaveBeenCalledWith("prod-eu"));
+  });
+
+  it("opens a right-click menu on a context row and confirms removal from there", async () => {
+    const onDeleteContext = vi.fn().mockResolvedValue(undefined);
+
+    const { container } = render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+        onDeleteContext={onDeleteContext}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await screen.findByText("Context identity");
+
+    const row = container.querySelector<HTMLButtonElement>('button[data-context-name="staging"]')!;
+    fireEvent.contextMenu(row);
+
+    const menuRemove = await screen.findByText("Remove context", { selector: '[data-slot="context-menu-item"]' });
+    fireEvent.click(menuRemove);
+
+    const confirmButton = await screen.findByRole("button", { name: "Remove" });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(onDeleteContext).toHaveBeenCalledWith("staging"));
   });
 });

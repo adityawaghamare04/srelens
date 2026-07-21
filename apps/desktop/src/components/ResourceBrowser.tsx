@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import {
-  listNamespaces,
   podMetrics,
   type PodSummary,
   type DeploymentSummary,
   type ServiceSummary,
 } from "../lib/workloads";
+import { useNamespaceOptions } from "../lib/useNamespaceOptions";
 import {
   listNodes,
   listResource,
@@ -55,9 +55,11 @@ import {
 } from "../lib/namespaces";
 import { NamespaceMultiSelect } from "../ui/NamespaceMultiSelect";
 import { PodActions, ResourceActions, ServiceForwardAction } from "./DetailActions";
+import { BulkActionBar } from "./BulkActionBar";
 import { NodeCordonAction } from "./NodeCordonAction";
 import { ResourceDetail } from "./ResourceDetail";
 import type { OpenResource } from "../lib/resourceNavigation";
+import { describeError } from "../lib/errors";
 import {
   Table,
   filterTableData,
@@ -68,6 +70,7 @@ import {
   ColumnPicker,
   useColumnVisibility,
   Drawer,
+  ErrorState,
   StatusPill,
   TextInput,
   Toolbar,
@@ -115,6 +118,7 @@ export type ResourceKind =
   | "portforwards"
   | "helmreleases"
   | "settings"
+  | "toolbox"
   | "newresource"
   | "editresource";
 
@@ -158,6 +162,7 @@ export const RESOURCE_LABELS: Record<ResourceKind, string> = {
   portforwards: "Port Forwards",
   helmreleases: "Helm Releases",
   settings: "Settings",
+  toolbox: "Toolbox",
   newresource: "New Resource",
   editresource: "Edit Resource",
 };
@@ -202,6 +207,7 @@ export const K8S_KIND: Record<ResourceKind, string> = {
   portforwards: "",
   helmreleases: "",
   settings: "",
+  toolbox: "",
   newresource: "",
   editresource: "",
 };
@@ -547,12 +553,20 @@ export function ResourceBrowser({
   initialNamespace = "",
   onNamespaceChange,
   detailDrawerWidth = 480,
+  kubeconfigFiles = [],
 }: {
   context: string;
   kind: ResourceKind;
   query?: string;
   onQueryChange?: (q: string) => void;
-  onOpenTerminal?: (s: { context: string; namespace: string; pod: string; container?: string }) => void;
+  onOpenTerminal?: (s: {
+    context: string;
+    namespace: string;
+    pod: string;
+    container?: string;
+    deleteOnClose?: { context: string; namespace: string; pod: string };
+    execCommand?: string[];
+  }) => void;
   onOpenLogs?: (s: { context: string; namespace: string; pod: string; container?: string }) => void;
   onOpenWorkloadLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
   /** Open a "new resource" editor tab, optionally seeded with this kind's template. */
@@ -567,9 +581,16 @@ export function ResourceBrowser({
   /** Notified when the namespace filter changes, so the parent can preserve it. */
   onNamespaceChange?: (namespace: string) => void;
   detailDrawerWidth?: number;
+  /**
+   * All configured kubeconfig files (default path + pasted/additional). Used to
+   * register their paths in the backend client cache before we build a client
+   * for this context — otherwise a restored tab for a context from an additional
+   * file races the app's initial listContexts and fails with "failed to load
+   * current context".
+   */
+  kubeconfigFiles?: string[];
 }) {
-  const [namespaces, setNamespaces] = useState<string[] | null>(null);
-  const [nsError, setNsError] = useState("");
+  const { namespaces, scope: nsScope, error: nsError } = useNamespaceOptions(context, kubeconfigFiles);
   // Namespace selection is a set (empty = all namespaces), serialized to/from
   // the persisted comma string. One selected namespace watches that namespace
   // directly; none or many watch all namespaces, filtered client-side.
@@ -578,6 +599,11 @@ export function ResourceBrowser({
     setSelection(next);
     onNamespaceChange?.(serializeNamespaceSelection(next));
   };
+  // Restricted credentials scope the view to a single namespace — force the
+  // selection to match rather than leaving it at whatever was selected before.
+  useEffect(() => {
+    if (nsScope) setSelection([nsScope]);
+  }, [nsScope]);
   const watchNamespace = watchNamespaceForSelection(selection);
   const selectionKey = serializeNamespaceSelection(selection);
   const [res, setRes] = useState<ResourceState>({ rows: [], error: "", loading: false });
@@ -585,6 +611,9 @@ export function ResourceBrowser({
   const [selectedPod, setSelectedPod] = useState<PodSummary | null>(null);
   const [otherDetail, setOtherDetail] = useState<OtherDetail | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Bulk-selection: keys are namespace-qualified so all-namespace views can't
+  // confuse two same-named resources.
+  const [bulkKeys, setBulkKeys] = useState<Set<string>>(new Set());
   // Bumped after a write action so the open detail overview re-fetches.
   const [detailReload, setDetailReload] = useState(0);
   const [filterColumn, setFilterColumn] = useState<string | null>(null);
@@ -595,21 +624,6 @@ export function ResourceBrowser({
   const namespaced = isNamespaced(kind);
 
   useEffect(() => setFilterColumn(null), [kind]);
-
-  useEffect(() => {
-    let active = true;
-    setNamespaces(null);
-    setNsError("");
-    void listNamespaces(context).then((outcome) => {
-      if (!active) return;
-      if (outcome.error) setNsError(outcome.error);
-      else setNamespaces(outcome.namespaces ?? []);
-      // namespace stays "" = All namespaces by default
-    });
-    return () => {
-      active = false;
-    };
-  }, [context]);
 
   useEffect(() => {
     if (namespaced && namespaces === null) return; // wait for the namespace list
@@ -639,6 +653,10 @@ export function ResourceBrowser({
         (status) => {
           if (!cancelled) setWatchStatus(status);
         },
+        (err) => {
+          if (!cancelled) setRes({ rows: [], error: err, loading: false });
+        },
+        kubeconfigFiles,
       )
         .then((h) => (cancelled ? h.stop() : (handle = h)))
         .catch((e) => {
@@ -802,7 +820,13 @@ export function ResourceBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, res.rows]);
 
-  const selectedKey = kind === "pods" ? selectedPod?.name : otherDetail?.name;
+  const rowKeyOf = (r: { name: string; namespace?: string }) =>
+    r.namespace ? `${r.namespace}/${r.name}` : r.name;
+  const selectedKey =
+    kind === "pods"
+      ? selectedPod && rowKeyOf(selectedPod)
+      : otherDetail && rowKeyOf({ name: otherDetail.name, namespace: otherDetail.namespace ?? undefined });
+  const bulkEnabled = kind !== "events";
 
   // Merge live pod metrics into the pod rows, and restrict namespaced rows to
   // the selected namespaces (when watching all-namespaces for a multi-select).
@@ -824,6 +848,17 @@ export function ResourceBrowser({
     () => filterTableData(tableRows, visibleColumns, query, filterColumn),
     [visibleColumns, filterColumn, query, tableRows],
   );
+
+  // The selected rows that still exist (drop keys for rows that scrolled out of
+  // the current view / namespace / filter is fine — we act on what's known).
+  const bulkRows = useMemo(
+    () => tableRows.filter((r) => bulkKeys.has(rowKeyOf(r))),
+    // rowKeyOf is stable string work; deps intentionally on the inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tableRows, bulkKeys],
+  );
+  // Clear the selection whenever the underlying list changes shape.
+  useEffect(() => setBulkKeys(new Set()), [context, kind, watchNamespace, selectionKey]);
   const filterLabel = filterColumn
     ? visibleColumns.find((column) => column.key === filterColumn)?.header
     : null;
@@ -851,7 +886,7 @@ export function ResourceBrowser({
   ) : otherDetail ? (
     <>
       {otherDetail.kind === "Node" && (
-        <NodeCordonAction context={context} name={otherDetail.name} />
+        <NodeCordonAction context={context} name={otherDetail.name} onOpenShell={onOpenTerminal} />
       )}
       {otherDetail.kind === "Service" && (
         <ServiceForwardAction
@@ -883,14 +918,23 @@ export function ResourceBrowser({
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {nsError && <p className="px-3 py-2 text-sm text-destructive">Error: {nsError}</p>}
-        {!nsError && namespaces === null && (
+        {namespaces === null && (
           <div className="p-3">
             <Spinner label="Loading namespaces" />
           </div>
         )}
-        {!nsError && namespaces !== null && (
+        {namespaces !== null && (
           <>
+            {nsScope && (
+              <p className="px-3 py-1 text-xs text-muted-foreground" role="status">
+                Scoped to namespace {nsScope} — you don’t have permission to list all namespaces.
+              </p>
+            )}
+            {nsError && (
+              <p className="px-3 py-1 text-xs text-muted-foreground" role="status">
+                {describeError(nsError).title} — can’t list namespaces; showing all.
+              </p>
+            )}
             <Toolbar className="fl-resource-toolbar shrink-0 flex-wrap">
               {namespaced && (
                 <div className="fl-resource-toolbar__namespace flex items-center gap-2">
@@ -951,8 +995,24 @@ export function ResourceBrowser({
               )}
             </Toolbar>
 
+            {bulkEnabled && bulkRows.length > 0 && (
+              <BulkActionBar
+                context={context}
+                kind={K8S_KIND[kind]}
+                rows={bulkRows}
+                onClear={() => setBulkKeys(new Set())}
+                onDone={() => setReloadKey((k) => k + 1)}
+              />
+            )}
+
             <div className="min-h-0 flex-1 overflow-auto">
-              {res.error && <p className="px-3 py-2 text-sm text-destructive">Error: {res.error}</p>}
+              {res.error && (
+                <ErrorState
+                  title={describeError(res.error).title}
+                  detail={describeError(res.error).detail}
+                  onRetry={() => setReloadKey((k) => k + 1)}
+                />
+              )}
               {!res.error && res.loading && filtered.length === 0 && (
                 <LoadingState label={`Loading ${kind}`} />
               )}
@@ -960,8 +1020,9 @@ export function ResourceBrowser({
                 <Table
                   columns={visibleColumns}
                   data={filtered}
-                  getRowKey={(r) => r.name}
-                  selectedKey={selectedKey}
+                  getRowKey={rowKeyOf}
+                  selectedKey={selectedKey ?? undefined}
+                  selection={bulkEnabled ? { selected: bulkKeys, onChange: setBulkKeys } : undefined}
                   onRowClick={kind === "events" ? undefined : onRowClick}
                   activeFilterKey={filterColumn}
                   onActiveFilterKeyChange={setFilterColumn}

@@ -19,12 +19,14 @@ import {
   rolloutRestart,
   cronjobSetSuspend,
   cronjobTriggerNow,
+  debugPod,
 } from "../lib/actions";
 import { notify } from "../lib/notify";
+import { useAccess, rbac, kindToResource, denyReason, reportActionError, type AccessCheck } from "../lib/access";
 import { IconButton, ConfirmDialog, TextInput } from "../ui";
 import { ForwardDialog } from "./ForwardDialog";
 
-type Opener = (s: { context: string; namespace: string; pod: string }) => void;
+type Opener = (s: { context: string; namespace: string; pod: string; container?: string }) => void;
 
 const SCALABLE = ["Deployment", "StatefulSet", "ReplicaSet"];
 const RESTARTABLE = ["Deployment", "StatefulSet", "DaemonSet"];
@@ -47,9 +49,16 @@ export function PodActions({
   onOpenLogs?: Opener;
   onEdit?: () => void;
 }) {
-  const [dialog, setDialog] = useState<"delete" | "evict" | "forward" | null>(null);
+  const [dialog, setDialog] = useState<"delete" | "evict" | "forward" | "debug" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [debugImage, setDebugImage] = useState("busybox");
+  const [debugTarget, setDebugTarget] = useState("");
+
+  const deleteCheck = rbac.deletePod(pod.namespace);
+  const evictCheck = rbac.evictPod(pod.namespace);
+  const editCheck = rbac.edit("", "pods", pod.namespace);
+  const access = useAccess(context, [deleteCheck, evictCheck, editCheck]);
 
   const target = { context, namespace: pod.namespace, pod: pod.name };
 
@@ -60,12 +69,27 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
-      notify.error(`Failed to delete ${pod.name}`, out.error);
+      reportActionError(context, `Failed to delete ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
     notify.success(`Deleted pod ${pod.name}`);
     onDeleted?.();
+  }
+
+  async function doDebug() {
+    setBusy(true);
+    setError("");
+    const out = await debugPod(context, pod.namespace, pod.name, debugImage.trim() || "busybox", debugTarget.trim() || null);
+    setBusy(false);
+    if (out.error || !out.container) {
+      setError(out.error ?? "no container returned");
+      reportActionError(context, `Failed to debug ${pod.name}`, out.error ?? "");
+      return;
+    }
+    setDialog(null);
+    notify.success(`Debug container ${out.container} added to ${pod.name}`);
+    onOpenTerminal?.({ context, namespace: pod.namespace, pod: pod.name, container: out.container });
   }
 
   async function doEvict() {
@@ -75,7 +99,7 @@ export function PodActions({
     setBusy(false);
     if (out.error) {
       setError(out.error);
-      notify.error(`Failed to evict ${pod.name}`, out.error);
+      reportActionError(context, `Failed to evict ${pod.name}`, out.error);
       return;
     }
     setDialog(null);
@@ -87,11 +111,30 @@ export function PodActions({
     <>
       <IconButton icon={Logs} label="Logs" onClick={() => onOpenLogs?.(target)} />
       <IconButton icon={SquareTerminal} label="Shell" onClick={() => onOpenTerminal?.(target)} />
-      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
+      <IconButton
+        icon={Zap}
+        label="Debug"
+        title="Attach an ephemeral debug container"
+        onClick={() => {
+          setError("");
+          setDialog("debug");
+        }}
+      />
+      {onEdit && (
+        <IconButton
+          icon={Pencil}
+          label="Edit"
+          disabled={!access.allowed(editCheck)}
+          title={denyReason(access, editCheck)}
+          onClick={onEdit}
+        />
+      )}
       <IconButton icon={ArrowLeftRight} label="Forward" onClick={() => setDialog("forward")} />
       <IconButton
         icon={LogOut}
         label="Evict"
+        disabled={!access.allowed(evictCheck)}
+        title={denyReason(access, evictCheck)}
         onClick={() => {
           setError("");
           setDialog("evict");
@@ -101,6 +144,8 @@ export function PodActions({
         icon={Trash2}
         label="Delete"
         danger
+        disabled={!access.allowed(deleteCheck)}
+        title={denyReason(access, deleteCheck)}
         onClick={() => {
           setError("");
           setDialog("delete");
@@ -131,6 +176,38 @@ export function PodActions({
           danger
           busy={busy}
           onConfirm={() => void doDelete()}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog === "debug" && (
+        <ConfirmDialog
+          title="Attach debug container?"
+          message={
+            <>
+              <p style={{ marginTop: 0 }}>
+                Add an ephemeral debug container to <code>{pod.name}</code> and open a shell into
+                it. Ephemeral containers cannot be removed until the pod restarts.
+              </p>
+              <label className="fl-debug-field">
+                <span>Image</span>
+                <TextInput value={debugImage} onValueChange={setDebugImage} placeholder="busybox" aria-label="Debug image" />
+              </label>
+              <label className="fl-debug-field">
+                <span>Share process namespace with (optional)</span>
+                <TextInput
+                  value={debugTarget}
+                  onValueChange={setDebugTarget}
+                  placeholder="target container name"
+                  aria-label="Target container"
+                />
+              </label>
+              {error && <p className="text-destructive">Error: {error}</p>}
+            </>
+          }
+          confirmLabel="Attach & open shell"
+          danger
+          busy={busy}
+          onConfirm={() => void doDebug()}
           onCancel={() => setDialog(null)}
         />
       )}
@@ -216,6 +293,28 @@ export function ResourceActions({
   const [err, setErr] = useState("");
   const isCronJob = kind === "CronJob";
 
+  // `res` is null for an unknown/CRD kind we don't have a GVR mapping for —
+  // in that case leave controls enabled and let the API server stay the
+  // source of truth, rather than guessing at RBAC.
+  const res = kindToResource(kind);
+  const ns = namespace ?? "";
+  const deleteCheck = res ? rbac.deleteResource(res.group, res.resource, ns) : null;
+  const scaleCheck = res && SCALABLE.includes(kind) ? rbac.scale(res.group, res.resource, ns) : null;
+  const restartCheck =
+    res && RESTARTABLE.includes(kind) ? rbac.rolloutRestart(res.group, res.resource, ns) : null;
+  const editCheck = res && onEdit ? rbac.edit(res.group, res.resource, ns) : null;
+  const cronSuspendCheck = res && isCronJob ? rbac.cronjobSuspend(ns) : null;
+  const cronTriggerCheck = res && isCronJob ? rbac.cronjobTrigger(ns) : null;
+  const checks: AccessCheck[] = [
+    deleteCheck,
+    scaleCheck,
+    restartCheck,
+    editCheck,
+    cronSuspendCheck,
+    cronTriggerCheck,
+  ].filter((c): c is AccessCheck => c !== null);
+  const access = useAccess(context, checks);
+
   async function doSetSuspend() {
     setBusy("suspend");
     setErr("");
@@ -224,7 +323,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to ${resume ? "resume" : "suspend"} ${name}`, r.error);
+      reportActionError(context, `Failed to ${resume ? "resume" : "suspend"} ${name}`, r.error);
       return;
     }
     notify.success(`${resume ? "Resumed" : "Suspended"} ${name}`);
@@ -238,7 +337,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to run ${name}`, r.error);
+      reportActionError(context, `Failed to run ${name}`, r.error);
       return;
     }
     setTriggering(false);
@@ -253,7 +352,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to delete ${name}`, r.error);
+      reportActionError(context, `Failed to delete ${name}`, r.error);
       return;
     }
     setConfirmDelete(false);
@@ -273,7 +372,7 @@ export function ResourceActions({
     setBusy("");
     if (r.error) {
       setErr(r.error);
-      notify.error(`Failed to scale ${name}`, r.error);
+      reportActionError(context, `Failed to scale ${name}`, r.error);
       return;
     }
     setScaling(false);
@@ -287,7 +386,7 @@ export function ResourceActions({
     const r = await rolloutRestart(context, kind, namespace ?? "", name);
     setBusy("");
     if (r.error) {
-      notify.error(`Failed to restart ${name}`, r.error);
+      reportActionError(context, `Failed to restart ${name}`, r.error);
       return;
     }
     notify.success(`Rollout restart triggered for ${name}`);
@@ -303,30 +402,59 @@ export function ResourceActions({
           onClick={() => onOpenLogs({ context, namespace: namespace ?? "", kind, name })}
         />
       )}
-      {onEdit && <IconButton icon={Pencil} label="Edit" onClick={onEdit} />}
+      {onEdit && (
+        <IconButton
+          icon={Pencil}
+          label="Edit"
+          disabled={editCheck ? !access.allowed(editCheck) : false}
+          title={editCheck ? denyReason(access, editCheck) : undefined}
+          onClick={onEdit}
+        />
+      )}
       {SCALABLE.includes(kind) && (
-        <IconButton icon={Scaling} label="Scale" onClick={() => setScaling(true)} />
+        <IconButton
+          icon={Scaling}
+          label="Scale"
+          disabled={scaleCheck ? !access.allowed(scaleCheck) : false}
+          title={scaleCheck ? denyReason(access, scaleCheck) : undefined}
+          onClick={() => setScaling(true)}
+        />
       )}
       {RESTARTABLE.includes(kind) && (
         <IconButton
           icon={RotateCw}
           label="Restart"
-          disabled={busy === "restart"}
+          disabled={busy === "restart" || (restartCheck ? !access.allowed(restartCheck) : false)}
+          title={restartCheck ? denyReason(access, restartCheck) : undefined}
           onClick={() => void doRestart()}
         />
       )}
       {isCronJob && (
-        <IconButton icon={Zap} label="Run now" onClick={() => setTriggering(true)} />
+        <IconButton
+          icon={Zap}
+          label="Run now"
+          disabled={cronTriggerCheck ? !access.allowed(cronTriggerCheck) : false}
+          title={cronTriggerCheck ? denyReason(access, cronTriggerCheck) : undefined}
+          onClick={() => setTriggering(true)}
+        />
       )}
       {isCronJob && (
         <IconButton
           icon={cronjobSuspended ? Play : Pause}
           label={cronjobSuspended ? "Resume" : "Suspend"}
-          disabled={busy === "suspend"}
+          disabled={busy === "suspend" || (cronSuspendCheck ? !access.allowed(cronSuspendCheck) : false)}
+          title={cronSuspendCheck ? denyReason(access, cronSuspendCheck) : undefined}
           onClick={() => void doSetSuspend()}
         />
       )}
-      <IconButton icon={Trash2} label="Delete" danger onClick={() => setConfirmDelete(true)} />
+      <IconButton
+        icon={Trash2}
+        label="Delete"
+        danger
+        disabled={deleteCheck ? !access.allowed(deleteCheck) : false}
+        title={deleteCheck ? denyReason(access, deleteCheck) : undefined}
+        onClick={() => setConfirmDelete(true)}
+      />
 
       {triggering && (
         <ConfirmDialog

@@ -11,6 +11,7 @@ const {
   getManifestMock,
   getObjectMock,
   listResourceMock,
+  listContextsMock,
 } = vi.hoisted(() => ({
   listNamespacesMock: vi.fn(),
   podLogsMock: vi.fn(),
@@ -19,6 +20,7 @@ const {
   getManifestMock: vi.fn(),
   getObjectMock: vi.fn(),
   listResourceMock: vi.fn(),
+  listContextsMock: vi.fn(),
 }));
 vi.mock("../lib/workloads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/workloads")>();
@@ -37,6 +39,13 @@ vi.mock("../lib/manifest", async (importOriginal) => {
     getManifest: getManifestMock,
     getObject: getObjectMock,
     listResource: listResourceMock,
+  };
+});
+vi.mock("../lib/clusters", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/clusters")>();
+  return {
+    ...actual,
+    listContexts: listContextsMock,
   };
 });
 vi.mock("../lib/watch", () => ({
@@ -81,6 +90,22 @@ vi.mock("../ui/CodeEditor", () => ({
     <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange?.(e.target.value)} />
   ),
 }));
+// This suite doesn't exercise RBAC gating itself (see DetailActions.test.tsx
+// and NodeCordonAction.test.tsx for that); stub `useAccess` as always-allowed
+// so header actions stay enabled/clickable as they were before preflight
+// access checks existed.
+vi.mock("../lib/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/access")>();
+  return {
+    ...actual,
+    useAccess: () => ({
+      allowed: () => true,
+      reason: () => "",
+      known: () => true,
+      loading: false,
+    }),
+  };
+});
 
 import { ResourceBrowser } from "./ResourceBrowser";
 
@@ -110,6 +135,8 @@ beforeEach(() => {
   getObjectMock.mockReset();
   getObjectMock.mockResolvedValue({ object: { metadata: { name: "web" } } });
   listResourceMock.mockReset();
+  listContextsMock.mockReset();
+  listContextsMock.mockResolvedValue({ contexts: [] });
 });
 
 describe("ResourceBrowser", () => {
@@ -120,10 +147,61 @@ describe("ResourceBrowser", () => {
     render(<ResourceBrowser context="kind-dev" kind="pods" />);
 
     await waitFor(() => expect(screen.getByText("web-1")).toBeDefined());
-    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "pods", expect.any(Function), expect.any(Function));
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "pods", expect.any(Function), expect.any(Function), expect.any(Function), []);
     expect(screen.getByText("live")).toBeDefined();
     // The column picker is now available on every resource table, not just Nodes.
     expect(screen.getByRole("button", { name: "Choose columns" })).toBeDefined();
+  });
+
+  it("registers configured kubeconfig paths before building a client for the context", async () => {
+    // Regression: a restored tab for a context that lives in a PASTED/additional
+    // kubeconfig file must register that file's path (via listContexts) BEFORE it
+    // builds a client (listNamespaces / the watch). Otherwise build_client can't
+    // find the context and the first open fails with "failed to load current
+    // context" until a later call happens to set the paths.
+    const calls: string[] = [];
+    listContextsMock.mockImplementation(async (paths?: string[]) => {
+      calls.push(`listContexts:${JSON.stringify(paths)}`);
+      return { contexts: [] };
+    });
+    listNamespacesMock.mockImplementation(async () => {
+      calls.push("listNamespaces");
+      return { namespaces: ["default"] };
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "default", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+
+    render(
+      <ResourceBrowser
+        context="kind-dev"
+        kind="deployments"
+        kubeconfigFiles={["/some/pasted.yaml"]}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("web")).toBeDefined());
+
+    // The path registration (listContexts with the configured files) must run
+    // FIRST, and before the namespace list / client build.
+    const registerCall = `listContexts:${JSON.stringify(["/some/pasted.yaml"])}`;
+    expect(listContextsMock).toHaveBeenCalledWith(["/some/pasted.yaml"]);
+    const registerIdx = calls.indexOf(registerCall);
+    const nsIdx = calls.indexOf("listNamespaces");
+    expect(registerIdx).toBeGreaterThanOrEqual(0);
+    expect(nsIdx).toBeGreaterThanOrEqual(0);
+    expect(registerIdx).toBeLessThan(nsIdx);
+  });
+
+  it("does not register paths (skips listContexts) when no kubeconfig files are configured", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(watchWith([pod]));
+
+    render(<ResourceBrowser context="kind-dev" kind="pods" />);
+
+    await waitFor(() => expect(screen.getByText("web-1")).toBeDefined());
+    // With no additional files, the effect skips the path-registration pre-step.
+    expect(listContextsMock).not.toHaveBeenCalled();
   });
 
   it("hides a column via the picker on a non-node view and remembers it", async () => {
@@ -152,7 +230,7 @@ describe("ResourceBrowser", () => {
     render(<ResourceBrowser context="kind-dev" kind="deployments" />);
 
     await waitFor(() => expect(screen.getByText("web")).toBeDefined());
-    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "deployments", expect.any(Function), expect.any(Function));
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "deployments", expect.any(Function), expect.any(Function), expect.any(Function), []);
   });
 
   it("streams statefulsets live with the governing service column", async () => {
@@ -164,7 +242,7 @@ describe("ResourceBrowser", () => {
     render(<ResourceBrowser context="kind-dev" kind="statefulsets" />);
 
     await waitFor(() => expect(screen.getByText("pg")).toBeDefined());
-    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "statefulsets", expect.any(Function), expect.any(Function));
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "statefulsets", expect.any(Function), expect.any(Function), expect.any(Function), []);
     expect(screen.getByText("pg-headless")).toBeDefined();
   });
 
@@ -211,7 +289,7 @@ describe("ResourceBrowser", () => {
     render(<ResourceBrowser context="kind-dev" kind="cronjobs" />);
 
     await waitFor(() => expect(screen.getByText("nightly")).toBeDefined());
-    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "cronjobs", expect.any(Function), expect.any(Function));
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "cronjobs", expect.any(Function), expect.any(Function), expect.any(Function), []);
     expect(screen.getByText("0 2 * * *")).toBeDefined();
     expect(screen.getByText("Suspended")).toBeDefined();
   });
@@ -225,7 +303,7 @@ describe("ResourceBrowser", () => {
     render(<ResourceBrowser context="kind-dev" kind="configmaps" />);
 
     await waitFor(() => expect(screen.getByText("web-config")).toBeDefined());
-    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "configmaps", expect.any(Function), expect.any(Function));
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "configmaps", expect.any(Function), expect.any(Function), expect.any(Function), []);
     expect(screen.getByText("3")).toBeDefined();
   });
 
@@ -272,6 +350,8 @@ describe("ResourceBrowser", () => {
         "ingresses",
         expect.any(Function),
         expect.any(Function),
+        expect.any(Function),
+        [],
       ),
     );
     expect(await screen.findByText("web")).toBeDefined();
@@ -335,6 +415,8 @@ describe("ResourceBrowser", () => {
         "persistentvolumes",
         expect.any(Function),
         expect.any(Function),
+        expect.any(Function),
+        [],
       ),
     );
     expect(await screen.findByText("pv-123")).toBeDefined();
@@ -361,7 +443,7 @@ describe("ResourceBrowser", () => {
     watchResourceMock.mockImplementation(watchWith([{ name: "builder", namespace: "ci", secrets: 2, age: "3d" }]));
     render(<ResourceBrowser context="kind-dev" kind="serviceaccounts" />);
     await waitFor(() => expect(screen.getByText("builder")).toBeDefined());
-    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "serviceaccounts", expect.any(Function), expect.any(Function));
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "serviceaccounts", expect.any(Function), expect.any(Function), expect.any(Function), []);
     expect(screen.getByText("2")).toBeDefined();
   });
 
@@ -378,7 +460,7 @@ describe("ResourceBrowser", () => {
     watchResourceMock.mockImplementation(watchWith([{ name: "view", rules: 10, age: "9d" }]));
     render(<ResourceBrowser context="kind-dev" kind="clusterroles" />);
     await waitFor(() =>
-      expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "clusterroles", expect.any(Function), expect.any(Function)),
+      expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "clusterroles", expect.any(Function), expect.any(Function), expect.any(Function), []),
     );
     expect(await screen.findByText("view")).toBeDefined();
     expect(screen.getByText("10")).toBeDefined();
@@ -424,6 +506,8 @@ describe("ResourceBrowser", () => {
         "pods",
         expect.any(Function),
         expect.any(Function),
+        expect.any(Function),
+        [],
       ),
     );
 
@@ -440,6 +524,8 @@ describe("ResourceBrowser", () => {
         "pods",
         expect.any(Function),
         expect.any(Function),
+        expect.any(Function),
+        [],
       ),
     );
   });
@@ -636,17 +722,266 @@ describe("ResourceBrowser", () => {
     expect(screen.getByRole("columnheader", { name: /Roles/ })).toBeDefined();
   });
 
-  it("shows a namespace load error and does not watch", async () => {
-    listNamespacesMock.mockResolvedValue({ error: "forbidden: namespaces" });
-    render(<ResourceBrowser context="kind-dev" kind="pods" />);
-    await waitFor(() => expect(screen.getByText(/forbidden: namespaces/)).toBeDefined());
-    expect(watchResourceMock).not.toHaveBeenCalled();
+  it("keeps the workload view usable when the namespace list is forbidden (non-fatal)", async () => {
+    // A plain-user denial (not a ServiceAccount) with no declared namespace has
+    // nothing to scope to, so the generic non-fatal notice is what renders.
+    listNamespacesMock.mockResolvedValue({
+      error:
+        'handler error: ApiError: namespaces is forbidden: User "alice" cannot list resource "namespaces" in API group "" at the cluster scope: Forbidden (ErrorResponse { code: 403, reason: "Forbidden", message: "..." })',
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "default", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" />);
+
+    // The toolbar + resource list still render — this is a non-fatal notice,
+    // not a view-blocking error. The workload itself streams normally.
+    expect(await screen.findByRole("button", { name: "Refresh" })).toBeDefined();
+    expect(await screen.findByText("web")).toBeDefined();
+
+    // A small, friendly, non-blocking notice appears instead.
+    expect(screen.getByText(/Access denied/)).toBeDefined();
+    expect(screen.getByText(/can.t list namespaces/)).toBeDefined();
+
+    // The raw backend noise must not leak into the UI.
+    expect(screen.queryByText(/ErrorResponse \{/)).toBeNull();
+    expect(screen.queryByText(/handler error:/)).toBeNull();
+    expect(watchResourceMock).toHaveBeenCalledWith("kind-dev", "", "deployments", expect.any(Function), expect.any(Function), expect.any(Function), []);
   });
 
-  it("shows a resource load error for nodes", async () => {
+  it("scopes to the context's declared namespace when listing namespaces is forbidden", async () => {
+    listNamespacesMock.mockResolvedValue({
+      error:
+        'handler error: ApiError: namespaces is forbidden: User "system:serviceaccount:clavik-dev:viewer" cannot list resource "namespaces" in API group "" at the cluster scope: Forbidden (ErrorResponse { code: 403, reason: "Forbidden", message: "..." })',
+    });
+    listContextsMock.mockResolvedValue({
+      contexts: [
+        { name: "kind-dev", cluster: "kind-dev", server: "https://x", namespace: "clavik-dev" },
+        { name: "other-ctx", cluster: "other", server: "https://y", namespace: "team-b" },
+      ],
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "clavik-dev", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" />);
+
+    // Scoped straight to the credential's bound namespace, not "all".
+    expect(await screen.findByText(/Scoped to namespace clavik-dev/)).toBeDefined();
+    expect(await screen.findByText("web")).toBeDefined();
+    await waitFor(() =>
+      expect(watchResourceMock).toHaveBeenCalledWith(
+        "kind-dev",
+        "clavik-dev",
+        "deployments",
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+        [],
+      ),
+    );
+
+    // The namespace select reflects the scoped namespace.
+    expect(screen.getByRole("combobox", { name: "Namespace" }).textContent).toContain("clavik-dev");
+
+    // No raw backend noise leaks into the UI.
+    expect(screen.queryByText(/ErrorResponse \{/)).toBeNull();
+    expect(screen.queryByText(/handler error:/)).toBeNull();
+  });
+
+  it("scopes to the ServiceAccount namespace parsed from the error when the context declares none", async () => {
+    // Restricted kubeconfig that does NOT declare a namespace on the context —
+    // but the Forbidden message names the SA (system:serviceaccount:clavik-dev:…),
+    // whose namespace is the one the credential is bound to. Scope to it.
+    listNamespacesMock.mockResolvedValue({
+      error:
+        'handler error: ApiError: namespaces is forbidden: User "system:serviceaccount:clavik-dev:clavik-dev" cannot list resource "namespaces" in API group "" at the cluster scope: Forbidden (ErrorResponse { code: 403, reason: "Forbidden", message: "..." })',
+    });
+    listContextsMock.mockResolvedValue({
+      contexts: [{ name: "kind-dev", cluster: "kind-dev", server: "https://x", namespace: "" }],
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "clavik-dev", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" />);
+
+    // Scoped to the SA's namespace, not "all", and not the generic notice.
+    expect(await screen.findByText(/Scoped to namespace clavik-dev/)).toBeDefined();
+    expect(screen.queryByText(/can.t list namespaces; showing all/)).toBeNull();
+    expect(await screen.findByText("web")).toBeDefined();
+    await waitFor(() =>
+      expect(watchResourceMock).toHaveBeenCalledWith(
+        "kind-dev",
+        "clavik-dev",
+        "deployments",
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+        [],
+      ),
+    );
+    expect(screen.getByRole("combobox", { name: "Namespace" }).textContent).toContain("clavik-dev");
+  });
+
+  it("falls back to the generic non-fatal notice when the context has no declared namespace", async () => {
+    // A non-service-account denial (plain user) with no declared namespace has
+    // nothing to scope to — fall through to the generic "showing all" notice.
+    listNamespacesMock.mockResolvedValue({
+      error:
+        'handler error: ApiError: namespaces is forbidden: User "alice" cannot list resource "namespaces" in API group "" at the cluster scope: Forbidden (ErrorResponse { code: 403, reason: "Forbidden", message: "..." })',
+    });
+    listContextsMock.mockResolvedValue({
+      contexts: [{ name: "kind-dev", cluster: "kind-dev", server: "https://x", namespace: "" }],
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "default", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" />);
+
+    expect(await screen.findByText(/Access denied/)).toBeDefined();
+    expect(screen.getByText(/can.t list namespaces; showing all/)).toBeDefined();
+    expect(screen.queryByText(/Scoped to namespace/)).toBeNull();
+    await waitFor(() =>
+      expect(watchResourceMock).toHaveBeenCalledWith(
+        "kind-dev",
+        "",
+        "deployments",
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+        [],
+      ),
+    );
+  });
+
+  it("looks up the context's declared namespace using the CONFIGURED kubeconfig files when scoping a forbidden view", async () => {
+    // A restricted context that lives in a PASTED/additional kubeconfig file:
+    // its declared namespace is only discoverable when listContexts is passed
+    // the configured file paths. A bare listContexts() wouldn't find it, so the
+    // scoping lookup must forward `kubeconfigFiles`.
+    listNamespacesMock.mockResolvedValue({
+      error:
+        'handler error: ApiError: namespaces is forbidden: User "system:serviceaccount:clavik-dev:viewer" cannot list resource "namespaces" in API group "" at the cluster scope: Forbidden (ErrorResponse { code: 403, reason: "Forbidden", message: "..." })',
+    });
+    // The context's declared namespace (team-a) is ONLY returned when the paths
+    // are provided; a bare call yields nothing (and would fall back to the SA's
+    // namespace, clavik-dev, parsed from the error).
+    listContextsMock.mockImplementation(async (paths?: string[]) => {
+      if (paths && paths.length) {
+        return { contexts: [{ name: "kind-dev", cluster: "kind-dev", server: "https://x", namespace: "team-a" }] };
+      }
+      return { contexts: [] };
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "team-a", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" kubeconfigFiles={["/some/pasted.yaml"]} />);
+
+    // Scoped to the DECLARED namespace (found via the configured files), not the
+    // SA fallback — proving listContexts was called WITH the kubeconfig paths.
+    expect(await screen.findByText(/Scoped to namespace team-a/)).toBeDefined();
+    expect(screen.queryByText(/Scoped to namespace clavik-dev/)).toBeNull();
+    expect(listContextsMock).toHaveBeenCalledWith(["/some/pasted.yaml"]);
+    expect(listContextsMock).not.toHaveBeenCalledWith();
+  });
+
+  it("shows a friendly ErrorState (not raw text) when the resource list itself is forbidden", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["prod"] });
+    listResourceMock.mockResolvedValue({
+      error:
+        'handler error: ApiError: endpoints is forbidden: User "system:serviceaccount:prod:viewer" cannot list resource "endpoints" in API group "" in the namespace "prod": Forbidden (ErrorResponse { code: 403, reason: "Forbidden", message: "..." })',
+    });
+    render(<ResourceBrowser context="kind-dev" kind="endpoints" />);
+
+    // Friendly, actionable title + detail via describeError/describeForbidden.
+    expect(await screen.findByText("Access denied")).toBeDefined();
+    expect(
+      screen.getByText("You don't have permission to list endpoints in prod."),
+    ).toBeDefined();
+
+    // No raw ApiError/ErrorResponse/handler-error noise anywhere in the DOM.
+    expect(screen.queryByText(/handler error:/)).toBeNull();
+    expect(screen.queryByText(/ErrorResponse \{/)).toBeNull();
+  });
+
+  it("shows a friendly namespace load error notice and still watches (non-fatal)", async () => {
+    listNamespacesMock.mockResolvedValue({ error: "forbidden: namespaces" });
+    watchResourceMock.mockImplementation(watchWith([pod]));
+    render(<ResourceBrowser context="kind-dev" kind="pods" />);
+    // The raw error string is no longer rendered verbatim; a friendly notice
+    // replaces it, and the resource view still renders/watches normally.
+    expect(await screen.findByText(/Access denied/)).toBeDefined();
+    expect(screen.queryByText(/^Error: forbidden: namespaces$/)).toBeNull();
+    await waitFor(() => expect(watchResourceMock).toHaveBeenCalled());
+  });
+
+  it("shows the REAL error (not a permission message) when listing namespaces fails for a non-403 reason", async () => {
+    // A genuine outage (timeout) must NOT be mischaracterized as an RBAC
+    // restriction: the notice reflects the real error, no "you don't have
+    // permission" wording, and it does NOT auto-scope to the context namespace.
+    listNamespacesMock.mockResolvedValue({ error: "list namespaces timed out" });
+    listContextsMock.mockResolvedValue({
+      contexts: [{ name: "kind-dev", cluster: "kind-dev", server: "https://x", namespace: "clavik-dev" }],
+    });
+    watchResourceMock.mockImplementation(
+      watchWith([{ name: "web", namespace: "default", ready: "1/1", upToDate: 1, available: 1 }]),
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" />);
+
+    // The real error's title surfaces (timeout → "Can't reach the cluster").
+    expect(await screen.findByText(/Can't reach the cluster/)).toBeDefined();
+    // Not the permission wording, and not auto-scoped to the declared namespace.
+    expect(screen.queryByText(/don.t have permission/)).toBeNull();
+    expect(screen.queryByText(/Scoped to namespace/)).toBeNull();
+    // Still non-fatal: the workload streams across all namespaces.
+    expect(await screen.findByText("web")).toBeDefined();
+    await waitFor(() =>
+      expect(watchResourceMock).toHaveBeenCalledWith(
+        "kind-dev",
+        "",
+        "deployments",
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function),
+        [],
+      ),
+    );
+  });
+
+  it("surfaces a permanent watch error instead of hanging on Loading", async () => {
+    // A namespace-scoped credential doing an all-namespaces watch gets a 403
+    // that never self-heals. The watch emits it via onError; the view must stop
+    // loading and show the friendly access-denied message (not a perpetual spinner).
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(
+      (
+        _ctx: string,
+        _ns: string,
+        _kind: string,
+        _onRows: (r: unknown) => void,
+        _onStatus: (s: unknown) => void,
+        onError: (e: string) => void,
+      ) => {
+        onError(
+          'watch deployments is forbidden: User "system:serviceaccount:prod:viewer" cannot watch resource "deployments" in API group "apps" in the namespace "prod": Forbidden',
+        );
+        return Promise.resolve({ stop: vi.fn() });
+      },
+    );
+    render(<ResourceBrowser context="kind-dev" kind="deployments" />);
+
+    // Friendly, actionable access-denied error surfaces…
+    expect(await screen.findByText("Access denied")).toBeDefined();
+    // …and the perpetual loading spinner is gone.
+    expect(screen.queryByText("Loading deployments")).toBeNull();
+    // No raw backend noise leaks.
+    expect(screen.queryByText(/Forbidden$/)).toBeNull();
+  });
+
+  it("shows a friendly resource load error for nodes", async () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
     listNodesMock.mockResolvedValue({ error: "list nodes timed out" });
     render(<ResourceBrowser context="kind-dev" kind="nodes" />);
-    await waitFor(() => expect(screen.getByText(/list nodes timed out/)).toBeDefined());
+    await waitFor(() => expect(screen.getByText("Can't reach the cluster")).toBeDefined());
+    expect(screen.queryByText(/list nodes timed out/)).toBeNull();
   });
 });

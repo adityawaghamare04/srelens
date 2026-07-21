@@ -21,27 +21,35 @@ import {
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { yaml } from "@codemirror/lang-yaml";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
-import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
-import { parseDocument } from "yaml";
+import { autocompletion, completionKeymap, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
+import { parseAllDocuments } from "yaml";
 import { tags as t } from "@lezer/highlight";
 import type { SchemaBundle } from "../lib/schema";
 import { extractApiVersionKind, pathAtCursor, fieldCompletions, valueCompletions } from "../lib/schemaComplete";
 
-/** Parse YAML and return syntax errors/warnings as diagnostics. Pure + tested. */
+/**
+ * Parse YAML (one or more `---`-separated documents) and return syntax
+ * errors/warnings across ALL documents as diagnostics. The `yaml` package
+ * reports absolute offsets into the full source, so ranges from later
+ * documents still land correctly without any per-document adjustment.
+ * Pure + tested.
+ */
 export function yamlDiagnostics(text: string): Diagnostic[] {
   const len = text.length;
   if (!text.trim()) return [];
   const clamp = (n: number) => Math.max(0, Math.min(n, len));
   try {
-    const doc = parseDocument(text, { prettyErrors: false });
+    const docs = parseAllDocuments(text, { prettyErrors: false });
     const asDiag = (issue: { pos?: [number, number, number?]; message: string }, severity: "error" | "warning"): Diagnostic => {
       const [from, to] = issue.pos ?? [0, 1];
       return { from: clamp(from), to: Math.max(clamp(to), clamp(from) + 1), severity, message: issue.message };
     };
-    return [
-      ...doc.errors.map((e) => asDiag(e, "error")),
-      ...doc.warnings.map((w) => asDiag(w, "warning")),
-    ];
+    const diagnostics: Diagnostic[] = [];
+    for (const doc of docs) {
+      diagnostics.push(...doc.errors.map((e) => asDiag(e, "error")));
+      diagnostics.push(...doc.warnings.map((w) => asDiag(w, "warning")));
+    }
+    return diagnostics;
   } catch (e) {
     return [{ from: 0, to: len, severity: "error", message: String(e) }];
   }
@@ -77,32 +85,38 @@ function extractFieldPaths(message: string): string[] {
  * in the YAML, else at the top of the document — so the error is always shown.
  * Pure + tested.
  */
-export function k8sDiagnostics(text: string, messages: string[]): Diagnostic[] {
-  if (!messages.length || !text.trim()) return [];
+export function k8sDiagnostics(text: string, errors: Array<{ docIndex: number; message: string }>): Diagnostic[] {
+  if (!errors.length || !text.trim()) return [];
   const len = text.length;
-  let doc: ReturnType<typeof parseDocument> | null = null;
+  const clamp = (n: number) => Math.max(0, Math.min(n, len));
+  let docs: ReturnType<typeof parseAllDocuments> = [];
   try {
-    doc = parseDocument(text);
+    // Match the backend's split (which skips empty documents) so docIndex aligns.
+    docs = parseAllDocuments(text).filter((d) => d.contents != null);
   } catch {
-    doc = null;
+    docs = [];
   }
-  const topTo = Math.max(1, text.indexOf("\n") === -1 ? len : text.indexOf("\n"));
   const diagnostics: Diagnostic[] = [];
-  for (const message of messages) {
+  for (const { docIndex, message } of errors) {
+    const doc = docs[docIndex];
     const ranges = doc
       ? extractFieldPaths(message)
           .map((p) => {
-            const node = doc!.getIn(fieldSegments(p), true) as { range?: [number, number] } | undefined;
+            const node = doc.getIn(fieldSegments(p), true) as { range?: [number, number] } | undefined;
             return node?.range ? ([node.range[0], node.range[1]] as [number, number]) : null;
           })
           .filter((r): r is [number, number] => !!r)
       : [];
     if (ranges.length) {
       for (const [from, to] of ranges) {
-        diagnostics.push({ from, to: Math.max(to, from + 1), severity: "error", message });
+        diagnostics.push({ from: clamp(from), to: Math.max(clamp(to), clamp(from) + 1), severity: "error", message });
       }
     } else {
-      diagnostics.push({ from: 0, to: topTo, severity: "error", message });
+      // Fall back to the START of the target document (not the whole-text top).
+      const docStart = (doc?.contents as { range?: [number, number] } | undefined)?.range?.[0] ?? 0;
+      const nl = text.indexOf("\n", docStart);
+      const to = nl === -1 ? len : nl;
+      diagnostics.push({ from: clamp(docStart), to: Math.max(clamp(to), clamp(docStart) + 1), severity: "error", message });
     }
   }
   return diagnostics;
@@ -162,13 +176,41 @@ function editorTheme(minHeight: number, maxHeight: number, fill: boolean) {
     },
     ".cm-panels": { backgroundColor: "var(--fl-color-surface)", color: "var(--fl-color-text)" },
     ".cm-searchMatch": { backgroundColor: "rgba(210, 153, 34, 0.3)" },
+    ".cm-tooltip": { maxWidth: "480px" },
     ".cm-tooltip.cm-tooltip-lint": {
       backgroundColor: "var(--fl-color-surface)",
       border: "1px solid var(--fl-color-border)",
       borderRadius: "var(--fl-radius-md)",
+      boxShadow: "0 4px 16px rgba(0, 0, 0, 0.18)",
+      color: "var(--fl-color-text)",
+      maxWidth: "480px",
+    },
+    ".cm-diagnostic": {
+      padding: "6px 10px",
+      whiteSpace: "normal",
+      maxHeight: "240px",
+      overflowY: "auto",
+      fontSize: "12px",
+      lineHeight: "1.45",
+    },
+    ".cm-diagnostic-error": { borderLeft: "3px solid var(--fl-color-danger)" },
+    ".cm-tooltip.cm-tooltip-autocomplete": {
+      backgroundColor: "var(--fl-color-surface)",
+      border: "1px solid var(--fl-color-border)",
+      borderRadius: "var(--fl-radius-md)",
+      boxShadow: "0 4px 16px rgba(0, 0, 0, 0.18)",
+    },
+    ".cm-tooltip-autocomplete > ul > li": {
+      padding: "2px 8px",
+      fontFamily: "var(--fl-font-mono)",
+      fontSize: "12px",
       color: "var(--fl-color-text)",
     },
-    ".cm-diagnostic": { padding: "3px 8px" },
+    ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+      backgroundColor: "var(--fl-color-accent)",
+      color: "#fff",
+    },
+    ".cm-completionDetail": { color: "var(--fl-color-text-muted)", fontStyle: "italic", marginLeft: "6px" },
     ".cm-lint-marker": { width: "0.9em", height: "0.9em" },
   });
 }
@@ -189,7 +231,7 @@ export interface CodeEditorProps {
    * error messages (empty = valid). Wired to `k8s.validateManifest`. When set,
    * the editor lints against the API server in addition to YAML syntax.
    */
-  schemaValidate?: (yaml: string) => Promise<string[]>;
+  schemaValidate?: (yaml: string) => Promise<Array<{ docIndex: number; message: string }>>;
   /**
    * k8s field autocomplete: resolve the OpenAPI schema for a kind (wired to
    * `k8s.openApiSchema`). When set, the editor offers field-name and enum-value
@@ -242,7 +284,7 @@ export function CodeEditor({
       indentOnInput(),
       bracketMatching(),
       highlightSelectionMatches(),
-      keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
+      keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
       editorTheme(minHeight, maxHeight, fill),
       syntaxHighlighting(highlightStyle),
       EditorView.editable.of(!readOnly),

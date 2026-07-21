@@ -43,6 +43,7 @@ describe("watchResource", () => {
       namespace: "default",
       kind: "deployments",
       channel: subscribedChannel,
+      kubeconfigPaths: [],
     });
 
     // Array payloads are snapshots; `{status}` objects drive the status callback.
@@ -55,6 +56,47 @@ describe("watchResource", () => {
     handle.stop();
     expect(dispose).toHaveBeenCalled();
     expect(invokeCommandMock).toHaveBeenCalledWith("stop_watch", { channel: subscribedChannel });
+  });
+
+  it("passes the kubeconfig files to the backend as kubeconfigPaths", async () => {
+    let subscribedChannel = "";
+    subscribeMock.mockImplementation(async (ch: string) => {
+      subscribedChannel = ch;
+      return vi.fn();
+    });
+    invokeCommandMock.mockResolvedValue(undefined);
+
+    await watchResource("kind-dev", "default", "pods", vi.fn(), undefined, undefined, [
+      "/some/pasted.yaml",
+    ]);
+
+    expect(invokeCommandMock).toHaveBeenCalledWith("start_resource_watch", {
+      context: "kind-dev",
+      namespace: "default",
+      kind: "pods",
+      channel: subscribedChannel,
+      kubeconfigPaths: ["/some/pasted.yaml"],
+    });
+  });
+
+  it("routes an { error } payload to onError (permanent watch failure)", async () => {
+    let captured: ((payload: unknown) => void) | undefined;
+    subscribeMock.mockImplementation(async (_ch: string, handler: (p: unknown) => void) => {
+      captured = handler;
+      return vi.fn();
+    });
+    invokeCommandMock.mockResolvedValue(undefined);
+    const onRows = vi.fn();
+    const onStatus = vi.fn();
+    const onError = vi.fn();
+
+    await watchResource("kind-dev", "", "pods", onRows, onStatus, onError);
+
+    captured?.({ error: "watch pods is forbidden: User cannot watch" });
+    expect(onError).toHaveBeenCalledWith("watch pods is forbidden: User cannot watch");
+    // An error is neither a snapshot nor a status transition.
+    expect(onRows).not.toHaveBeenCalled();
+    expect(onStatus).not.toHaveBeenCalled();
   });
 
   it("sanitizes illegal characters in the channel name (Tauri event constraint)", async () => {
@@ -77,6 +119,7 @@ describe("watchResource", () => {
       namespace: "kube-system",
       kind: "pods",
       channel: subscribedChannel,
+      kubeconfigPaths: [],
     });
   });
 

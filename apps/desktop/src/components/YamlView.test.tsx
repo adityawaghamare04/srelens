@@ -25,6 +25,16 @@ vi.mock("../ui/CodeEditor", () => ({
     <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange?.(e.target.value)} />
   ),
 }));
+// ManifestEditor gates Apply (fail-closed) on a preflight access check in edit
+// mode; stub the hook to "allowed" so these tests exercise the apply flow
+// rather than the RBAC gate (covered in ManifestEditor.test.tsx).
+vi.mock("../lib/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/access")>();
+  return {
+    ...actual,
+    useAccess: () => ({ allowed: () => true, reason: () => "", known: () => true, loading: false }),
+  };
+});
 
 import { YamlView } from "./YamlView";
 
@@ -53,7 +63,10 @@ describe("YamlView", () => {
 
   it("edits and applies the manifest behind a confirm", async () => {
     getManifestMock.mockResolvedValue({ yaml: "kind: ConfigMap\n" });
-    applyManifestMock.mockResolvedValue({ applied: true, kind: "ConfigMap", name: "cm" });
+    applyManifestMock.mockResolvedValue({
+      applied: true,
+      documents: [{ kind: "ConfigMap", name: "cm", applied: true }],
+    });
     render(<YamlView context="kind-dev" kind="ConfigMap" namespace="default" name="cm" />);
 
     const textarea = await screen.findByLabelText("Manifest YAML");
@@ -68,7 +81,7 @@ describe("YamlView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     await waitFor(() =>
-      expect(applyManifestMock).toHaveBeenCalledWith("kind-dev", "kind: ConfigMap\ndata:\n  k: v\n"),
+      expect(applyManifestMock).toHaveBeenCalledWith("kind-dev", "kind: ConfigMap\ndata:\n  k: v\n", false),
     );
   });
 });

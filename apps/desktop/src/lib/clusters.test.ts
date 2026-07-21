@@ -13,6 +13,14 @@ describe("listContexts", () => {
     expect(outcome.contexts?.[0].name).toBe("kind-dev");
   });
 
+  it("passes through the context's declared namespace", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      contexts: [{ name: "team-a-ctx", cluster: "c", server: "https://x", namespace: "team-a" }],
+    });
+    const outcome = await listContexts(["/tmp/extra"], invoke);
+    expect(outcome.contexts?.[0].namespace).toBe("team-a");
+  });
+
   it("returns a normalised error on failure", async () => {
     const outcome = await listContexts([], () =>
       Promise.reject(new Error("read kubeconfig: not found")),

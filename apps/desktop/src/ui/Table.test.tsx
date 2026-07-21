@@ -158,3 +158,49 @@ describe("Table", () => {
     expect(header?.closest("table")?.style.width).toBe("");
   });
 });
+
+describe("Table multi-selection", () => {
+  const cols: Column<{ name: string }>[] = [{ key: "name", header: "Name" }];
+  const rows = [{ name: "a" }, { name: "b" }, { name: "c" }, { name: "d" }];
+
+  function renderWithSelection(selected = new Set<string>()) {
+    const onChange = vi.fn();
+    const utils = render(
+      <Table
+        columns={cols}
+        data={rows}
+        getRowKey={(r) => r.name}
+        selection={{ selected, onChange }}
+      />,
+    );
+    return { onChange, ...utils };
+  }
+
+  it("toggles a single row", () => {
+    const { onChange } = renderWithSelection();
+    fireEvent.click(screen.getByLabelText("Select b"));
+    expect([...onChange.mock.calls[0][0]]).toEqual(["b"]);
+  });
+
+  it("select-all header selects every (filtered) row", () => {
+    const { onChange } = renderWithSelection();
+    fireEvent.click(screen.getByLabelText("Select all"));
+    expect([...onChange.mock.calls[0][0]].sort()).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("shift-click selects the range from the anchor", () => {
+    const { onChange, rerender } = renderWithSelection();
+    fireEvent.click(screen.getByLabelText("Select a")); // anchor = a
+    const selected = onChange.mock.calls[0][0] as Set<string>;
+    rerender(
+      <Table columns={cols} data={rows} getRowKey={(r) => r.name} selection={{ selected, onChange }} />,
+    );
+    fireEvent.click(screen.getByLabelText("Select c"), { shiftKey: true });
+    expect([...onChange.mock.calls[1][0]].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("header checkbox is checked when all rows are selected", () => {
+    renderWithSelection(new Set(["a", "b", "c", "d"]));
+    expect((screen.getByLabelText("Select all") as HTMLInputElement).checked).toBe(true);
+  });
+});

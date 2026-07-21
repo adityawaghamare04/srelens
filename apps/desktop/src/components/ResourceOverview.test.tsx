@@ -32,6 +32,15 @@ vi.mock("../lib/rbac", () => ({
   podsForServiceAccount: podsForServiceAccountMock,
 }));
 
+// Access gating is preflighted via useAccess; mock it so the ConfigMap/Secret
+// data editor tests control whether Save is permitted. Default: allowed, so the
+// existing behavioural tests keep exercising the enabled Save path.
+vi.mock("../lib/access", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/access")>();
+  return { ...actual, useAccess: vi.fn() };
+});
+import { useAccess } from "../lib/access";
+
 import {
   ResourceOverview,
   ObjectDetail,
@@ -52,6 +61,12 @@ beforeEach(() => {
   podsForPvcMock.mockResolvedValue({ pods: [] });
   bindingsForServiceAccountMock.mockResolvedValue({ bindings: [] });
   podsForServiceAccountMock.mockResolvedValue({ pods: [] });
+  vi.mocked(useAccess).mockReturnValue({
+    allowed: () => true,
+    reason: () => "",
+    known: () => true,
+    loading: false,
+  });
 });
 const TLS_CERTIFICATE = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPakNDQWlLZ0F3SUJBZ0lVSjVQdnk1NXRIbUhESkd3elhNVld2YnV4ck5nd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01aWGhoYlhCc1pTNTBaWE4wTUI0WERUSTJNRGN3TmpFeE1qazFOVm9YRFRNMgpNRGN3TXpFeE1qazFOVm93RnpFVk1CTUdBMVVFQXd3TVpYaGhiWEJzWlM1MFpYTjBNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFzeFc2aHU0MVVwYittNXpHZm5aZ2tpT0xuaVhYTmhPYzhvTWgKaFZCcDVXL0Y5aXluelBGQjRGM0NOK2VlaEp1aVhYWHVFUWdQUVFqOVIrV3ErYlBUK1JPOHd6cEJqQ1BYaHo1TAp2Z0dzNDR1cXBQQ2JvUXVpV0RYcmZDWWtUT2xyd0tIZWJDcVRRM2FQUk1hUGk0YkhzRHdNdmlUcDRhMERGVTFWCkhGc2RXcHM0Uis3TG1MSXBhU3RUTTV1bU1qSC9FTzJGZ2psQmhYUUVGT1M0UnZ2WGpoV0E1ZGZiMEtwNUVSNFIKZjFGdktCRTNaTzVmbG5ldlFlTGdyMnZZT2Jhalg5OTQ1NVE0L1UwMTJJZG1ldWV4L2Q1ZU5VV0VNelprZzlrUQp1U00vMFpwbkhEVFU4UXZQTHh0Qy9jSlU1ekdKMzM0ZnppTGVmQUlpbDR2NFRvVzBQd0lEQVFBQm8zNHdmREFkCkJnTlZIUTRFRmdRVWxadEVndTl1L3ZTTVptSmNNa2RUcWhWVmJDSXdId1lEVlIwakJCZ3dGb0FVbFp0RWd1OXUKL3ZTTVptSmNNa2RUcWhWVmJDSXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QXBCZ05WSFJFRUlqQWdnZ3hsZUdGdApjR3hsTG5SbGMzU0NFSGQzZHk1bGVHRnRjR3hsTG5SbGMzUXdEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBR2svCnp6cGhUNnRuNCtxUXg5Ly9meWNkSzFtNjg1eW1TRFZqT3ZXeWRQaWg4RzI4OUJkQ1BmYlc4ZVVrOXJqakJVZWcKR1k5OUJMcEhvcW9zZDNVWEhOUDJzWUdnZ0dZOG40QXdSbFFWZi9qajBPenVWUzZpS0FDM1ZXWFBtdGk5Q1JQZwpHVkdaR0VZMWI1SXYwVStaSzBjYlJ6c1NSN0FBN05VWGhTUUg0NjJDQlpJa1JSTXNFcVhSV2huUG5Kd3phLzJJCmJ1REdiTG1WMmhRUTdJeWJtb0FpL1FQVUM5WldrMExOV2pGYlpDa0kvem4wd2QxWVhham1iTHBSV0dsTjR1LzcKL2NDSER6NDNyWTZXeHJNRjVwYkJ5aWcvWk5obUVZK25rSFhwK2ZoRFdZOGV1QVVxT1p4bUQrNFIzL2lPQ2dhYgpsVWMzUnNCdmExVjNSbFB6K0pvPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==";
 
@@ -208,6 +223,28 @@ describe("ObjectDetail (Pod)", () => {
     fireEvent.click(screen.getByRole("button", { name: /2 Labels/ }));
     expect(screen.getByText("tier")).toBeDefined();
     expect(screen.getByText("frontend")).toBeDefined();
+  });
+
+  it("collapses labels and annotations for generic kinds (e.g. Node) too", () => {
+    const node: K8sObject = {
+      metadata: {
+        name: "worker-1",
+        creationTimestamp: "2026-01-01T00:00:00Z",
+        labels: { "beta.kubernetes.io/arch": "amd64", "kubernetes.io/os": "linux", role: "worker" },
+        annotations: { "node.alpha.kubernetes.io/ttl": "0" },
+      },
+      spec: {},
+      status: {},
+    };
+    render(<ObjectDetail kind="Node" obj={node} now={NOW} />);
+
+    // Collapsed by default — the count toggle shows, the chip values don't.
+    expect(screen.getByText("3 Labels")).toBeDefined();
+    expect(screen.getByText("1 Annotation")).toBeDefined();
+    expect(screen.queryByText("beta.kubernetes.io/arch")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /3 Labels/ }));
+    expect(screen.getByText("beta.kubernetes.io/arch")).toBeDefined();
   });
 
   it("shows real volume sources and opens linked resources", () => {
@@ -496,6 +533,59 @@ describe("ObjectDetail (ConfigMap / Secret)", () => {
         "app.conf": "level=debug",
       }),
     );
+  });
+
+  it("disables Save and explains why when the user can't update the ConfigMap", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => false,
+      reason: () => "RBAC: no rule",
+      known: () => true,
+      loading: false,
+    });
+    const cm: K8sObject = {
+      kind: "ConfigMap",
+      metadata: { name: "web-config", namespace: "prod" },
+      data: { "app.conf": "level=info" },
+    };
+    render(<ObjectDetail kind="ConfigMap" obj={cm} now={NOW} context="kind-dev" />);
+    fireEvent.change(screen.getByLabelText("Value for app.conf"), { target: { value: "level=debug" } });
+    const save = screen.getByRole("button", { name: "Save" });
+    expect((save as HTMLButtonElement).disabled).toBe(true);
+    expect(save.getAttribute("title")).toEqual(expect.stringContaining("permission to update configmaps in prod"));
+  });
+
+  it("enables Save when the user can update the ConfigMap", () => {
+    vi.mocked(useAccess).mockReturnValue({
+      allowed: () => true,
+      reason: () => "",
+      known: () => true,
+      loading: false,
+    });
+    const cm: K8sObject = {
+      kind: "ConfigMap",
+      metadata: { name: "web-config", namespace: "prod" },
+      data: { "app.conf": "level=info" },
+    };
+    render(<ObjectDetail kind="ConfigMap" obj={cm} now={NOW} context="kind-dev" />);
+    fireEvent.change(screen.getByLabelText("Value for app.conf"), { target: { value: "level=debug" } });
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("shows a friendly message (not the raw error) when a ConfigMap save fails", async () => {
+    updateConfigDataMock.mockResolvedValue({ error: "configmaps is forbidden: cannot update" });
+    const cm: K8sObject = {
+      kind: "ConfigMap",
+      metadata: { name: "web-config", namespace: "prod" },
+      data: { "app.conf": "level=info" },
+    };
+    render(<ObjectDetail kind="ConfigMap" obj={cm} now={NOW} context="kind-dev" />);
+    fireEvent.change(screen.getByLabelText("Value for app.conf"), { target: { value: "level=debug" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.getByText(/permission|RBAC roles/i)).toBeDefined(),
+    );
+    // The raw apiserver string is not shown verbatim.
+    expect(screen.queryByText(/is forbidden: cannot update/)).toBeNull();
   });
 
   it("shows parsed TLS certificate metadata without revealing material", async () => {

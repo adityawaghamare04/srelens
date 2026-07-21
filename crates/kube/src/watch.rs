@@ -110,6 +110,16 @@ impl WatchStatus {
     }
 }
 
+/// A watcher error that will never self-heal (an RBAC Forbidden denial) —
+/// surface it and stop, instead of reconnecting forever.
+fn is_permanent_watch_error(msg: &str) -> bool {
+    // Only a Forbidden (RBAC) denial is stable and won't self-heal. 401/token
+    // expiry IS recoverable (kube-rs refreshes creds and re-lists), so we keep
+    // reconnecting on it; and matching bare "401"/"403" substrings risks false
+    // positives (e.g. an id or byte count containing those digits).
+    msg.to_ascii_lowercase().contains("forbidden")
+}
+
 /// Generic watch loop: stream `K`, summarise to `T`, key by `key_of`, call
 /// `on_update` with a full snapshot on every change, and `on_status` on
 /// connection transitions.
@@ -155,7 +165,13 @@ where
                     on_update(snapshot(&state));
                 }
             }
-            Err(_) => {
+            Err(e) => {
+                let msg = e.to_string();
+                if is_permanent_watch_error(&msg) {
+                    // Auth/authz failures never self-heal: stop and surface the
+                    // error so the caller can emit it to the UI.
+                    return Err(msg);
+                }
                 // Transient: the watcher backs off and re-lists internally. Flag
                 // the UI once per outage, then keep consuming.
                 if !reconnecting {
@@ -755,5 +771,32 @@ mod tests {
         let snap = snapshot(&state);
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].name, "b");
+    }
+
+    #[test]
+    fn only_forbidden_is_a_permanent_watch_error() {
+        // A genuine RBAC Forbidden denial is stable and won't self-heal — stop.
+        assert!(is_permanent_watch_error(
+            "watch deployments is forbidden: User cannot watch"
+        ));
+        assert!(is_permanent_watch_error(
+            "deployments.apps is forbidden: ..."
+        ));
+        assert!(is_permanent_watch_error(
+            "Forbidden (ErrorResponse { code: 403 })"
+        ));
+
+        // 401 / token expiry IS recoverable: kube-rs refreshes creds and re-lists,
+        // so we keep reconnecting rather than permanently stopping the watch.
+        assert!(!is_permanent_watch_error("Unauthorized"));
+        assert!(!is_permanent_watch_error("server responded with 401"));
+
+        // Transient failures must NOT be treated as permanent (they self-heal).
+        assert!(!is_permanent_watch_error("list deployments timed out"));
+        assert!(!is_permanent_watch_error(
+            "error trying to connect: connection refused"
+        ));
+        // A benign message with a "14030" substring must not false-positive.
+        assert!(!is_permanent_watch_error("read 14030 bytes"));
     }
 }

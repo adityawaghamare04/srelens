@@ -52,6 +52,8 @@ export async function watchResource(
   kind: string,
   onRows: (rows: Array<{ name: string }>) => void,
   onStatus?: (status: WatchStatus) => void,
+  onError?: (error: string) => void,
+  kubeconfigFiles: string[] = [],
 ): Promise<WatchHandle> {
   // Tauri event names allow only [alphanumeric, -, /, :, _], but a context name
   // can contain other characters (e.g. the "@" in "admin@cluster"), which makes
@@ -59,15 +61,24 @@ export async function watchResource(
   // every channel unique regardless of any collisions the replacement introduces.
   const channel = `watch:${kind}:${context}:${namespace}:${++watchSeq}`.replace(/[^a-zA-Z0-9/:_-]/g, "_");
   const dispose = await subscribe(channel, (payload) => {
-    // The backend emits either a snapshot (array) or a `{status}` object.
+    // The backend emits a snapshot (array), a `{status}` object, or, for a
+    // permanent (403/401) failure that won't self-heal, an `{error}` object.
     if (Array.isArray(payload)) {
       onRows(payload as Array<{ name: string }>);
     } else if (payload && typeof payload === "object" && "status" in payload) {
       onStatus?.((payload as { status: WatchStatus }).status);
+    } else if (payload && typeof payload === "object" && "error" in payload) {
+      onError?.(String((payload as { error: unknown }).error));
     }
   });
   try {
-    await invokeCommand("start_resource_watch", { context, namespace, kind, channel });
+    await invokeCommand("start_resource_watch", {
+      context,
+      namespace,
+      kind,
+      channel,
+      kubeconfigPaths: kubeconfigFiles,
+    });
   } catch (e) {
     dispose();
     throw e;

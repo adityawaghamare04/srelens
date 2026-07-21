@@ -28,6 +28,7 @@ describe("checkForUpdate", () => {
       version: "0.2.0",
       current_version: "0.1.0",
       notes: "### Features\n- things",
+      external: false,
     });
     const meta = await checkForUpdate("dev");
     expect(invokeCommandMock).toHaveBeenCalledWith("update_check", { channel: "dev" });
@@ -35,12 +36,23 @@ describe("checkForUpdate", () => {
       version: "0.2.0",
       currentVersion: "0.1.0",
       notes: "### Features\n- things",
+      external: false,
     });
   });
 
   it("defaults notes to an empty string", async () => {
     invokeCommandMock.mockResolvedValue({ version: "0.2.0", current_version: "0.1.0", notes: null });
     expect((await checkForUpdate("stable"))?.notes).toBe("");
+  });
+
+  it("flags package-manager-owned installs as external", async () => {
+    invokeCommandMock.mockResolvedValue({
+      version: "0.2.0",
+      current_version: "0.1.0",
+      notes: null,
+      external: true,
+    });
+    expect((await checkForUpdate("stable"))?.external).toBe(true);
   });
 });
 

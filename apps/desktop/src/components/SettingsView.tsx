@@ -21,6 +21,7 @@ import {
   GripVertical,
   ClipboardPaste,
   Plug,
+  Trash2,
 } from "lucide-react";
 import {
   PageHeader,
@@ -28,12 +29,21 @@ import {
   SectionPanel,
   TextInput,
   Button,
+  ConfirmDialog,
   THEME_OPTIONS,
   type Theme,
   type ThemeMode,
   type ThemeName,
 } from "../ui";
-import { listContexts, type ClusterContext } from "../lib/clusters";
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
+import { listContexts, deleteContext, type ClusterContext } from "../lib/clusters";
+import { notify } from "../lib/notify";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   REQUEST_TIMEOUT,
@@ -107,6 +117,9 @@ export function SettingsView({
   contextOrder,
   onContextOrderChange,
   initialSection = "appearance",
+  contexts: passedContexts = null,
+  contextsError = "",
+  onDeleteContext,
 }: {
   theme: Theme;
   onThemeNameChange: (name: ThemeName) => void;
@@ -123,12 +136,17 @@ export function SettingsView({
   onContextOrderChange: (order: string[]) => void;
   /** Section to open on mount (e.g. deep-linked from the update toast). */
   initialSection?: SettingsSection;
+  contexts?: ClusterContext[] | null;
+  contextsError?: string;
+  onDeleteContext?: (name: string) => Promise<void>;
 }) {
   const [section, setSection] = useState<SettingsSection>(initialSection);
-  const [contexts, setContexts] = useState<ClusterContext[] | null>(null);
-  const [contextError, setContextError] = useState("");
+  const [internalContexts, setInternalContexts] = useState<ClusterContext[] | null>(null);
+  const [internalError, setInternalError] = useState("");
   const [contextQuery, setContextQuery] = useState("");
   const [selectedContextName, setSelectedContextName] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [logoError, setLogoError] = useState("");
   const [kubeconfigError, setKubeconfigError] = useState("");
   const [draggedContextName, setDraggedContextName] = useState<string | null>(null);
@@ -184,17 +202,55 @@ export function SettingsView({
   };
 
   useEffect(() => {
+    if (passedContexts !== null) return;
     let active = true;
     void listContexts(kubeconfigFiles).then((outcome) => {
       if (!active) return;
-      setContexts(outcome.contexts ?? []);
+      setInternalContexts(outcome.contexts ?? []);
       setSelectedContextName((current) => current ?? outcome.contexts?.[0]?.name ?? null);
-      setContextError(outcome.error ?? "");
+      setInternalError(outcome.error ?? "");
     });
     return () => {
       active = false;
     };
-  }, [kubeconfigFiles]);
+  }, [kubeconfigFiles, passedContexts]);
+
+  useEffect(() => {
+    if (passedContexts !== null) {
+      setSelectedContextName((current) => {
+        if (current && passedContexts.some((c) => c.name === current)) {
+          return current;
+        }
+        return passedContexts[0]?.name ?? null;
+      });
+    }
+  }, [passedContexts]);
+
+  const contexts = passedContexts !== null ? passedContexts : internalContexts;
+  const contextError = passedContexts !== null ? contextsError : internalError;
+
+  const confirmDeleteContext = async () => {
+    const name = pendingDelete;
+    if (!name) return;
+    setDeleteBusy(true);
+    try {
+      if (onDeleteContext) {
+        await onDeleteContext(name);
+      } else {
+        await deleteContext(name);
+        resetContext(name);
+        onContextOrderChange(contextOrder.filter((item) => item !== name));
+        const outcome = await listContexts(kubeconfigFiles);
+        setInternalContexts(outcome.contexts ?? []);
+      }
+      setSelectedContextName(null);
+      setPendingDelete(null);
+    } catch (e) {
+      notify.error("Failed to remove context", String(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const updateContext = (name: string, patch: ContextProfiles[string]) => {
     onContextProfilesChange({
@@ -566,34 +622,44 @@ export function SettingsView({
                       {filteredContexts.map((context) => {
                         const profile = contextProfiles[context.name] ?? {};
                         return (
-                          <button
-                            key={context.name}
-                            type="button"
-                            className={[
-                              selectedContext?.name === context.name ? "is-active" : "",
-                              draggedContextName === context.name ? "is-dragging" : "",
-                              dropTargetName === context.name ? "is-drop-target" : "",
-                            ].filter(Boolean).join(" ")}
-                            data-context-name={context.name}
-                            onClick={() => setSelectedContextName(context.name)}
-                          >
-                            <ContextAvatar context={context.name} profile={profile} className="fl-settings-context-avatar" />
-                            <span>
-                              <strong>{contextDisplayName(context.name, profile)}</strong>
-                              <small>{context.name}</small>
-                            </span>
-                            {context.isCurrent && <i title="Current context" />}
-                            <span
-                              className="fl-context-manager__grip"
-                              title="Drag to reorder"
-                              onPointerDown={(event) => beginPointerContextDrag(event, context.name)}
-                              onPointerMove={updatePointerContextDrag}
-                              onPointerUp={finishPointerContextDrag}
-                              onPointerCancel={finishPointerContextDrag}
-                            >
-                              <GripVertical aria-hidden="true" />
-                            </span>
-                          </button>
+                          <ContextMenu key={context.name}>
+                            <ContextMenuTrigger asChild>
+                              <button
+                                type="button"
+                                className={[
+                                  selectedContext?.name === context.name ? "is-active" : "",
+                                  draggedContextName === context.name ? "is-dragging" : "",
+                                  dropTargetName === context.name ? "is-drop-target" : "",
+                                ].filter(Boolean).join(" ")}
+                                data-context-name={context.name}
+                                onClick={() => setSelectedContextName(context.name)}
+                              >
+                                <ContextAvatar context={context.name} profile={profile} className="fl-settings-context-avatar" />
+                                <span>
+                                  <strong>{contextDisplayName(context.name, profile)}</strong>
+                                  <small>{context.name}</small>
+                                </span>
+                                {context.isCurrent && <i title="Current context" />}
+                                <span
+                                  className="fl-context-manager__grip"
+                                  title="Drag to reorder"
+                                  onPointerDown={(event) => beginPointerContextDrag(event, context.name)}
+                                  onPointerMove={updatePointerContextDrag}
+                                  onPointerUp={finishPointerContextDrag}
+                                  onPointerCancel={finishPointerContextDrag}
+                                >
+                                  <GripVertical aria-hidden="true" />
+                                </span>
+                              </button>
+                            </ContextMenuTrigger>
+                            <ContextMenuContent>
+                              <ContextMenuItem onSelect={() => resetContext(context.name)}>Reset identity</ContextMenuItem>
+                              <ContextMenuSeparator />
+                              <ContextMenuItem variant="destructive" onSelect={() => setPendingDelete(context.name)}>
+                                Remove context
+                              </ContextMenuItem>
+                            </ContextMenuContent>
+                          </ContextMenu>
                         );
                       })}
                       {filteredContexts.length === 0 && <p>No matching contexts</p>}
@@ -758,6 +824,14 @@ export function SettingsView({
                         <Button variant="ghost" size="sm" onClick={() => resetContext(selectedContext.name)}>
                           <RotateCcw data-icon="inline-start" /> Reset identity
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="hover:text-destructive hover:bg-destructive/10 text-muted-foreground"
+                          onClick={() => setPendingDelete(selectedContext.name)}
+                        >
+                          <Trash2 data-icon="inline-start" /> Remove context
+                        </Button>
                       </footer>
                     </article>
                   )}
@@ -824,9 +898,16 @@ export function SettingsView({
                     {updateState.update.notes && (
                       <pre className="fl-settings-update__notes">{updateState.update.notes}</pre>
                     )}
-                    <Button onClick={() => void startInstall()}>
-                      <Download data-icon="inline-start" /> Download &amp; install
-                    </Button>
+                    {updateState.update.external ? (
+                      <p className="fl-settings-update__status">
+                        This install is managed by your system package manager — update it there
+                        (AUR: <code>paru -Syu</code> or <code>yay -Syu</code>).
+                      </p>
+                    ) : (
+                      <Button onClick={() => void startInstall()}>
+                        <Download data-icon="inline-start" /> Download &amp; install
+                      </Button>
+                    )}
                   </div>
                 )}
 
@@ -849,6 +930,22 @@ export function SettingsView({
           )}
         </div>
       </div>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Remove context?"
+          message={
+            <p style={{ marginTop: 0 }}>
+              Remove <code>{pendingDelete}</code> from its kubeconfig file? This modifies the kubeconfig on disk.
+            </p>
+          }
+          confirmLabel="Remove"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => void confirmDeleteContext()}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </PageShell>
   );
 }
