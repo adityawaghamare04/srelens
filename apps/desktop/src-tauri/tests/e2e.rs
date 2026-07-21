@@ -147,10 +147,20 @@ impl Harness {
 }
 
 /// Capabilities genuinely excluded from this suite, with a written reason.
-/// Kept empty: every one of the 69 registered capabilities as of #27 is
-/// exercised below. A capability registered later with no case here fails
-/// the coverage assertion at the end of `full_capability_suite`.
-const EXCLUDED: &[(&str, &str)] = &[];
+/// A capability registered later with no case here fails the coverage
+/// assertion at the end of `full_capability_suite`.
+const EXCLUDED: &[(&str, &str)] = &[
+    (
+        "toolbox.installKubectl",
+        "downloads a real ~50MB binary from dl.k8s.io and writes to ~/.srelens/bin; \
+         covered by unit tests with an injected fetch instead of hitting the network in CI",
+    ),
+    (
+        "toolbox.installHelm",
+        "downloads a real release tarball from get.helm.sh and writes to ~/.srelens/bin; \
+         covered by unit tests with an injected fetch instead of hitting the network in CI",
+    ),
+];
 
 fn deadline(secs: u64) -> Instant {
     Instant::now() + Duration::from_secs(secs)
@@ -630,6 +640,15 @@ async fn run_suite() {
             .iter()
             .any(|c| c["name"] == ctx),
         "listContexts must include {ctx}"
+    );
+
+    // The kind context authenticates with a client cert (no exec-auth), so it
+    // has no external tool requirements — a healthy, empty diagnosis.
+    let out = h.ok("toolbox.diagnoseContext", json!({ "context": ctx })).await;
+    assert_eq!(out["context"], ctx);
+    assert!(
+        out["items"].as_array().unwrap().is_empty(),
+        "kind context should need no exec-auth tools: {out}"
     );
 
     let out = h.ok("k8s.clusterInfo", json!({ "context": ctx })).await;

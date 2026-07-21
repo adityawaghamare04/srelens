@@ -8,10 +8,14 @@
 //! them (cloud CLIs). Resolution of those requirements against the app's PATH
 //! is a separate step; this half is pure string work and fully unit-tested.
 
+use crate::connect::load_kubeconfigs;
 use crate::helm_cli::resolve_on_path;
 use crate::kubeconfig::KubeError;
-use serde::Deserialize;
-use std::path::Path;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use srelens_capability::{Annotations, Capability, CapabilityError};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// What kind of tool a requirement is — decides whether srelens can fix it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +253,432 @@ pub fn diagnose(
         })
         .collect();
     DiagnosisReport { context: ctx.context.clone(), items }
+}
+
+impl SearchPaths {
+    /// Build from the process environment: the app PATH (already resolved by
+    /// `fix-path-env` at startup) with the managed dirs `~/.srelens/bin` and
+    /// `~/.krew/bin` prepended, plus common system locations that back the
+    /// "present but not on the app PATH" check.
+    pub fn from_env() -> SearchPaths {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let managed = [
+            PathBuf::from(&home).join(".srelens/bin"),
+            PathBuf::from(&home).join(".krew/bin"),
+        ];
+        let app_dirs = managed.iter().cloned().chain(std::env::split_paths(&path));
+        let system_dirs = ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"]
+            .iter()
+            .map(PathBuf::from)
+            .chain(std::iter::once(PathBuf::from(&home).join(".local/bin")));
+        SearchPaths {
+            app_path: join_paths(app_dirs),
+            system_path: join_paths(system_dirs),
+        }
+    }
+}
+
+fn join_paths(dirs: impl IntoIterator<Item = PathBuf>) -> String {
+    std::env::join_paths(dirs)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiagnoseContextIn {
+    /// The kube context to diagnose.
+    pub context: String,
+}
+
+/// One requirement's status, flattened for the UI and MCP.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct RequirementStatusDto {
+    pub binary: String,
+    /// `kubectl` | `krew-plugin` | `external`.
+    pub kind: String,
+    /// The krew plugin name when `kind == krew-plugin`.
+    pub plugin: Option<String>,
+    /// Whether srelens can install it (kubectl or a krew plugin).
+    pub installable: bool,
+    /// `found` | `not-on-app-path` | `missing`.
+    pub status: String,
+    pub path: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DiagnoseContextOut {
+    pub context: String,
+    /// Empty when the context needs no external tools (healthy).
+    pub items: Vec<RequirementStatusDto>,
+}
+
+fn kind_fields(kind: &RequirementKind) -> (&'static str, Option<String>, bool) {
+    match kind {
+        RequirementKind::Kubectl => ("kubectl", None, true),
+        RequirementKind::KrewPlugin { plugin } => ("krew-plugin", Some(plugin.clone()), true),
+        RequirementKind::External => ("external", None, false),
+    }
+}
+
+fn status_fields(res: Resolution) -> (&'static str, Option<String>, Option<String>) {
+    match res {
+        Resolution::Found { path, version } => ("found", Some(path), version),
+        Resolution::NotOnAppPath { path } => ("not-on-app-path", Some(path), None),
+        Resolution::Missing => ("missing", None, None),
+    }
+}
+
+/// Read-only capability: diagnose one context's exec-auth tool requirements.
+/// The resolution environment (`search`, `is_file`) is injected so it's
+/// deterministic under test; production supplies [`SearchPaths::from_env`] and a
+/// real filesystem check.
+pub fn diagnose_context_capability(
+    kubeconfig_paths: Vec<PathBuf>,
+    search: SearchPaths,
+    is_file: impl Fn(&Path) -> bool + Send + Sync + 'static,
+) -> Capability {
+    let search = Arc::new(search);
+    let is_file = Arc::new(is_file);
+    Capability::typed::<DiagnoseContextIn, DiagnoseContextOut, _, _>(
+        "toolbox.diagnoseContext",
+        "diagnose a kube context's exec-auth tool requirements: which external \
+         tools it needs and whether each is installed, off the app PATH, or missing",
+        Annotations::READ_ONLY,
+        move |input: DiagnoseContextIn| {
+            let paths = kubeconfig_paths.clone();
+            let search = search.clone();
+            let is_file = is_file.clone();
+            async move {
+                let merged = load_kubeconfigs(&paths).map_err(CapabilityError::Handler)?;
+                let yaml = serde_yaml::to_string(&merged)
+                    .map_err(|e| CapabilityError::Handler(e.to_string()))?;
+                let all = context_requirements(&yaml)
+                    .map_err(|e| CapabilityError::Handler(e.to_string()))?;
+                let ctx = all
+                    .into_iter()
+                    .find(|c| c.context == input.context)
+                    .ok_or_else(|| {
+                        CapabilityError::InvalidInput(format!("unknown context: {}", input.context))
+                    })?;
+                // Version probing (a subprocess) lands with the install
+                // capabilities; None for now keeps this read pure.
+                let report = diagnose(&ctx, &search, &|p| is_file(p), &|_p| None);
+                let items = report
+                    .items
+                    .into_iter()
+                    .map(|item| {
+                        let (kind, plugin, installable) = kind_fields(&item.requirement.kind);
+                        let (status, path, version) = status_fields(item.resolution);
+                        RequirementStatusDto {
+                            binary: item.requirement.binary,
+                            kind: kind.to_string(),
+                            plugin,
+                            installable,
+                            status: status.to_string(),
+                            path,
+                            version,
+                        }
+                    })
+                    .collect();
+                Ok(DiagnoseContextOut { context: report.context, items })
+            }
+        },
+    )
+}
+
+use crate::toolbox_install::{
+    helm_install, install_binary, install_from_targz, kubectl_install, parse_github_latest_tag,
+    InstallError, Platform, HELM_LATEST_RELEASE_URL, KUBECTL_STABLE_URL,
+};
+
+/// The directory srelens installs managed tools into: `~/.srelens/bin`.
+pub fn srelens_bin_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join(".srelens").join("bin")
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct InstallKubectlIn {}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct InstallToolOut {
+    pub tool: String,
+    pub version: String,
+    pub path: String,
+}
+
+fn to_handler(e: InstallError) -> CapabilityError {
+    CapabilityError::Handler(e.to_string())
+}
+
+/// Confirm-gated capability: download the latest stable kubectl into
+/// `~/.srelens/bin`, verified against dl.k8s.io's published checksum. `fetch`
+/// (a blocking HTTP GET) is injected so the capability is testable without a
+/// real network; production supplies a reqwest-backed one at registration.
+pub fn install_kubectl_capability<F>(install_dir: PathBuf, fetch: F) -> Capability
+where
+    F: Fn(&str) -> Result<Vec<u8>, InstallError> + Send + Sync + Clone + 'static,
+{
+    Capability::typed::<InstallKubectlIn, InstallToolOut, _, _>(
+        "toolbox.installKubectl",
+        "download the latest stable kubectl into ~/.srelens/bin, verified against \
+         the dl.k8s.io checksum",
+        Annotations::MUTATING,
+        move |_input: InstallKubectlIn| {
+            let install_dir = install_dir.clone();
+            let fetch = fetch.clone();
+            async move {
+                // The install does blocking HTTP + filesystem work; keep it off
+                // the async runtime.
+                tokio::task::spawn_blocking(move || {
+                    let platform = Platform::current().map_err(to_handler)?;
+                    let raw = fetch(KUBECTL_STABLE_URL).map_err(to_handler)?;
+                    let version = std::str::from_utf8(&raw)
+                        .map_err(|e| CapabilityError::Handler(e.to_string()))?
+                        .trim()
+                        .to_string();
+                    let plan = kubectl_install(&version, &platform, &install_dir);
+                    let path = install_binary(&plan, &fetch).map_err(to_handler)?;
+                    Ok(InstallToolOut {
+                        tool: "kubectl".to_string(),
+                        version,
+                        path: path.to_string_lossy().into_owned(),
+                    })
+                })
+                .await
+                .map_err(|e| CapabilityError::Handler(e.to_string()))?
+            }
+        },
+    )
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct InstallHelmIn {}
+
+/// Confirm-gated capability: download the latest helm release into
+/// `~/.srelens/bin`, verified against helm's published checksum. Version is
+/// resolved from GitHub's latest-release API (helm has no `stable.txt`).
+pub fn install_helm_capability<F>(install_dir: PathBuf, fetch: F) -> Capability
+where
+    F: Fn(&str) -> Result<Vec<u8>, InstallError> + Send + Sync + Clone + 'static,
+{
+    Capability::typed::<InstallHelmIn, InstallToolOut, _, _>(
+        "toolbox.installHelm",
+        "download the latest helm release into ~/.srelens/bin, verified against \
+         its published checksum",
+        Annotations::MUTATING,
+        move |_input: InstallHelmIn| {
+            let install_dir = install_dir.clone();
+            let fetch = fetch.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let platform = Platform::current().map_err(to_handler)?;
+                    let body = fetch(HELM_LATEST_RELEASE_URL).map_err(to_handler)?;
+                    let version = parse_github_latest_tag(&body).map_err(to_handler)?;
+                    let plan = helm_install(&version, &platform, &install_dir);
+                    let path = install_from_targz(&plan, &fetch).map_err(to_handler)?;
+                    Ok(InstallToolOut {
+                        tool: "helm".to_string(),
+                        version,
+                        path: path.to_string_lossy().into_owned(),
+                    })
+                })
+                .await
+                .map_err(|e| CapabilityError::Handler(e.to_string()))?
+            }
+        },
+    )
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    use serde_json::json;
+    use srelens_capability::Registry;
+
+    /// Write a kubeconfig with an oidc-login exec context to a temp file.
+    fn kubeconfig_with_oidc(dir: &Path) -> PathBuf {
+        let path = dir.join("config");
+        std::fs::write(
+            &path,
+            r#"
+apiVersion: v1
+kind: Config
+clusters:
+  - name: c
+    cluster: { server: https://x }
+contexts:
+  - name: dev
+    context: { cluster: c, user: oidc }
+users:
+  - name: oidc
+    user:
+      exec:
+        apiVersion: client.authentication.k8s.io/v1beta1
+        command: kubectl
+        args: ["oidc-login", "get-token"]
+"#,
+        )
+        .unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn diagnoses_a_context_reporting_found_kubectl_and_missing_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let kubeconfig = kubeconfig_with_oidc(dir.path());
+        // A bin dir holding kubectl but not the plugin.
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("kubectl"), b"#!/bin/sh\n").unwrap();
+        let search = SearchPaths {
+            app_path: bin.to_string_lossy().into_owned(),
+            system_path: String::new(),
+        };
+
+        let mut reg = Registry::new();
+        reg.register(diagnose_context_capability(vec![kubeconfig], search, |p| p.is_file()));
+        let out = reg
+            .invoke("toolbox.diagnoseContext", json!({ "context": "dev" }))
+            .await
+            .unwrap();
+
+        assert_eq!(out["context"], "dev");
+        let items = out["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["kind"], "kubectl");
+        assert_eq!(items[0]["status"], "found");
+        assert!(items[0]["path"].as_str().unwrap().ends_with("/kubectl"));
+        assert_eq!(items[1]["kind"], "krew-plugin");
+        assert_eq!(items[1]["plugin"], "oidc-login");
+        assert_eq!(items[1]["status"], "missing");
+        assert_eq!(items[1]["installable"], true);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_context_is_an_input_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let kubeconfig = kubeconfig_with_oidc(dir.path());
+        let mut reg = Registry::new();
+        reg.register(diagnose_context_capability(
+            vec![kubeconfig],
+            SearchPaths { app_path: String::new(), system_path: String::new() },
+            |p| p.is_file(),
+        ));
+        let err = reg
+            .invoke("toolbox.diagnoseContext", json!({ "context": "nope" }))
+            .await
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("unknown context"));
+    }
+
+    use std::collections::HashMap;
+
+    /// A fake blocking HTTP: URL -> bytes. Clone/Send/Sync so it satisfies the
+    /// capability's `fetch` bound.
+    fn net(entries: Vec<(String, Vec<u8>)>) -> impl Fn(&str) -> Result<Vec<u8>, InstallError> + Clone {
+        let map: HashMap<String, Vec<u8>> = entries.into_iter().collect();
+        move |url: &str| {
+            map.get(url).cloned().ok_or_else(|| InstallError::Download(format!("404 {url}")))
+        }
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(bytes))
+    }
+
+    #[tokio::test]
+    async fn install_kubectl_resolves_stable_downloads_and_verifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let install_dir = dir.path().join("bin");
+        let platform = Platform::current().unwrap();
+        let plan = kubectl_install("v9.9.9", &platform, &install_dir);
+        let payload = b"#!/bin/sh\necho kubectl\n";
+        let fetch = net(vec![
+            (KUBECTL_STABLE_URL.to_string(), b"v9.9.9\n".to_vec()),
+            (plan.sha256_url.clone(), sha256_hex(payload).into_bytes()),
+            (plan.binary_url.clone(), payload.to_vec()),
+        ]);
+
+        let mut reg = Registry::new();
+        reg.register(install_kubectl_capability(install_dir, fetch));
+        let out = reg.invoke("toolbox.installKubectl", json!({})).await.unwrap();
+
+        assert_eq!(out["tool"], "kubectl");
+        assert_eq!(out["version"], "v9.9.9");
+        let installed = out["path"].as_str().unwrap();
+        assert_eq!(std::fs::read(installed).unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn install_kubectl_is_confirm_gated() {
+        let cap = install_kubectl_capability(PathBuf::from("/tmp/x"), net(vec![]));
+        assert!(cap.annotations.requires_confirm, "installs must require consent");
+        assert!(!cap.annotations.read_only);
+    }
+
+    fn make_targz(members: &[(&str, &[u8])]) -> Vec<u8> {
+        use flate2::{write::GzEncoder, Compression};
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        for (name, bytes) in members {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, *bytes).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn install_helm_resolves_latest_downloads_and_extracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let install_dir = dir.path().join("bin");
+        let platform = Platform::current().unwrap();
+        let plan = helm_install("v9.9.9", &platform, &install_dir);
+        let payload = b"#!/bin/sh\necho helm\n";
+        let archive = make_targz(&[(plan.member.as_str(), payload)]);
+        let fetch = net(vec![
+            (HELM_LATEST_RELEASE_URL.to_string(), br#"{"tag_name":"v9.9.9"}"#.to_vec()),
+            (plan.sha256_url.clone(), sha256_hex(&archive).into_bytes()),
+            (plan.archive_url.clone(), archive),
+        ]);
+
+        let mut reg = Registry::new();
+        reg.register(install_helm_capability(install_dir, fetch));
+        let out = reg.invoke("toolbox.installHelm", json!({})).await.unwrap();
+
+        assert_eq!(out["tool"], "helm");
+        assert_eq!(out["version"], "v9.9.9");
+        assert_eq!(std::fs::read(out["path"].as_str().unwrap()).unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn install_helm_is_confirm_gated() {
+        let cap = install_helm_capability(PathBuf::from("/tmp/x"), net(vec![]));
+        assert!(cap.annotations.requires_confirm);
+    }
+
+    #[tokio::test]
+    async fn install_kubectl_surfaces_a_checksum_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let install_dir = dir.path().join("bin");
+        let platform = Platform::current().unwrap();
+        let plan = kubectl_install("v9.9.9", &platform, &install_dir);
+        let fetch = net(vec![
+            (KUBECTL_STABLE_URL.to_string(), b"v9.9.9".to_vec()),
+            (plan.sha256_url.clone(), sha256_hex(b"expected").into_bytes()),
+            (plan.binary_url.clone(), b"tampered".to_vec()),
+        ]);
+        let mut reg = Registry::new();
+        reg.register(install_kubectl_capability(install_dir.clone(), fetch));
+        let err = reg.invoke("toolbox.installKubectl", json!({})).await.unwrap_err();
+        assert!(format!("{err:?}").to_lowercase().contains("checksum"));
+        assert!(!plan.target.exists());
+    }
 }
 
 #[cfg(test)]
