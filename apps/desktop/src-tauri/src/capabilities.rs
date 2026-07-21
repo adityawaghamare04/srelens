@@ -242,6 +242,8 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     ));
     reg.register(srelens_kube::actions::cordon_node_capability(cache.clone()));
     reg.register(srelens_kube::actions::drain_node_capability(cache.clone()));
+    reg.register(srelens_kube::debug::debug_pod_capability(cache.clone()));
+    reg.register(srelens_kube::debug::node_debug_pod_capability(cache.clone()));
     reg.register(srelens_kube::events::list_events_capability(cache.clone()));
     reg.register(srelens_kube::metrics::node_metrics_capability(
         cache.clone(),
