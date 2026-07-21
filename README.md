@@ -15,6 +15,7 @@
   <a href="https://srelens.com">Website</a> ·
   <a href="#install">Install</a> ·
   <a href="#quick-start">Quick start</a> ·
+  <a href="docs/USAGE.md">User guide</a> ·
   <a href="#mcp-server">MCP server</a> ·
   <a href="docs/DEVELOPMENT.md">Developer guide</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -57,30 +58,40 @@ srelens uses the operating system WebView through Tauri v2 and a Rust backend bu
 with `kube-rs` and `tokio`. It is independently developed and is not affiliated with
 Mirantis Lens or the Freelens project.
 
-## Features
+See the [user guide](docs/USAGE.md) for how to use each of these.
 
-- **Multi-cluster workspace** — discover kubeconfig contexts, add additional files,
-  paste configurations, customise profiles, and move between clusters with the
-  cluster hotbar.
+- **Multi-cluster workspace** — discover kubeconfig contexts, add or paste more
+  files, give each context a name, logo, and colour, and switch clusters from the
+  cluster hotbar. Contexts that share a name across files (e.g. `default`) are
+  disambiguated so every cluster stays visible and reachable.
 - **Live Kubernetes resources** — browse workloads, networking, storage, RBAC,
-  admission, autoscaling, and custom resources with live watch updates.
+  admission, autoscaling, and custom resources with live watch updates, search,
+  column pickers, namespace scoping, and bulk actions.
 - **Resource details and YAML** — inspect manifests, events, relationships, and
-  schema-aware YAML with validation and apply workflows.
-- **Logs and pod terminals** — stream logs and open interactive container sessions
-  directly beside the resource you are investigating.
-- **Port forwarding** — create, inspect, and manage active forwards from the desktop
-  workspace.
-- **Helm views** — browse installed releases and inspect release details.
-- **Metrics** — inspect node and pod CPU and memory data when `metrics-server` is
-  available.
+  metrics, and edit schema-aware YAML with validation, dry-run diffs, and
+  server-side apply.
+- **Logs** — stream pod or workload logs with previous-instance (post-crash)
+  logs, timestamps, tail and since-window controls, per-source colouring,
+  container filtering, and buffer or all-container export.
+- **Terminals and shells** — open pod exec sessions, a context-scoped local
+  terminal, ephemeral debug containers for distroless pods, and privileged node
+  shells.
+- **Port forwarding** — create, inspect, copy, and stop forwards across every open
+  cluster.
+- **Helm** — list and inspect releases, and install, upgrade, roll back, or
+  uninstall them with a values editor and rendered-diff preview.
+- **Toolbox** — install and manage `kubectl`, `krew`, `helm`, and krew plugins, and
+  diagnose a context's exec-auth tool requirements.
+- **Metrics** — node and pod CPU and memory when `metrics-server` is available.
 - **Operational actions** — scale workloads, restart rollouts, evict or delete pods,
-  and cordon or drain nodes with confirmation gates for destructive actions.
-- **Command palette** — use keyboard-first navigation across contexts, resources,
-  and supported actions.
+  suspend or trigger CronJobs, and cordon or drain nodes, with confirmation gates
+  for destructive actions.
+- **Command palette** — keyboard-first navigation (Cmd/Ctrl-K) across views,
+  contexts, and resources.
+- **Application logs** — read srelens's own rotating log file from Settings to
+  diagnose issues after they happen.
 - **MCP access** — expose supported backend capabilities to MCP-capable clients over
   stdio or loopback HTTP.
-- **Local terminal workflows** — use `kubectl` and other installed command-line tools
-  from the built-in local terminal when needed.
 
 ## Install
 
@@ -194,7 +205,7 @@ crates/
   capability/            Backend capability registry
   kube/                  Kubernetes clients, watches, actions, Helm, and metrics
   mcp/                   MCP server
-docs/                    Installation, development, and project documentation
+docs/                    Installation, usage, development, and project documentation
 ```
 
 ## Project status
