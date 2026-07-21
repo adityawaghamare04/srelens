@@ -389,14 +389,130 @@ pub fn diagnose_context_capability(
 }
 
 use crate::toolbox_install::{
-    helm_install, install_binary, install_from_targz, kubectl_install, parse_github_latest_tag,
-    InstallError, Platform, HELM_LATEST_RELEASE_URL, KUBECTL_STABLE_URL,
+    helm_install, install_binary, install_from_targz, install_krew, krew_archive, kubectl_install,
+    parse_github_latest_tag, InstallError, Platform, HELM_LATEST_RELEASE_URL,
+    KREW_LATEST_RELEASE_URL, KUBECTL_STABLE_URL,
 };
 
 /// The directory srelens installs managed tools into: `~/.srelens/bin`.
 pub fn srelens_bin_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     PathBuf::from(home).join(".srelens").join("bin")
+}
+
+/// Where krew installs its shim (`kubectl-krew`) and plugin binaries.
+pub fn krew_bin_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    PathBuf::from(home).join(".krew").join("bin")
+}
+
+/// The tools srelens can manage, in display order.
+const MANAGED_TOOLS: [&str; 3] = ["kubectl", "krew", "helm"];
+
+/// One managed tool's inventory entry for the Toolbox "Tools" section.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ToolStatusDto {
+    pub name: String,
+    pub installed: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+    /// `managed` (srelens installed it under a managed dir) or `system`.
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct StatusOut {
+    pub tools: Vec<ToolStatusDto>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct StatusIn {}
+
+/// Extract the first `vMAJOR.MINOR.PATCH` token from a tool's version output.
+/// kubectl/krew/helm each wrap the version in different surrounding text (plain
+/// "Client Version: v1.30.2", JSON `"gitVersion":"v1.30.2"`, or "v3.16.2+g…"),
+/// so we scan for the first well-formed semver rather than parse each format.
+pub fn first_semver(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] != b'v' || i + 1 >= bytes.len() || !bytes[i + 1].is_ascii_digit() {
+            continue;
+        }
+        let start = i + 1;
+        let mut j = start;
+        while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b'.') {
+            j += 1;
+        }
+        let parts: Vec<&str> = text[start..j].split('.').collect();
+        if parts.len() >= 3 && parts[..3].iter().all(|p| !p.is_empty()) {
+            return Some(format!("v{}.{}.{}", parts[0], parts[1], parts[2]));
+        }
+    }
+    None
+}
+
+/// `managed` when the resolved binary lives under one of the srelens-managed
+/// dirs (`~/.srelens/bin`, `~/.krew/bin`), else `system`.
+fn tool_source(path: &Path, managed_dirs: &[PathBuf]) -> &'static str {
+    if managed_dirs.iter().any(|dir| path.starts_with(dir)) {
+        "managed"
+    } else {
+        "system"
+    }
+}
+
+/// Read-only capability: inventory the managed CLI toolchain (kubectl, krew,
+/// helm) — whether each is installed, where, its version, and whether srelens
+/// manages it. The resolution environment is injected so it's deterministic
+/// under test; production supplies [`SearchPaths::from_env`], a real filesystem
+/// check, and a per-tool version probe.
+pub fn status_capability(
+    search: SearchPaths,
+    managed_dirs: Vec<PathBuf>,
+    is_file: impl Fn(&Path) -> bool + Send + Sync + 'static,
+    version_of: impl Fn(&str, &Path) -> Option<String> + Send + Sync + 'static,
+) -> Capability {
+    let search = Arc::new(search);
+    let managed_dirs = Arc::new(managed_dirs);
+    let is_file = Arc::new(is_file);
+    let version_of = Arc::new(version_of);
+    Capability::typed::<StatusIn, StatusOut, _, _>(
+        "toolbox.status",
+        "inventory the managed CLI toolchain (kubectl, krew, helm): whether each \
+         is installed, its path and version, and whether srelens manages it",
+        Annotations::READ_ONLY,
+        move |_input: StatusIn| {
+            let search = search.clone();
+            let managed_dirs = managed_dirs.clone();
+            let is_file = is_file.clone();
+            let version_of = version_of.clone();
+            async move {
+                let tools = MANAGED_TOOLS
+                    .iter()
+                    .map(|&name| match locate(name, &search, &|p| is_file(p)) {
+                        Some(found) => {
+                            let path = Path::new(&found.path);
+                            ToolStatusDto {
+                                name: name.to_string(),
+                                installed: true,
+                                version: version_of(name, path),
+                                source: Some(tool_source(path, &managed_dirs).to_string()),
+                                path: Some(found.path),
+                            }
+                        }
+                        None => ToolStatusDto {
+                            name: name.to_string(),
+                            installed: false,
+                            path: None,
+                            version: None,
+                            source: None,
+                        },
+                    })
+                    .collect();
+                Ok(StatusOut { tools })
+            }
+        },
+    )
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -490,6 +606,220 @@ where
             }
         },
     )
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct InstallKrewIn {}
+
+/// Confirm-gated capability: download the latest krew, verify it, and run its
+/// self-bootstrap (`krew install krew`) to populate `~/.krew`. `fetch` (blocking
+/// HTTP) and `run` (executes the bootstrap command) are injected; production
+/// supplies a reqwest GET and a `std::process::Command` runner.
+pub fn install_krew_capability<F, R>(staging_dir: PathBuf, fetch: F, run: R) -> Capability
+where
+    F: Fn(&str) -> Result<Vec<u8>, InstallError> + Send + Sync + Clone + 'static,
+    R: Fn(&Path, &[&str]) -> Result<(), InstallError> + Send + Sync + Clone + 'static,
+{
+    Capability::typed::<InstallKrewIn, InstallToolOut, _, _>(
+        "toolbox.installKrew",
+        "download the latest krew, verify it, and bootstrap it into ~/.krew \
+         (the engine for kubectl plugin installs)",
+        Annotations::MUTATING,
+        move |_input: InstallKrewIn| {
+            let staging_dir = staging_dir.clone();
+            let fetch = fetch.clone();
+            let run = run.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let platform = Platform::current().map_err(to_handler)?;
+                    let body = fetch(KREW_LATEST_RELEASE_URL).map_err(to_handler)?;
+                    let version = parse_github_latest_tag(&body).map_err(to_handler)?;
+                    let plan = krew_archive(&version, &platform, &staging_dir);
+                    install_krew(&plan, &fetch, &run).map_err(to_handler)?;
+                    Ok(InstallToolOut {
+                        tool: "krew".to_string(),
+                        version,
+                        path: krew_bin_dir().join("kubectl-krew").to_string_lossy().into_owned(),
+                    })
+                })
+                .await
+                .map_err(|e| CapabilityError::Handler(e.to_string()))?
+            }
+        },
+    )
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchPluginsIn {
+    /// Substring to search the krew index for.
+    pub query: String,
+}
+
+/// One krew index entry.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PluginDto {
+    pub name: String,
+    pub description: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SearchPluginsOut {
+    pub plugins: Vec<PluginDto>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PluginIn {
+    /// The krew plugin name (e.g. `oidc-login`).
+    pub plugin: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PluginActionOut {
+    pub plugin: String,
+    /// krew's own output from the operation.
+    pub output: String,
+}
+
+/// Parse `kubectl krew search` output — a padded `NAME  DESCRIPTION  INSTALLED`
+/// table — into plugin rows. Lines before the header are skipped.
+pub fn parse_krew_search(stdout: &str) -> Vec<PluginDto> {
+    stdout
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("NAME"))
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(parse_search_row)
+        .collect()
+}
+
+fn parse_search_row(line: &str) -> Option<PluginDto> {
+    let name = line.split_whitespace().next()?.to_string();
+    let installed_token = line.split_whitespace().next_back()?;
+    let installed = installed_token.eq_ignore_ascii_case("yes");
+    // Description is what's between the name and the trailing INSTALLED column.
+    let mid = line.trim();
+    let mid = mid.strip_prefix(&name).unwrap_or(mid).trim_start();
+    let description = mid.strip_suffix(installed_token).unwrap_or(mid).trim().to_string();
+    Some(PluginDto { name, description, installed })
+}
+
+/// Read-only capability: search the krew plugin index. `run` executes
+/// `kubectl-krew <args>` and returns its stdout (injected for testing).
+pub fn search_plugins_capability<R>(run: R) -> Capability
+where
+    R: Fn(&[&str]) -> Result<String, InstallError> + Send + Sync + Clone + 'static,
+{
+    Capability::typed::<SearchPluginsIn, SearchPluginsOut, _, _>(
+        "toolbox.searchPlugins",
+        "search the krew index for kubectl plugins (name, description, installed)",
+        Annotations::READ_ONLY,
+        move |input: SearchPluginsIn| {
+            let run = run.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let out = run(&["search", input.query.as_str()]).map_err(to_handler)?;
+                    Ok(SearchPluginsOut { plugins: parse_krew_search(&out) })
+                })
+                .await
+                .map_err(|e| CapabilityError::Handler(e.to_string()))?
+            }
+        },
+    )
+}
+
+/// Shared builder for the confirm-gated plugin mutations (install / upgrade /
+/// uninstall), which differ only in the krew subcommand.
+fn plugin_action_capability<R>(
+    id: &'static str,
+    summary: &'static str,
+    verb: &'static str,
+    run: R,
+) -> Capability
+where
+    R: Fn(&[&str]) -> Result<String, InstallError> + Send + Sync + Clone + 'static,
+{
+    Capability::typed::<PluginIn, PluginActionOut, _, _>(
+        id,
+        summary,
+        Annotations::MUTATING,
+        move |input: PluginIn| {
+            let run = run.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let output = run(&[verb, input.plugin.as_str()]).map_err(to_handler)?;
+                    Ok(PluginActionOut { plugin: input.plugin, output })
+                })
+                .await
+                .map_err(|e| CapabilityError::Handler(e.to_string()))?
+            }
+        },
+    )
+}
+
+pub fn install_plugin_capability<R>(run: R) -> Capability
+where
+    R: Fn(&[&str]) -> Result<String, InstallError> + Send + Sync + Clone + 'static,
+{
+    plugin_action_capability(
+        "toolbox.installPlugin",
+        "install a kubectl plugin from the krew index",
+        "install",
+        run,
+    )
+}
+
+pub fn upgrade_plugin_capability<R>(run: R) -> Capability
+where
+    R: Fn(&[&str]) -> Result<String, InstallError> + Send + Sync + Clone + 'static,
+{
+    plugin_action_capability(
+        "toolbox.upgradePlugin",
+        "upgrade an installed krew plugin",
+        "upgrade",
+        run,
+    )
+}
+
+pub fn remove_plugin_capability<R>(run: R) -> Capability
+where
+    R: Fn(&[&str]) -> Result<String, InstallError> + Send + Sync + Clone + 'static,
+{
+    plugin_action_capability(
+        "toolbox.removePlugin",
+        "remove an installed krew plugin",
+        "uninstall",
+        run,
+    )
+}
+
+#[cfg(test)]
+mod plugin_tests {
+    use super::*;
+
+    const SAMPLE: &str = "\
+NAME            DESCRIPTION                              INSTALLED
+access-matrix   Show an RBAC access matrix               no
+oidc-login      Log in to the cluster via OIDC           yes
+";
+
+    #[test]
+    fn parse_krew_search_reads_name_description_and_installed() {
+        let plugins = parse_krew_search(SAMPLE);
+        assert_eq!(plugins.len(), 2);
+        assert_eq!(plugins[0].name, "access-matrix");
+        assert_eq!(plugins[0].description, "Show an RBAC access matrix");
+        assert!(!plugins[0].installed);
+        assert_eq!(plugins[1].name, "oidc-login");
+        assert_eq!(plugins[1].description, "Log in to the cluster via OIDC");
+        assert!(plugins[1].installed);
+    }
+
+    #[test]
+    fn parse_krew_search_is_empty_without_rows() {
+        assert!(parse_krew_search("").is_empty());
+        assert!(parse_krew_search("NAME  DESCRIPTION  INSTALLED\n").is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -663,6 +993,150 @@ users:
     }
 
     #[tokio::test]
+    async fn install_krew_resolves_downloads_and_bootstraps() {
+        let dir = tempfile::tempdir().unwrap();
+        let platform = Platform::current().unwrap();
+        let plan = krew_archive("v9.9.9", &platform, dir.path());
+        let archive = make_targz(&[(format!("./{}", plan.member).as_str(), b"#!/bin/sh\n")]);
+        let fetch = net(vec![
+            (KREW_LATEST_RELEASE_URL.to_string(), br#"{"tag_name":"v9.9.9"}"#.to_vec()),
+            (plan.sha256_url.clone(), sha256_hex(&archive).into_bytes()),
+            (plan.archive_url.clone(), archive),
+        ]);
+        let bootstrapped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = bootstrapped.clone();
+        let run = move |_bin: &Path, args: &[&str]| {
+            assert_eq!(args, ["install", "krew"]);
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        };
+
+        let mut reg = Registry::new();
+        reg.register(install_krew_capability(dir.path().to_path_buf(), fetch, run));
+        let out = reg.invoke("toolbox.installKrew", json!({})).await.unwrap();
+
+        assert_eq!(out["tool"], "krew");
+        assert_eq!(out["version"], "v9.9.9");
+        assert!(out["path"].as_str().unwrap().ends_with("kubectl-krew"));
+        assert!(bootstrapped.load(std::sync::atomic::Ordering::SeqCst), "krew bootstrap ran");
+    }
+
+    #[tokio::test]
+    async fn install_krew_is_confirm_gated() {
+        let cap = install_krew_capability(
+            PathBuf::from("/tmp/x"),
+            net(vec![]),
+            |_b: &Path, _a: &[&str]| Ok(()),
+        );
+        assert!(cap.annotations.requires_confirm);
+    }
+
+    #[tokio::test]
+    async fn search_plugins_runs_krew_search_and_parses_results() {
+        let run = |args: &[&str]| {
+            assert_eq!(args, ["search", "oidc"]);
+            Ok("NAME        DESCRIPTION       INSTALLED\noidc-login  OIDC login        yes\n".to_string())
+        };
+        let mut reg = Registry::new();
+        reg.register(search_plugins_capability(run));
+        let out = reg.invoke("toolbox.searchPlugins", json!({ "query": "oidc" })).await.unwrap();
+        let plugins = out["plugins"].as_array().unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0]["name"], "oidc-login");
+        assert_eq!(plugins[0]["installed"], true);
+    }
+
+    #[tokio::test]
+    async fn install_plugin_runs_krew_install_and_is_confirm_gated() {
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let run = move |args: &[&str]| {
+            sink.lock().unwrap().extend(args.iter().map(|s| s.to_string()));
+            Ok("Installed plugin: oidc-login".to_string())
+        };
+        let cap = install_plugin_capability(run);
+        assert!(cap.annotations.requires_confirm);
+
+        let mut reg = Registry::new();
+        reg.register(cap);
+        let out = reg
+            .invoke("toolbox.installPlugin", json!({ "plugin": "oidc-login" }))
+            .await
+            .unwrap();
+        assert_eq!(out["plugin"], "oidc-login");
+        assert_eq!(*seen.lock().unwrap(), vec!["install", "oidc-login"]);
+    }
+
+    #[tokio::test]
+    async fn remove_plugin_uses_the_uninstall_verb() {
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let run = move |args: &[&str]| {
+            sink.lock().unwrap().extend(args.iter().map(|s| s.to_string()));
+            Ok(String::new())
+        };
+        let mut reg = Registry::new();
+        reg.register(remove_plugin_capability(run));
+        reg.invoke("toolbox.removePlugin", json!({ "plugin": "oidc-login" })).await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec!["uninstall", "oidc-login"]);
+    }
+
+    #[tokio::test]
+    async fn status_inventories_installed_and_missing_managed_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let managed = dir.path().join(".srelens/bin");
+        std::fs::create_dir_all(&managed).unwrap();
+        std::fs::write(managed.join("kubectl"), b"#!/bin/sh\n").unwrap();
+
+        let cap = status_capability(
+            SearchPaths { app_path: managed.to_string_lossy().into_owned(), system_path: String::new() },
+            vec![managed.clone()],
+            |p| p.is_file(),
+            |name, _p| (name == "kubectl").then(|| "v1.30.2".to_string()),
+        );
+        let mut reg = Registry::new();
+        reg.register(cap);
+        let out = reg.invoke("toolbox.status", json!({})).await.unwrap();
+
+        let tools = out["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 3);
+        let kubectl = &tools[0];
+        assert_eq!(kubectl["name"], "kubectl");
+        assert_eq!(kubectl["installed"], true);
+        assert_eq!(kubectl["source"], "managed");
+        assert_eq!(kubectl["version"], "v1.30.2");
+        assert!(kubectl["path"].as_str().unwrap().ends_with("/kubectl"));
+        // krew + helm absent.
+        assert_eq!(tools[1]["installed"], false);
+        assert_eq!(tools[1]["version"], serde_json::Value::Null);
+        assert_eq!(tools[2]["installed"], false);
+    }
+
+    #[tokio::test]
+    async fn status_classifies_a_tool_outside_managed_dirs_as_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let sysbin = dir.path().join("usr/local/bin");
+        std::fs::create_dir_all(&sysbin).unwrap();
+        std::fs::write(sysbin.join("helm"), b"#!/bin/sh\n").unwrap();
+
+        let cap = status_capability(
+            SearchPaths { app_path: sysbin.to_string_lossy().into_owned(), system_path: String::new() },
+            vec![dir.path().join(".srelens/bin")], // managed dir, not where helm lives
+            |p| p.is_file(),
+            |_name, _p| None,
+        );
+        let mut reg = Registry::new();
+        reg.register(cap);
+        let out = reg.invoke("toolbox.status", json!({})).await.unwrap();
+        let helm = &out["tools"][2];
+        assert_eq!(helm["name"], "helm");
+        assert_eq!(helm["installed"], true);
+        assert_eq!(helm["source"], "system");
+    }
+
+    #[tokio::test]
     async fn install_kubectl_surfaces_a_checksum_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let install_dir = dir.path().join("bin");
@@ -678,6 +1152,29 @@ users:
         let err = reg.invoke("toolbox.installKubectl", json!({})).await.unwrap_err();
         assert!(format!("{err:?}").to_lowercase().contains("checksum"));
         assert!(!plan.target.exists());
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::first_semver;
+
+    #[test]
+    fn extracts_the_first_semver_across_tool_output_shapes() {
+        assert_eq!(first_semver("Client Version: v1.30.2").as_deref(), Some("v1.30.2"));
+        assert_eq!(first_semver("v3.16.2+g4f50ac1").as_deref(), Some("v3.16.2"));
+        assert_eq!(
+            first_semver(r#"{"clientVersion":{"gitVersion":"v1.30.2","major":"1"}}"#).as_deref(),
+            Some("v1.30.2"),
+        );
+        assert_eq!(first_semver("GitTag           v0.4.4").as_deref(), Some("v0.4.4"));
+    }
+
+    #[test]
+    fn returns_none_without_a_semver() {
+        assert_eq!(first_semver("no version here"), None);
+        assert_eq!(first_semver("v1.2"), None); // needs three components
+        assert_eq!(first_semver(""), None);
     }
 }
 

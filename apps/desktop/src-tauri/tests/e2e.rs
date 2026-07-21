@@ -160,6 +160,18 @@ const EXCLUDED: &[(&str, &str)] = &[
         "downloads a real release tarball from get.helm.sh and writes to ~/.srelens/bin; \
          covered by unit tests with an injected fetch instead of hitting the network in CI",
     ),
+    (
+        "toolbox.installKrew",
+        "downloads krew from GitHub and runs its bootstrap subprocess to populate ~/.krew; \
+         covered by unit tests with an injected fetch and command runner instead of the network in CI",
+    ),
+    // The plugin ops shell out to kubectl-krew, which isn't installed in the kind
+    // CI image; unit-tested with an injected runner. Real krew + a small-plugin
+    // install is the integration test deferred to the kind-CI work in the spec.
+    ("toolbox.searchPlugins", "requires krew installed (not in the CI image); unit-tested with an injected runner"),
+    ("toolbox.installPlugin", "requires krew installed (not in the CI image); unit-tested with an injected runner"),
+    ("toolbox.upgradePlugin", "requires krew installed (not in the CI image); unit-tested with an injected runner"),
+    ("toolbox.removePlugin", "requires krew installed (not in the CI image); unit-tested with an injected runner"),
 ];
 
 fn deadline(secs: u64) -> Instant {
@@ -650,6 +662,15 @@ async fn run_suite() {
         out["items"].as_array().unwrap().is_empty(),
         "kind context should need no exec-auth tools: {out}"
     );
+
+    // Tool inventory: kubectl and helm are on PATH in this suite (per the
+    // module docstring), so status must find kubectl installed with a version.
+    let out = h.ok("toolbox.status", json!({})).await;
+    let tools = out["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 3, "kubectl/krew/helm: {out}");
+    let kubectl = tools.iter().find(|t| t["name"] == "kubectl").unwrap();
+    assert_eq!(kubectl["installed"], true, "kubectl must be on PATH here: {out}");
+    assert!(kubectl["version"].as_str().is_some(), "kubectl version should resolve: {out}");
 
     let out = h.ok("k8s.clusterInfo", json!({ "context": ctx })).await;
     assert_eq!(out["reachable"], true, "cluster must be reachable: {out}");
