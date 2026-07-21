@@ -6,6 +6,12 @@ import { notify } from "../lib/notify";
 import { useAccess, rbac, denyReason, reportActionError } from "../lib/access";
 import { IconButton, ConfirmDialog } from "../ui";
 
+/** Enter the host's namespaces from the privileged debug pod for a real node
+ *  shell — run via exec (the pod itself just stays alive). */
+const NODE_SHELL_COMMAND = [
+  "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "--", "/bin/sh",
+];
+
 /**
  * Header actions for a node: cordon/uncordon and drain. Reads the node's
  * current `spec.unschedulable` to label the cordon toggle. `getObjectFn`/
@@ -29,6 +35,7 @@ export function NodeCordonAction({
     pod: string;
     container?: string;
     deleteOnClose?: { context: string; namespace: string; pod: string };
+    execCommand?: string[];
   }) => void;
   getObjectFn?: typeof getObject;
   cordonFn?: typeof cordonNode;
@@ -57,6 +64,7 @@ export function NodeCordonAction({
       namespace: out.namespace,
       pod: out.pod,
       container: "debug",
+      execCommand: NODE_SHELL_COMMAND,
       deleteOnClose: { context, namespace: out.namespace, pod: out.pod },
     });
   }

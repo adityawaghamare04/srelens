@@ -565,6 +565,7 @@ export function ResourceBrowser({
     pod: string;
     container?: string;
     deleteOnClose?: { context: string; namespace: string; pod: string };
+    execCommand?: string[];
   }) => void;
   onOpenLogs?: (s: { context: string; namespace: string; pod: string; container?: string }) => void;
   onOpenWorkloadLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;

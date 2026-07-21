@@ -472,6 +472,8 @@ export function App() {
       helm?: { args: string[]; title: string; values?: string; onComplete?: () => void };
       /** A pod to delete when this dock session closes (node debug shell). */
       deleteOnClose?: { context: string; namespace: string; pod: string };
+      /** Override the terminal's exec command (node shell `nsenter …`). */
+      execCommand?: string[];
     },
   ) {
     const id = dockIdRef.current++;

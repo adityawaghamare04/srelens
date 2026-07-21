@@ -54,8 +54,11 @@ pub fn ephemeral_patch(name: &str, image: &str, target_container: Option<&str>) 
 }
 
 /// The privileged, host-namespaced debug pod spec pinned to `node`. It shares
-/// the host PID/network/IPC namespaces and `nsenter`s into PID 1's namespaces to
-/// give a real shell on the node. `restartPolicy: Never` + tolerations so it
+/// the host PID/network/IPC namespaces and just stays alive; the caller then
+/// `exec`s `nsenter --target 1 …` into it to enter PID 1's namespaces for a real
+/// host shell (a pod-that-nsenters-on-start would race the exec and 500). The
+/// keep-alive entrypoint has no dependencies beyond the image's shell, so the
+/// pod reaches Running reliably. `restartPolicy: Never` + tolerations so it
 /// schedules on any (even tainted) node and doesn't restart after exit.
 pub fn node_debug_pod_spec(node: &str, image: &str) -> Value {
     json!({
@@ -73,13 +76,7 @@ pub fn node_debug_pod_spec(node: &str, image: &str) -> Value {
                 "name": "debug",
                 "image": image,
                 "securityContext": { "privileged": true },
-                "stdin": true,
-                "tty": true,
-                "command": [
-                    "nsenter", "--target", "1",
-                    "--mount", "--uts", "--ipc", "--net", "--pid",
-                    "--", "/bin/sh",
-                ],
+                "command": ["sh", "-c", "while true; do sleep 3600; done"],
             }],
         }
     })
@@ -222,7 +219,8 @@ mod tests {
         assert_eq!(s.host_network, Some(true));
         let c = &s.containers[0];
         assert_eq!(c.security_context.as_ref().unwrap().privileged, Some(true));
-        assert!(c.command.as_ref().unwrap().iter().any(|a| a == "nsenter"));
+        // The pod just stays alive; nsenter is run via exec, not the entrypoint.
+        assert!(c.command.as_ref().unwrap().iter().any(|a| a.contains("sleep")));
     }
 
     #[test]

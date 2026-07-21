@@ -11,12 +11,15 @@ export function PodTerminal({
   namespace,
   pod,
   container,
+  command,
 }: {
   context: string;
   namespace: string;
   pod: string;
   /** Exec into this specific container (for multi-container pods). */
   container?: string;
+  /** Override the exec command (e.g. the node shell's `nsenter …`). */
+  command?: string[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -51,6 +54,7 @@ export function PodTerminal({
         (chunk) => term.write(chunk),
         (err) => term.write(`\r\n[session ended${err ? `: ${err}` : ""}]\r\n`),
         container,
+        command,
       ).then((s) => {
         if (disposed) {
           s.close();
@@ -70,7 +74,9 @@ export function PodTerminal({
       disposed = true;
       cleanup();
     };
-  }, [context, namespace, pod, container]);
+    // command is a stable per-session array; joined into the deps key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context, namespace, pod, container, command?.join(" ")]);
 
   return <div ref={ref} style={{ height: "100%", width: "100%", background: "#000", padding: 6, boxSizing: "border-box" }} />;
 }
