@@ -523,13 +523,28 @@ jobs:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
           AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
 
           install -d -m 700 ~/.ssh
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          # AUR's SSH host keys come from the AUR_KNOWN_HOSTS secret (the two
+          # `known_hosts` lines) rather than a runtime ssh-keyscan, whose errors
+          # were swallowed (2>/dev/null) and surfaced only as an opaque "Host key
+          # verification failed" at clone time. These are the server's PUBLIC
+          # host keys; the secret just keeps them out of the workflow. Generate
+          # the value with `ssh-keyscan -t ed25519,rsa aur.archlinux.org` and
+          # verify against AUR's published fingerprints (ED25519
+          # SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4). See
+          # packaging/aur/README.md.
+          if [ -z "${AUR_KNOWN_HOSTS:-}" ]; then
+            echo "AUR_KNOWN_HOSTS secret is not set — add it (see packaging/aur/README.md)." >&2
+            exit 1
+          fi
+          printf '%s\n' "$AUR_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
 
           git config --global user.name "$AUR_USERNAME"
