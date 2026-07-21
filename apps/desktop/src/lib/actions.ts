@@ -128,3 +128,55 @@ export async function drainNode(
     return { error: String(e) };
   }
 }
+
+/**
+ * Attach an ephemeral debug container to a running pod via `k8s.debugPod`
+ * (destructive). Returns the created container's name to exec into. `target`
+ * shares another container's process namespace (for distroless pods).
+ */
+export async function debugPod(
+  context: string,
+  namespace: string,
+  pod: string,
+  image: string,
+  target: string | null = null,
+  invoke: Invoker = invokeCapability,
+): Promise<{ container?: string; error?: string }> {
+  try {
+    const out = await invoke<{ container: string }>("k8s.debugPod", {
+      context,
+      namespace,
+      pod,
+      image,
+      target_container: target ?? null,
+    });
+    return { container: out.container };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+/**
+ * Create a privileged node debug pod via `k8s.createNodeDebugPod` (destructive).
+ * Returns the pod's namespace + generated name; delete it (deletePod) when the
+ * shell closes.
+ */
+export async function createNodeDebugPod(
+  context: string,
+  node: string,
+  image: string | null = null,
+  namespace: string | null = null,
+  invoke: Invoker = invokeCapability,
+): Promise<{ namespace?: string; pod?: string; error?: string }> {
+  try {
+    const out = await invoke<{ namespace: string; pod: string }>("k8s.createNodeDebugPod", {
+      context,
+      node,
+      image: image ?? null,
+      namespace: namespace ?? null,
+    });
+    return { namespace: out.namespace, pod: out.pod };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}

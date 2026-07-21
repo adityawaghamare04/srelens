@@ -10,6 +10,7 @@ const {
   rolloutRestartMock,
   cronjobSetSuspendMock,
   cronjobTriggerNowMock,
+  debugPodMock,
 } = vi.hoisted(() => ({
   deletePodMock: vi.fn(),
   evictPodMock: vi.fn(),
@@ -18,6 +19,7 @@ const {
   rolloutRestartMock: vi.fn(),
   cronjobSetSuspendMock: vi.fn(),
   cronjobTriggerNowMock: vi.fn(),
+  debugPodMock: vi.fn(),
 }));
 vi.mock("../lib/workloads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/workloads")>();
@@ -29,6 +31,7 @@ vi.mock("../lib/actions", () => ({
   rolloutRestart: rolloutRestartMock,
   cronjobSetSuspend: cronjobSetSuspendMock,
   cronjobTriggerNow: cronjobTriggerNowMock,
+  debugPod: debugPodMock,
 }));
 const { notifyMock } = vi.hoisted(() => ({
   notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -71,6 +74,7 @@ beforeEach(() => {
   rolloutRestartMock.mockReset();
   cronjobSetSuspendMock.mockReset();
   cronjobTriggerNowMock.mockReset();
+  debugPodMock.mockReset();
   notifyMock.success.mockReset();
   notifyMock.error.mockReset();
   // Default: everything allowed, so pre-existing behavioural tests (written
@@ -107,6 +111,26 @@ describe("PodActions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(deletePodMock).toHaveBeenCalledWith("kind-dev", "default", "web-1"));
     await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+  });
+
+  it("attaches an ephemeral debug container and opens a terminal into it", async () => {
+    debugPodMock.mockResolvedValue({ container: "debugger-abc12" });
+    const onOpenTerminal = vi.fn();
+    render(<PodActions context="kind-dev" pod={pod} onOpenTerminal={onOpenTerminal} />);
+    fireEvent.click(screen.getByRole("button", { name: "Debug" }));
+    // Confirm the dialog (default image busybox).
+    fireEvent.click(screen.getByRole("button", { name: "Attach & open shell" }));
+    await waitFor(() =>
+      expect(debugPodMock).toHaveBeenCalledWith("kind-dev", "default", "web-1", "busybox", null),
+    );
+    await waitFor(() =>
+      expect(onOpenTerminal).toHaveBeenCalledWith({
+        context: "kind-dev",
+        namespace: "default",
+        pod: "web-1",
+        container: "debugger-abc12",
+      }),
+    );
   });
 
   it("evicts the pod behind a confirm", async () => {

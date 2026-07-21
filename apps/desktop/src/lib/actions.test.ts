@@ -6,6 +6,8 @@ import {
   cronjobSetSuspend,
   cronjobTriggerNow,
   updateConfigData,
+  debugPod,
+  createNodeDebugPod,
 } from "./actions";
 
 describe("resource actions", () => {
@@ -83,5 +85,30 @@ describe("resource actions", () => {
     expect(typeof (call[1] as { suffix: string }).suffix).toBe("string");
     expect((call[1] as { suffix: string }).suffix.length).toBeGreaterThan(0);
     expect(out.jobName).toBe("nightly-123");
+  });
+});
+
+describe("debug actions", () => {
+  it("debugPod passes image + target and returns the container", async () => {
+    const invoke = vi.fn().mockResolvedValue({ container: "debugger-1" });
+    const out = await debugPod("c", "ns", "web", "busybox", "app", invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.debugPod", {
+      context: "c", namespace: "ns", pod: "web", image: "busybox", target_container: "app",
+    });
+    expect(out.container).toBe("debugger-1");
+  });
+
+  it("createNodeDebugPod defaults image/namespace to null and returns pod", async () => {
+    const invoke = vi.fn().mockResolvedValue({ namespace: "default", pod: "srelens-node-debug-x" });
+    const out = await createNodeDebugPod("c", "node-a", null, null, invoke);
+    expect(invoke).toHaveBeenCalledWith("k8s.createNodeDebugPod", {
+      context: "c", node: "node-a", image: null, namespace: null,
+    });
+    expect(out).toEqual({ namespace: "default", pod: "srelens-node-debug-x" });
+  });
+
+  it("maps a thrown error", async () => {
+    const invoke = vi.fn().mockRejectedValue(new Error("forbidden"));
+    expect((await debugPod("c", "ns", "web", "busybox", null, invoke)).error).toContain("forbidden");
   });
 });

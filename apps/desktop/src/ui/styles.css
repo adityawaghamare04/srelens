@@ -3545,6 +3545,15 @@ body {
   margin: 0;
   vertical-align: middle;
 }
+/* Debug-container dialog fields. */
+.fl-debug-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--fl-color-text-muted);
+}
 
 .fl-resource-toolbar {
   min-height: 52px;

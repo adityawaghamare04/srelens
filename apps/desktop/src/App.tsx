@@ -51,6 +51,7 @@ import { checkForUpdateAndNotify } from "./lib/updateNotifier";
 import { notify } from "./lib/notify";
 import type { SettingsSection } from "./components/SettingsView";
 import { listContexts, deleteContext, type ClusterContext } from "./lib/clusters";
+import { deletePod } from "./lib/workloads";
 import { clearAccessCache } from "./lib/access";
 
 interface ViewTab {
@@ -469,21 +470,35 @@ export function App() {
       workload?: { kind: string; name: string };
       kubeconfigFiles?: string[];
       helm?: { args: string[]; title: string; values?: string; onComplete?: () => void };
+      /** A pod to delete when this dock session closes (node debug shell). */
+      deleteOnClose?: { context: string; namespace: string; pod: string };
     },
   ) {
     const id = dockIdRef.current++;
     setDockSessions((t) => [...t, { id, kind, ...s }]);
     setActiveDock(id);
   }
+  /** Tear down any pod tied to a closing dock session (e.g. node debug shell). */
+  function teardownDock(sessions: DockSession[]) {
+    for (const s of sessions) {
+      if (s.deleteOnClose) {
+        void deletePod(s.deleteOnClose.context, s.deleteOnClose.namespace, s.deleteOnClose.pod);
+      }
+    }
+  }
   function closeDockTab(id: number) {
     setDockSessions((t) => {
+      teardownDock(t.filter((x) => x.id === id));
       const remaining = t.filter((x) => x.id !== id);
       setActiveDock((a) => (a === id ? (remaining.at(-1)?.id ?? null) : a));
       return remaining;
     });
   }
   function closeDock() {
-    setDockSessions([]);
+    setDockSessions((t) => {
+      teardownDock(t);
+      return [];
+    });
     setActiveDock(null);
   }
 
