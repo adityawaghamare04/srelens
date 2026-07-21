@@ -689,6 +689,20 @@ async fn run_suite() {
         "expected our fixture pods: {out}"
     );
 
+    // #17: attach an ephemeral debug container to a fixture pod. It can't be
+    // removed once added, but the whole namespace is torn down after the suite.
+    let debug_pod = out["pods"].as_array().unwrap()[0]["name"].as_str().unwrap().to_string();
+    let dbg = h
+        .ok(
+            "k8s.debugPod",
+            json!({ "context": ctx, "namespace": NS, "pod": debug_pod, "image": "busybox" }),
+        )
+        .await;
+    assert!(
+        dbg["container"].as_str().unwrap().starts_with("debugger-"),
+        "debug container name: {dbg}",
+    );
+
     let out = h
         .ok(
             "k8s.listDeployments",
@@ -892,6 +906,23 @@ async fn run_suite() {
 
     let out = h.ok("k8s.listNodes", json!({ "context": ctx })).await;
     assert!(!out["nodes"].as_array().unwrap().is_empty());
+
+    // #17: create a privileged node debug pod, then tear it down immediately.
+    let node_name = out["nodes"].as_array().unwrap()[0]["name"].as_str().unwrap().to_string();
+    let nd = h
+        .ok(
+            "k8s.createNodeDebugPod",
+            json!({ "context": ctx, "node": node_name, "namespace": NS, "image": "busybox" }),
+        )
+        .await;
+    assert_eq!(nd["namespace"], NS);
+    let node_debug_pod = nd["pod"].as_str().unwrap().to_string();
+    assert!(node_debug_pod.starts_with("srelens-node-debug-"), "generated name: {nd}");
+    h.ok(
+        "k8s.deletePod",
+        json!({ "context": ctx, "namespace": NS, "pod": node_debug_pod }),
+    )
+    .await;
 
     let out = h
         .ok("k8s.listEvents", json!({ "context": ctx, "namespace": NS }))
