@@ -36,12 +36,14 @@ impl ExecManager {
 /// on `exec:out:<id>` and an `exec:exit:<id>` event fires (with an optional
 /// error string) when the session ends.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_pod_exec(
     context: String,
     namespace: String,
     pod: String,
     container: Option<String>,
     shell: Option<String>,
+    command: Option<Vec<String>>,
     app: AppHandle,
     manager: State<'_, ExecManager>,
 ) -> Result<u64, String> {
@@ -60,6 +62,7 @@ pub async fn start_pod_exec(
             pod,
             container,
             shell,
+            command,
             move |chunk| {
                 let _ = app_out.emit(&out_channel, chunk);
             },

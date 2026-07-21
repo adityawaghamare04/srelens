@@ -109,6 +109,7 @@ describe("NodeCordonAction RBAC gating", () => {
         namespace: "default",
         pod: "srelens-node-debug-x1",
         container: "debug",
+        execCommand: expect.arrayContaining(["nsenter", "/bin/sh"]),
         deleteOnClose: { context: "kind-dev", namespace: "default", pod: "srelens-node-debug-x1" },
       }),
     );

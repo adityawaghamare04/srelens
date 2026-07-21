@@ -3,6 +3,7 @@
 //! channel — Tauri-agnostic so the streaming logic stays reusable.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::AttachParams;
@@ -20,6 +21,48 @@ pub fn shell_command(requested: Option<&str>) -> Vec<String> {
     }
 }
 
+/// Whether `container` (or any container, if `None`) is in the Running state —
+/// checks both regular and ephemeral container statuses. Exec into a container
+/// that isn't running yet fails the WebSocket upgrade with a 500, so we wait for
+/// this before attaching.
+pub fn container_running(pod: &Pod, container: Option<&str>) -> bool {
+    let Some(status) = pod.status.as_ref() else {
+        return false;
+    };
+    let running = |statuses: &[k8s_openapi::api::core::v1::ContainerStatus]| {
+        statuses.iter().any(|cs| {
+            (container.is_none() || container == Some(cs.name.as_str()))
+                && cs.state.as_ref().and_then(|s| s.running.as_ref()).is_some()
+        })
+    };
+    status.container_statuses.as_deref().is_some_and(running)
+        || status.ephemeral_container_statuses.as_deref().is_some_and(running)
+}
+
+/// Poll until `container` is running, or a deadline passes. Gives debug
+/// containers / node debug pods time to start before we exec into them.
+async fn wait_for_running(
+    api: &Api<Pod>,
+    pod: &str,
+    container: Option<&str>,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let p = api.get(pod).await.map_err(|e| e.to_string())?;
+        if container_running(&p, container) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "container did not start within {}s",
+                timeout.as_secs()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(700)).await;
+    }
+}
+
 /// Open an interactive exec session. `on_output` receives stdout chunks
 /// (lossy UTF-8); `input_rx` yields stdin keystrokes. Runs until either side
 /// closes or the task is aborted.
@@ -31,6 +74,7 @@ pub async fn exec_shell<F>(
     pod: String,
     container: Option<String>,
     shell: Option<String>,
+    command: Option<Vec<String>>,
     mut on_output: F,
     mut input_rx: Receiver<String>,
 ) -> Result<(), String>
@@ -39,6 +83,12 @@ where
 {
     let client = cache.get(&context).await?;
     let api: Api<Pod> = Api::namespaced(client, &namespace);
+    let target = container.filter(|c| !c.is_empty());
+
+    // Debug containers and node debug pods take a moment to start; exec before
+    // that 500s the WebSocket upgrade. Wait briefly for the target to run.
+    wait_for_running(&api, &pod, target.as_deref(), Duration::from_secs(30)).await?;
+
     let mut params = AttachParams::default()
         .stdin(true)
         .stdout(true)
@@ -46,11 +96,13 @@ where
         .tty(true);
     // Target a specific container when asked (multi-container / sidecar pods);
     // otherwise the API defaults to the pod's first container.
-    if let Some(container) = container.filter(|c| !c.is_empty()) {
+    if let Some(container) = target {
         params = params.container(container);
     }
 
-    let command = shell_command(shell.as_deref());
+    // An explicit `command` (e.g. the node shell's `nsenter …`) overrides the
+    // default login shell.
+    let command = command.filter(|c| !c.is_empty()).unwrap_or_else(|| shell_command(shell.as_deref()));
     let mut attached = api
         .exec(&pod, command, &params)
         .await
@@ -92,5 +144,31 @@ mod tests {
         assert_eq!(shell_command(None), vec!["/bin/sh".to_string()]);
         assert_eq!(shell_command(Some("")), vec!["/bin/sh".to_string()]);
         assert_eq!(shell_command(Some("/bin/bash")), vec!["/bin/bash".to_string()]);
+    }
+
+    fn pod_with(json: serde_json::Value) -> Pod {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn container_running_checks_regular_and_ephemeral_statuses() {
+        let running = pod_with(serde_json::json!({
+            "status": { "containerStatuses": [{ "name": "app", "image": "x", "imageID": "", "ready": true, "restartCount": 0, "state": { "running": { "startedAt": "2020-01-01T00:00:00Z" } } }] }
+        }));
+        assert!(container_running(&running, Some("app")));
+        assert!(container_running(&running, None));
+        assert!(!container_running(&running, Some("other")));
+
+        let ephemeral = pod_with(serde_json::json!({
+            "status": { "ephemeralContainerStatuses": [{ "name": "debugger-1", "image": "x", "imageID": "", "ready": false, "restartCount": 0, "state": { "running": { "startedAt": "2020-01-01T00:00:00Z" } } }] }
+        }));
+        assert!(container_running(&ephemeral, Some("debugger-1")));
+
+        let waiting = pod_with(serde_json::json!({
+            "status": { "containerStatuses": [{ "name": "app", "image": "x", "imageID": "", "ready": false, "restartCount": 0, "state": { "waiting": { "reason": "ContainerCreating" } } }] }
+        }));
+        assert!(!container_running(&waiting, Some("app")));
+
+        assert!(!container_running(&pod_with(serde_json::json!({})), None));
     }
 }

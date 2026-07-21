@@ -16,6 +16,8 @@ export interface DockSession {
   pod?: string;
   /** Preselect this container in single-pod logs (from a per-container action). */
   container?: string;
+  /** Override the exec command for a terminal (e.g. node shell `nsenter …`). */
+  execCommand?: string[];
   /** Present for workload (e.g. Deployment) logs that span many pods. */
   workload?: { kind: string; name: string };
   /** Extra kubeconfig files, for a local `shell` terminal scoped to the context. */
@@ -165,6 +167,7 @@ export function Dock({
                 namespace={s.namespace}
                 pod={s.pod}
                 container={s.container}
+                command={s.execCommand}
               />
             ) : (
               <LogsView
