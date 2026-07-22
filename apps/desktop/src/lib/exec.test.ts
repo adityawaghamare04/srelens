@@ -36,6 +36,8 @@ describe("startPodExec", () => {
       container: null,
       shell: null,
       command: null,
+      cols: null,
+      rows: null,
     });
     expect(onMock).toHaveBeenCalledWith("exec:out:7", expect.any(Function));
     expect(onMock).toHaveBeenCalledWith("exec:exit:7", expect.any(Function));
@@ -47,6 +49,8 @@ describe("startPodExec", () => {
 
     session.send("ls\n");
     expect(invokeCommandMock).toHaveBeenCalledWith("exec_input", { session: 7, data: "ls\n" });
+    session.resize(120, 40);
+    expect(invokeCommandMock).toHaveBeenCalledWith("exec_resize", { session: 7, cols: 120, rows: 40 });
     session.close();
     expect(invokeCommandMock).toHaveBeenCalledWith("exec_close", { session: 7 });
   });
@@ -62,6 +66,8 @@ describe("startPodExec", () => {
       container: "sidecar",
       shell: null,
       command: null,
+      cols: null,
+      rows: null,
     });
   });
 });

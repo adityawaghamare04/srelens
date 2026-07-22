@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 struct Session {
     handle: JoinHandle<()>,
     input: mpsc::Sender<String>,
+    resize: mpsc::Sender<(u16, u16)>,
 }
 
 /// Tauri-managed state owning running exec sessions (keyed by numeric id).
@@ -44,11 +45,15 @@ pub async fn start_pod_exec(
     container: Option<String>,
     shell: Option<String>,
     command: Option<Vec<String>>,
+    cols: Option<u16>,
+    rows: Option<u16>,
     app: AppHandle,
     manager: State<'_, ExecManager>,
 ) -> Result<u64, String> {
     let id = manager.next_id.fetch_add(1, Ordering::SeqCst);
     let (tx, rx) = mpsc::channel::<String>(64);
+    let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>(8);
+    let initial_size = cols.zip(rows);
     let cache = manager.cache.clone();
     let out_channel = format!("exec:out:{id}");
     let exit_channel = format!("exec:exit:{id}");
@@ -63,6 +68,8 @@ pub async fn start_pod_exec(
             container,
             shell,
             command,
+            initial_size,
+            resize_rx,
             move |chunk| {
                 let _ = app_out.emit(&out_channel, chunk);
             },
@@ -76,7 +83,7 @@ pub async fn start_pod_exec(
         .sessions
         .lock()
         .unwrap()
-        .insert(id, Session { handle, input: tx });
+        .insert(id, Session { handle, input: tx, resize: resize_tx });
     Ok(id)
 }
 
@@ -95,6 +102,26 @@ pub async fn exec_input(
         .map(|s| s.input.clone());
     if let Some(tx) = sender {
         let _ = tx.send(data).await;
+    }
+    Ok(())
+}
+
+/// Resize an exec session's remote PTY to `cols` x `rows`.
+#[tauri::command]
+pub async fn exec_resize(
+    session: u64,
+    cols: u16,
+    rows: u16,
+    manager: State<'_, ExecManager>,
+) -> Result<(), String> {
+    let sender = manager
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&session)
+        .map(|s| s.resize.clone());
+    if let Some(tx) = sender {
+        let _ = tx.send((cols, rows)).await;
     }
     Ok(())
 }

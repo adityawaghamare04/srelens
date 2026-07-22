@@ -16,7 +16,7 @@ mod watch;
 
 use app_log::{app_log_path, read_app_log, reveal_app_log};
 use bridge::{invoke_capability, AppRegistry};
-use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
+use exec::{exec_close, exec_input, exec_resize, start_pod_exec, ExecManager};
 use files::{pick_kubeconfig_files, save_pasted_kubeconfig, save_text_file};
 use forward::{start_port_forward, stop_port_forward, ForwardManager};
 use helm::{helm_op_close, start_helm_op, HelmManager};
@@ -280,6 +280,7 @@ pub fn run() {
             stop_watch,
             start_pod_exec,
             exec_input,
+            exec_resize,
             exec_close,
             start_port_forward,
             stop_port_forward,

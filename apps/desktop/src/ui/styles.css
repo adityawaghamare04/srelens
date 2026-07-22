@@ -902,6 +902,16 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.fl-dock__tab-rename {
+  min-width: 6ch;
+  max-width: 20ch;
+  border: 1px solid var(--fl-color-border);
+  border-radius: 4px;
+  background: var(--fl-color-bg);
+  color: inherit;
+  font: inherit;
+  padding: 0 4px;
+}
 .fl-dock__new,
 .fl-dock__close {
   flex: 0 0 auto;
