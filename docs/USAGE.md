@@ -358,3 +358,11 @@ restart in place.
 If srelens was installed through a system package manager (for example the Arch
 AUR package), the in-app updater steps aside and points you at your package
 manager instead. AppImage and Windows builds always self-update.
+
+## Questions and feedback
+
+Have a question, hit a rough edge, or want to suggest a feature?
+
+- Join the community on Reddit at [r/srelens](https://www.reddit.com/r/srelens/).
+- File bugs and feature requests on
+  [GitHub Issues](https://github.com/srelens/srelens/issues).
