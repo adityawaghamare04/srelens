@@ -25,6 +25,7 @@
   <a href="https://github.com/srelens/srelens/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/srelens/srelens?display_name=release&label=release&color=22c55e"></a>
   <a href="https://github.com/srelens/srelens/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/srelens/srelens/total?label=downloads&color=3b82f6"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/srelens/srelens?color=675e80"></a>
+  <a href="https://www.reddit.com/r/srelens/"><img alt="Reddit: r/srelens" src="https://img.shields.io/badge/reddit-r%2Fsrelens-FF4500?logo=reddit&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -220,6 +221,13 @@ and reproducible troubleshooting details are welcome.
 - [Latest release](https://github.com/srelens/srelens/releases/latest)
 - [All releases](https://github.com/srelens/srelens/releases)
 - [Issues and roadmap](https://github.com/srelens/srelens/issues)
+
+## Community
+
+- [r/srelens on Reddit](https://www.reddit.com/r/srelens/) — announcements,
+  questions, and feedback
+- [Issues](https://github.com/srelens/srelens/issues) — bugs and feature requests
+- [Website](https://srelens.com)
 
 ## Contributing
 
