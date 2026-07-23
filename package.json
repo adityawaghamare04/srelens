@@ -7,5 +7,12 @@
     "build": "pnpm --filter @srelens/desktop build",
     "test": "pnpm -r test"
   },
-  "devDependencies": { "turbo": "^2.0.0" }
+  "devDependencies": { "turbo": "^2.0.0" },
+  "pnpm": {
+    "overrides": {
+      "fast-uri@>=3.0.0 <3.1.4": "^3.1.4",
+      "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2",
+      "@hono/node-server@<2.0.5": "^2.0.5"
+    }
+  }
 }
