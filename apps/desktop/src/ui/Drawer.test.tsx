@@ -26,4 +26,59 @@ describe("Drawer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("closes on Escape when open", () => {
+    const onClose = vi.fn();
+    render(
+      <Drawer open onClose={onClose}>
+        body
+      </Drawer>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close on Escape when closed", () => {
+    const onClose = vi.fn();
+    render(
+      <Drawer open={false} onClose={onClose}>
+        body
+      </Drawer>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("lets a layered modal dialog consume Escape first (does not close the drawer)", () => {
+    const onClose = vi.fn();
+    render(
+      <Drawer open onClose={onClose}>
+        body
+      </Drawer>,
+    );
+    // Simulate an open radix dialog layered over the drawer.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-state", "open");
+    document.body.appendChild(dialog);
+    try {
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(onClose).not.toHaveBeenCalled();
+    } finally {
+      dialog.remove();
+    }
+  });
+
+  it("does not hijack Escape while focus is in an editable field", () => {
+    const onClose = vi.fn();
+    render(
+      <Drawer open onClose={onClose}>
+        <input aria-label="search" />
+      </Drawer>,
+    );
+    const input = screen.getByLabelText("search");
+    input.focus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
