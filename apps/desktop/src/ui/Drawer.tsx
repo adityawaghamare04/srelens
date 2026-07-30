@@ -56,6 +56,25 @@ export function Drawer({ open, title, headerActions, onClose, children, defaultW
     };
   }, [open]);
 
+  // Close on Escape while open. Bail when a modal dialog is layered on top — it
+  // owns Esc, so the first Esc closes the dialog and a second closes the drawer —
+  // and when focus is in an editable field / the manifest editor, where Esc has
+  // its own meaning.
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return;
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+        return;
+      }
+      onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <aside
