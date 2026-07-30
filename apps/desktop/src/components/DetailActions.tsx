@@ -286,6 +286,8 @@ export function ResourceActions({
   onEdit?: () => void;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [confirmSuspend, setConfirmSuspend] = useState(false);
   const [scaling, setScaling] = useState(false);
   const [replicas, setReplicas] = useState("");
   const [triggering, setTriggering] = useState(false);
@@ -326,6 +328,7 @@ export function ResourceActions({
       reportActionError(context, `Failed to ${resume ? "resume" : "suspend"} ${name}`, r.error);
       return;
     }
+    setConfirmSuspend(false);
     notify.success(`${resume ? "Resumed" : "Suspended"} ${name}`);
     onChanged?.();
   }
@@ -386,9 +389,11 @@ export function ResourceActions({
     const r = await rolloutRestart(context, kind, namespace ?? "", name);
     setBusy("");
     if (r.error) {
+      setErr(r.error);
       reportActionError(context, `Failed to restart ${name}`, r.error);
       return;
     }
+    setRestarting(false);
     notify.success(`Rollout restart triggered for ${name}`);
     onChanged?.();
   }
@@ -426,7 +431,10 @@ export function ResourceActions({
           label="Restart"
           disabled={busy === "restart" || (restartCheck ? !access.allowed(restartCheck) : false)}
           title={restartCheck ? denyReason(access, restartCheck) : undefined}
-          onClick={() => void doRestart()}
+          onClick={() => {
+            setErr("");
+            setRestarting(true);
+          }}
         />
       )}
       {isCronJob && (
@@ -444,7 +452,10 @@ export function ResourceActions({
           label={cronjobSuspended ? "Resume" : "Suspend"}
           disabled={busy === "suspend" || (cronSuspendCheck ? !access.allowed(cronSuspendCheck) : false)}
           title={cronSuspendCheck ? denyReason(access, cronSuspendCheck) : undefined}
-          onClick={() => void doSetSuspend()}
+          onClick={() => {
+            setErr("");
+            setConfirmSuspend(true);
+          }}
         />
       )}
       <IconButton
@@ -455,6 +466,59 @@ export function ResourceActions({
         title={deleteCheck ? denyReason(access, deleteCheck) : undefined}
         onClick={() => setConfirmDelete(true)}
       />
+
+      {restarting && (
+        <ConfirmDialog
+          title={`Restart ${kind}`}
+          message={
+            <>
+              <p style={{ marginTop: 0 }}>
+                Trigger a rolling restart of <code>{name}</code>
+                {namespace ? (
+                  <>
+                    {" "}
+                    in <code>{namespace}</code>
+                  </>
+                ) : null}
+                ? This reschedules all of its pods.
+              </p>
+              {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
+            </>
+          }
+          confirmLabel="Restart"
+          busy={busy === "restart"}
+          onConfirm={() => void doRestart()}
+          onCancel={() => setRestarting(false)}
+        />
+      )}
+
+      {confirmSuspend && (
+        <ConfirmDialog
+          title={cronjobSuspended ? "Resume CronJob" : "Suspend CronJob"}
+          message={
+            <>
+              <p style={{ marginTop: 0 }}>
+                {cronjobSuspended ? "Resume" : "Suspend"} <code>{name}</code>
+                {namespace ? (
+                  <>
+                    {" "}
+                    in <code>{namespace}</code>
+                  </>
+                ) : null}
+                ?{" "}
+                {cronjobSuspended
+                  ? "Scheduled runs will resume."
+                  : "Scheduled runs will be paused; already-running jobs are unaffected."}
+              </p>
+              {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
+            </>
+          }
+          confirmLabel={cronjobSuspended ? "Resume" : "Suspend"}
+          busy={busy === "suspend"}
+          onConfirm={() => void doSetSuspend()}
+          onCancel={() => setConfirmSuspend(false)}
+        />
+      )}
 
       {triggering && (
         <ConfirmDialog
