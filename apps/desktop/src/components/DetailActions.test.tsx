@@ -185,7 +185,7 @@ describe("ResourceActions", () => {
     expect(notifyMock.success).not.toHaveBeenCalled();
   });
 
-  it("triggers a rollout restart", async () => {
+  it("triggers a rollout restart only after confirmation", async () => {
     rolloutRestartMock.mockResolvedValue({ ok: true });
     render(
       <ResourceActions
@@ -196,7 +196,12 @@ describe("ResourceActions", () => {
         onDeleted={() => {}}
       />,
     );
+    // Clicking Restart opens a confirm dialog; it must NOT fire the mutation yet.
     fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(rolloutRestartMock).not.toHaveBeenCalled();
+    // Confirm in the dialog (a second "Restart" button appears).
+    const buttons = await screen.findAllByRole("button", { name: "Restart" });
+    fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() =>
       expect(rolloutRestartMock).toHaveBeenCalledWith("kind-dev", "Deployment", "default", "web"),
     );
@@ -249,6 +254,9 @@ describe("ResourceActions", () => {
     );
     expect(screen.queryByRole("button", { name: "Suspend" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    // Confirm in the dialog (a second "Resume" button appears).
+    const buttons = await screen.findAllByRole("button", { name: "Resume" });
+    fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() =>
       expect(cronjobSetSuspendMock).toHaveBeenCalledWith("kind-dev", "ops", "nightly", false),
     );
@@ -266,7 +274,11 @@ describe("ResourceActions", () => {
         onDeleted={() => {}}
       />,
     );
+    // Clicking Suspend opens a confirm dialog; it must NOT fire the mutation yet.
     fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
+    expect(cronjobSetSuspendMock).not.toHaveBeenCalled();
+    const buttons = await screen.findAllByRole("button", { name: "Suspend" });
+    fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() =>
       expect(cronjobSetSuspendMock).toHaveBeenCalledWith("kind-dev", "ops", "nightly", true),
     );
