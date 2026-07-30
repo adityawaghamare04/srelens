@@ -17,10 +17,18 @@ describe("isExecAuthError", () => {
     expect(isExecAuthError("connection refused")).toBe(false);
     expect(isExecAuthError("Unauthorized")).toBe(false);
   });
-  it("describeError surfaces the auth-plugin message", () => {
+  it("describeError gives platform-appropriate exec-auth guidance", () => {
+    // Web (jsdom default, no Tauri): can't run plugins → point to Add cluster.
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+    expect(describeError("unable to run auth exec: executable not found").title).toBe(
+      "This cluster needs OIDC sign-in",
+    );
+    // Desktop: the plugin can be installed/run locally → Toolbox guidance.
+    (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
     expect(describeError("unable to run auth exec: executable not found").title).toBe(
       "Auth plugin couldn't run",
     );
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
   });
 });
 
@@ -66,6 +74,13 @@ describe("describeError", () => {
   it("classifies auth failures distinctly", () => {
     expect(describeError("Unauthorized").title).toBe("Not authorized");
     expect(describeError("forbidden: pods is forbidden").title).toBe("Access denied");
+  });
+
+  it("classifies a cluster-login marker as a distinct sign-in prompt, not generic unauthorized", () => {
+    expect(describeError("NEEDS_CLUSTER_LOGIN:abc123:my-context").title).toBe(
+      "Cluster sign-in required",
+    );
+    expect(describeError("cluster_login_required").title).toBe("Cluster sign-in required");
   });
 
   it("classifies TLS/certificate failures", () => {

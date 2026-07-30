@@ -92,8 +92,10 @@ mod age_tests {
 
 pub mod access;
 pub mod actions;
+pub mod auth_resolver;
 pub mod client_cache;
 pub mod cluster;
+pub mod cluster_synth;
 pub mod crds;
 pub mod connect;
 pub mod context_resolve;
@@ -119,6 +121,7 @@ pub mod manifest;
 pub mod metrics;
 pub mod networkpolicies;
 pub mod nodes;
+pub mod oidc_detect;
 pub mod persistentvolumes;
 pub mod pvcs;
 pub mod resourcequotas;

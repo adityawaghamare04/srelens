@@ -25,9 +25,13 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 srelens-capability = { path = "../../../crates/capability" }
 srelens-mcp = { path = "../../../crates/mcp" }
 srelens-kube = { path = "../../../crates/kube" }
+srelens-streams = { path = "../../../crates/streams" }
+srelens-server = { path = "../../../crates/server" }
+srelens-registry = { path = "../../../crates/registry" }
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "macros"] }
 # Blocking HTTP for Toolbox tool downloads (run inside spawn_blocking).
 # rustls-no-provider matches tauri-plugin-updater's reqwest so no second TLS
@@ -36,8 +40,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "ma
 # provider. default-tls here pulls rustls-platform-verifier -> aws-lc-rs,
 # giving two providers and a runtime "could not determine CryptoProvider" panic.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
-# Local pseudo-terminal for the in-app kubectl shell (spawns the user's login shell).
-portable-pty = "0.8"
 
 # Auto-update is desktop-only (mobile stores handle their own updates).
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]

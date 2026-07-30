@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 
 const { invokeCommandMock, onMock } = vi.hoisted(() => ({
   invokeCommandMock: vi.fn(),
@@ -14,6 +14,8 @@ import {
   stopPortForward,
   getForwards,
   subscribeForwards,
+  forwardUrl,
+  forwardAddress,
   type ActiveForward,
 } from "./forward";
 
@@ -97,5 +99,31 @@ describe("forward store", () => {
       "start_port_forward",
       expect.objectContaining({ localPort: 8080 }),
     );
+  });
+});
+
+describe("forwardUrl", () => {
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+  it("uses localhost:port on desktop", () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    expect(forwardUrl({ id: 3, localPort: 5000 })).toBe("http://localhost:5000");
+  });
+  it("uses the /pf proxy path on web", () => {
+    expect(forwardUrl({ id: 3, localPort: 5000 })).toBe("/pf/3/");
+  });
+});
+
+describe("forwardAddress", () => {
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+  });
+  it("uses localhost:port on desktop", () => {
+    (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+    expect(forwardAddress({ id: 3, localPort: 5000 })).toBe("localhost:5000");
+  });
+  it("uses the absolute /pf proxy URL on web", () => {
+    expect(forwardAddress({ id: 3, localPort: 5000 })).toBe(`${window.location.origin}/pf/3/`);
   });
 });

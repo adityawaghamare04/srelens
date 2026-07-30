@@ -1,7 +1,19 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsView } from "./SettingsView";
 import { DEFAULT_WORKSPACE_LAYOUT } from "../lib/settings";
+
+// These tests exercise desktop-only UI (native kubeconfig picker, in-app
+// updater, relaunch) that Task 5 gates behind `isTauri()`. Give the suite a
+// Tauri context so those blocks render as before; web-mode rendering of the
+// same sections is covered separately (WebKubeconfigSection.test.tsx).
+beforeEach(() => {
+  (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
+});
+afterEach(() => {
+  delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+});
 
 const fileMocks = vi.hoisted(() => ({
   pickKubeconfigFiles: vi.fn(),
@@ -57,6 +69,7 @@ describe("SettingsView", () => {
 
     expect(screen.getByText("Choose a palette and display mode. Changes apply immediately.")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
     const displayName = await screen.findByRole("textbox", { name: "Display name for prod-eu" });
     fireEvent.change(displayName, { target: { value: "Production Europe" } });
     expect(onContextProfilesChange).toHaveBeenCalledWith({
@@ -84,6 +97,7 @@ describe("SettingsView", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
     const url = await screen.findByRole("textbox", { name: "Custom logo URL for prod-eu" });
     fireEvent.change(url, { target: { value: "https://example.com/logo.png" } });
     expect(onContextProfilesChange).toHaveBeenCalledWith({
@@ -111,6 +125,7 @@ describe("SettingsView", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
     const moveDown = await screen.findByRole("button", { name: "Move prod-eu down" });
     fireEvent.click(moveDown);
     expect(onContextOrderChange).toHaveBeenCalledWith(["staging", "prod-eu"]);
@@ -136,6 +151,7 @@ describe("SettingsView", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
     await screen.findByText("Context identity");
     const rows = container.querySelectorAll<HTMLButtonElement>(".fl-context-manager__list > div > button");
     const grip = rows[0].querySelector<HTMLElement>(".fl-context-manager__grip")!;
@@ -381,6 +397,7 @@ describe("SettingsView", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
     // Wait for the context details panel to render for the default selection (prod-eu)
     const removeButton = await screen.findByRole("button", { name: "Remove context" });
     fireEvent.click(removeButton);
@@ -414,6 +431,7 @@ describe("SettingsView", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Contexts/ }));
+    await userEvent.click(screen.getByRole("tab", { name: "Appearance" }));
     await screen.findByText("Context identity");
 
     const row = container.querySelector<HTMLButtonElement>('button[data-context-name="staging"]')!;
@@ -426,5 +444,36 @@ describe("SettingsView", () => {
     fireEvent.click(confirmButton);
 
     await waitFor(() => expect(onDeleteContext).toHaveBeenCalledWith("staging"));
+  });
+
+  it("hides the Updates/MCP nav items and the request-timeout slider on the web", async () => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+
+    // The desktop-only nav entries are gone entirely (not just empty panes).
+    expect(screen.queryByRole("button", { name: /Updates/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^MCP/ })).toBeNull();
+
+    // The request-timeout slider is a no-op on the web (set_request_timeout
+    // isn't a web command), so it's hidden rather than shown-but-broken.
+    fireEvent.click(screen.getByRole("button", { name: /Kubernetes/ }));
+    expect(await screen.findByLabelText("Default namespace")).toBeDefined();
+    expect(screen.queryByLabelText("Cluster request timeout in seconds")).toBeNull();
   });
 });

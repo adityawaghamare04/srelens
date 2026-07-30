@@ -46,15 +46,17 @@ import {
   loadUpdateChannel,
   loadMcpSettings,
 } from "./lib/settings";
+import { loadOpenTabs, saveOpenTabs, nextTabId } from "./lib/openTabs";
 import { startMcpHttp } from "./lib/mcp";
 import { checkForUpdateAndNotify } from "./lib/updateNotifier";
 import { notify } from "./lib/notify";
+import { isTauri, isWeb } from "./transport/platform";
 import type { SettingsSection } from "./components/SettingsView";
 import { listContexts, deleteContext, type ClusterContext } from "./lib/clusters";
 import { deletePod } from "./lib/workloads";
 import { clearAccessCache } from "./lib/access";
 
-interface ViewTab {
+export interface ViewTab {
   id: number;
   cluster: string | null;
   kind: ResourceKind;
@@ -71,9 +73,15 @@ interface ViewTab {
 }
 
 export function App() {
-  // Each tab is a (cluster, resource-kind) view, like browser tabs.
-  const [tabs, setTabs] = useState<ViewTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  // Each tab is a (cluster, resource-kind) view, like browser tabs. In web mode
+  // the open tabs are restored from a prior session (a browser reload otherwise
+  // wipes them); desktop starts empty. Computed once so tabs/activeTabId/the id
+  // counter all agree on the same restored snapshot.
+  const [restored] = useState(loadOpenTabs);
+  const [tabs, setTabs] = useState<ViewTab[]>(() => restored?.tabs ?? []);
+  const [activeTabId, setActiveTabId] = useState<number | null>(
+    () => restored?.activeTabId ?? null,
+  );
   const [query, setQuery] = useState("");
   const [layout, setLayout] = useState(loadWorkspaceLayout);
   const [sidebarWidth, setSidebarWidth] = useState(layout.leftSidebarWidth);
@@ -86,7 +94,8 @@ export function App() {
   const [clusterNs, setClusterNs] = useState<Record<string, string>>(loadClusterNamespaces);
   // Global fallback namespace for clusters with no remembered selection.
   const [defaultNs, setDefaultNs] = useState(getDefaultNamespace);
-  const tabIdRef = useRef(1);
+  // Start the id counter past any restored tab so ids are never reused.
+  const tabIdRef = useRef(restored ? nextTabId(restored.tabs) : 1);
   const focusNonce = useRef(0);
   // Mirror the active tab id into a ref so the (once-registered) Cmd+W menu
   // event listener always sees the latest value without re-subscribing.
@@ -105,7 +114,9 @@ export function App() {
   const [contextsError, setContextsError] = useState("");
 
   const refreshContexts = () => {
-    listContexts(kubeconfigFiles).then((o) => {
+    // Web has no local kubeconfig files to merge in — the server resolves
+    // contexts server-side from the caller's uploaded kubeconfigs instead.
+    listContexts(isTauri() ? kubeconfigFiles : []).then((o) => {
       setContexts(o.contexts ?? []);
       setContextsError(o.error ?? "");
 
@@ -162,6 +173,9 @@ export function App() {
 
   // Persist per-cluster namespace whenever it changes.
   useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
+
+  // Persist the open tabs (web only) so a browser reload restores them.
+  useEffect(() => saveOpenTabs(tabs, activeTabId), [tabs, activeTabId]);
 
   /** The namespace a new tab in `cluster` should start on. */
   const namespaceFor = (cluster: string) => clusterNs[cluster] ?? defaultNs;
@@ -338,6 +352,7 @@ export function App() {
   // rather than only when the user opens Settings and clicks "check".
   const notifiedVersionRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!isTauri()) return;
     const channel = loadUpdateChannel();
     const run = () =>
       void checkForUpdateAndNotify(
@@ -357,6 +372,7 @@ export function App() {
   // Start the in-app MCP HTTP server on launch if the user left it enabled, so
   // agents can connect without opening Settings first.
   useEffect(() => {
+    if (!isTauri()) return;
     const mcp = loadMcpSettings();
     if (mcp.enabled) void startMcpHttp(mcp.port).catch(() => {});
   }, []);
@@ -674,8 +690,10 @@ export function App() {
                     onClose={closeDock}
                     onResize={setDockHeight}
                     onNewTerminal={(() => {
-                      // "+" opens another terminal for the active shell's context,
-                      // falling back to the connected cluster.
+                      // "+" opens another host shell for the active shell's
+                      // context. The host shell is desktop-only — web users get
+                      // in-pod exec terminals, so no "+" there.
+                      if (isWeb) return undefined;
                       const active = dockSessions.find((s) => s.id === activeDock);
                       const ctx = active?.kind === "shell" ? active.context : activeCluster;
                       const files =
@@ -708,7 +726,10 @@ export function App() {
         }
         tabCount={tabs.length}
         onOpenTerminal={
-          activeCluster
+          // The host shell (`kubectl · <ctx>`) is desktop-only: on the shared
+          // web server a container-host shell would break user isolation. Web
+          // users reach an RBAC-scoped in-pod exec terminal from a pod instead.
+          activeCluster && !isWeb
             ? () =>
                 openDock("shell", { context: activeCluster, namespace: "", kubeconfigFiles })
             : undefined

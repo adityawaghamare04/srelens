@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Copy, FolderOpen, RefreshCw } from "lucide-react";
 import { appLogPath, readAppLog, revealAppLog } from "../lib/appLog";
 import { Button, IconButton, Select, Spinner, TextInput } from "../ui";
+import { isTauri } from "../transport/platform";
 
 /** Log levels emitted by tauri-plugin-log, most→least severe. */
 const LEVELS = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] as const;
@@ -51,7 +52,10 @@ export function AppLogView() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => load(), [load]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    return load();
+  }, [load]);
 
   const lines = useMemo(() => (raw ? raw.split("\n").filter(Boolean) : []), [raw]);
   const filtered = useMemo(() => {
@@ -75,6 +79,17 @@ export function AppLogView() {
     }
   }
 
+  if (!isTauri()) {
+    return (
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-1 rounded border border-border bg-card p-4 text-center text-sm text-muted-foreground">
+        <p>
+          Application logs are available in the desktop app; on the server, view container logs
+          (e.g. <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">docker logs</code>).
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -95,10 +110,12 @@ export function AppLogView() {
         <div className="ml-auto flex items-center gap-1">
           {loading && <Spinner label="Loading log" />}
           <IconButton icon={RefreshCw} label="Refresh" onClick={load} disabled={loading} />
-          <Button variant="outline" size="sm" onClick={() => void revealAppLog()}>
-            <FolderOpen aria-hidden="true" className="size-3.5" />
-            Reveal
-          </Button>
+          {isTauri() && (
+            <Button variant="outline" size="sm" onClick={() => void revealAppLog()}>
+              <FolderOpen aria-hidden="true" className="size-3.5" />
+              Reveal
+            </Button>
+          )}
         </div>
       </div>
 

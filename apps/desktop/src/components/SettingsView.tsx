@@ -30,6 +30,7 @@ import {
   SectionPanel,
   TextInput,
   Button,
+  Tabs,
   ConfirmDialog,
   THEME_OPTIONS,
   type Theme,
@@ -65,6 +66,10 @@ import { AppLogView } from "./AppLogView";
 import { pickKubeconfigFiles, savePastedKubeconfig } from "../lib/files";
 import { checkForUpdate, installUpdate, type UpdateMeta } from "../lib/updater";
 import { appVersion, relaunchApp } from "../transport/transport";
+import { isTauri } from "../transport/platform";
+import { WebKubeconfigSection } from "./WebKubeconfigSection";
+import { WebAddClusterSection } from "./WebAddClusterSection";
+import { WebClusterSignInSection } from "./WebClusterSignInSection";
 
 const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string; icon: React.ElementType }> = [
   { mode: "dark", label: "Dark", description: "Low-light operational workspace", icon: Moon },
@@ -143,6 +148,13 @@ export function SettingsView({
   contextsError?: string;
   onDeleteContext?: (name: string) => Promise<void>;
 }) {
+  // MCP and Updates are desktop-only surfaces (their content is already
+  // isTauri()-gated below); drop the nav entries entirely on the web instead
+  // of leaving empty panes behind.
+  const visibleSections = isTauri()
+    ? SETTINGS_SECTIONS
+    : SETTINGS_SECTIONS.filter((s) => s.id !== "mcp" && s.id !== "updates");
+
   const [section, setSection] = useState<SettingsSection>(initialSection);
   const [internalContexts, setInternalContexts] = useState<ClusterContext[] | null>(null);
   const [internalError, setInternalError] = useState("");
@@ -157,6 +169,21 @@ export function SettingsView({
   const [pasteKubeconfigOpen, setPasteKubeconfigOpen] = useState(false);
   const [pastedKubeconfig, setPastedKubeconfig] = useState("");
   const [pastedKubeconfigName, setPastedKubeconfigName] = useState("");
+  // Bumped whenever a web-mode OIDC cluster is added, so the contexts/cluster
+  // list below can refresh (consumed as a refreshNonce prop by Task 6's list).
+  const [clusterRefresh, setClusterRefresh] = useState(0);
+  // Contexts sub-tab. The cluster-management sections (sources, sign-in) and
+  // the identity editor are tall; showing one at a time keeps the panel from
+  // overflowing (it can't scroll — the identity editor fills it).
+  const [ctxTab, setCtxTab] = useState<"sources" | "signin" | "appearance">("sources");
+  // After an Add-cluster: refresh the web sign-in list and, on desktop, track
+  // the newly-saved kubeconfig file so its contexts appear.
+  const handleClusterAdded = (savedPath?: string) => {
+    setClusterRefresh((n) => n + 1);
+    if (savedPath) {
+      onKubeconfigFilesChange([...new Set([...kubeconfigFiles, savedPath])]);
+    }
+  };
   const [updateState, setUpdateState] = useState<UpdatePhase>({ phase: "idle" });
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
   const [currentVersion, setCurrentVersion] = useState("");
@@ -390,7 +417,7 @@ export function SettingsView({
 
       <div className="fl-settings-workspace">
         <nav className="fl-settings-nav" aria-label="Settings sections">
-          {SETTINGS_SECTIONS.map(({ id, label, description, icon: Icon }) => (
+          {visibleSections.map(({ id, label, description, icon: Icon }) => (
             <button
               key={id}
               type="button"
@@ -510,31 +537,33 @@ export function SettingsView({
                 />
               </label>
 
-              <div className="fl-settings-width-grid">
-                <label className="fl-settings-width-control">
-                  <span className="fl-settings-width-control__header">
-                    <Timer aria-hidden="true" />
-                    <span>
-                      <strong>Request timeout</strong>
-                      <small>How long to wait for a cluster response. Raise it for large clusters.</small>
+              {isTauri() && (
+                <div className="fl-settings-width-grid">
+                  <label className="fl-settings-width-control">
+                    <span className="fl-settings-width-control__header">
+                      <Timer aria-hidden="true" />
+                      <span>
+                        <strong>Request timeout</strong>
+                        <small>How long to wait for a cluster response. Raise it for large clusters.</small>
+                      </span>
+                      <output>{requestTimeout}s</output>
                     </span>
-                    <output>{requestTimeout}s</output>
-                  </span>
-                  <input
-                    type="range"
-                    min={REQUEST_TIMEOUT.MIN}
-                    max={REQUEST_TIMEOUT.MAX}
-                    step="1"
-                    value={requestTimeout}
-                    onChange={(event) => {
-                      const secs = Number(event.target.value);
-                      setRequestTimeout(secs);
-                      void updateRequestTimeout(secs);
-                    }}
-                    aria-label="Cluster request timeout in seconds"
-                  />
-                </label>
-              </div>
+                    <input
+                      type="range"
+                      min={REQUEST_TIMEOUT.MIN}
+                      max={REQUEST_TIMEOUT.MAX}
+                      step="1"
+                      value={requestTimeout}
+                      onChange={(event) => {
+                        const secs = Number(event.target.value);
+                        setRequestTimeout(secs);
+                        void updateRequestTimeout(secs);
+                      }}
+                      aria-label="Cluster request timeout in seconds"
+                    />
+                  </label>
+                </div>
+              )}
             </SectionPanel>
           )}
 
@@ -544,68 +573,92 @@ export function SettingsView({
               title="Context management"
               description="Create a recognizable identity for every cluster without changing kubeconfig."
             >
-              <div className="fl-kubeconfig-sources">
-                <div>
-                  <span>
-                    <strong>Kubeconfig sources</strong>
-                    <small>The default kubeconfig is loaded first; additional files are merged in order.</small>
-                  </span>
-                  <span className="fl-kubeconfig-sources__actions">
-                    <Button variant="outline" size="sm" onClick={() => setPasteKubeconfigOpen((open) => !open)}>
-                      <ClipboardPaste data-icon="inline-start" /> Paste
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => void addKubeconfigFiles()}>
-                      <FilePlus2 data-icon="inline-start" /> Add files
-                    </Button>
-                  </span>
-                </div>
-                <div className="fl-kubeconfig-sources__files">
-                  <span className="is-default">Default / KUBECONFIG</span>
-                  {kubeconfigFiles.map((path) => (
-                    <span key={path} title={path}>
-                      <code>{path.split(/[\\/]/).at(-1) || path}</code>
-                      <button
-                        type="button"
-                        onClick={() => onKubeconfigFilesChange(kubeconfigFiles.filter((item) => item !== path))}
-                        aria-label={`Remove kubeconfig ${path}`}
-                      >
-                        <X aria-hidden="true" />
-                      </button>
+              <Tabs
+                tabs={[
+                  { id: "sources", label: "Sources" },
+                  { id: "signin", label: "Cluster sign-in" },
+                  { id: "appearance", label: "Appearance" },
+                ]}
+                active={ctxTab}
+                onChange={(id) => setCtxTab(id as typeof ctxTab)}
+              />
+              {ctxTab === "sources" && (
+                <div className="fl-web-ctx-scroll">
+                  {isTauri() ? (
+                    <div className="fl-kubeconfig-sources">
+                      <div>
+                        <span>
+                          <strong>Kubeconfig sources</strong>
+                      <small>The default kubeconfig is loaded first; additional files are merged in order.</small>
                     </span>
-                  ))}
-                </div>
-                {pasteKubeconfigOpen && (
-                  <div className="fl-kubeconfig-paste">
-                    <div>
-                      <label>
-                        <span>Name</span>
-                        <TextInput
-                          value={pastedKubeconfigName}
-                          onValueChange={setPastedKubeconfigName}
-                          placeholder="Team or environment"
-                          aria-label="Pasted kubeconfig name"
-                        />
-                      </label>
-                      <span>Saved securely in the srelens app configuration directory.</span>
-                    </div>
-                    <textarea
-                      value={pastedKubeconfig}
-                      onChange={(event) => setPastedKubeconfig(event.target.value)}
-                      placeholder="Paste kubeconfig YAML here…"
-                      aria-label="Kubeconfig YAML"
-                      spellCheck={false}
-                    />
-                    <footer>
-                      <Button variant="ghost" size="sm" onClick={() => setPasteKubeconfigOpen(false)}>Cancel</Button>
-                      <Button size="sm" disabled={!pastedKubeconfig.trim()} onClick={() => void addPastedKubeconfig()}>
-                        Add kubeconfig
+                    <span className="fl-kubeconfig-sources__actions">
+                      <Button variant="outline" size="sm" onClick={() => setPasteKubeconfigOpen((open) => !open)}>
+                        <ClipboardPaste data-icon="inline-start" /> Paste
                       </Button>
-                    </footer>
+                      <Button variant="outline" size="sm" onClick={() => void addKubeconfigFiles()}>
+                        <FilePlus2 data-icon="inline-start" /> Add files
+                      </Button>
+                    </span>
                   </div>
-                )}
-                {kubeconfigError && <p role="alert">{kubeconfigError}</p>}
-              </div>
-              {contexts === null ? (
+                  <div className="fl-kubeconfig-sources__files">
+                    <span className="is-default">Default / KUBECONFIG</span>
+                    {kubeconfigFiles.map((path) => (
+                      <span key={path} title={path}>
+                        <code>{path.split(/[\\/]/).at(-1) || path}</code>
+                        <button
+                          type="button"
+                          onClick={() => onKubeconfigFilesChange(kubeconfigFiles.filter((item) => item !== path))}
+                          aria-label={`Remove kubeconfig ${path}`}
+                        >
+                          <X aria-hidden="true" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  {pasteKubeconfigOpen && (
+                    <div className="fl-kubeconfig-paste">
+                      <div>
+                        <label>
+                          <span>Name</span>
+                          <TextInput
+                            value={pastedKubeconfigName}
+                            onValueChange={setPastedKubeconfigName}
+                            placeholder="Team or environment"
+                            aria-label="Pasted kubeconfig name"
+                          />
+                        </label>
+                        <span>Saved securely in the srelens app configuration directory.</span>
+                      </div>
+                      <textarea
+                        value={pastedKubeconfig}
+                        onChange={(event) => setPastedKubeconfig(event.target.value)}
+                        placeholder="Paste kubeconfig YAML here…"
+                        aria-label="Kubeconfig YAML"
+                        spellCheck={false}
+                      />
+                      <footer>
+                        <Button variant="ghost" size="sm" onClick={() => setPasteKubeconfigOpen(false)}>Cancel</Button>
+                        <Button size="sm" disabled={!pastedKubeconfig.trim()} onClick={() => void addPastedKubeconfig()}>
+                          Add kubeconfig
+                        </Button>
+                      </footer>
+                    </div>
+                  )}
+                  {kubeconfigError && <p role="alert">{kubeconfigError}</p>}
+                    </div>
+                  ) : (
+                    <WebKubeconfigSection />
+                  )}
+                  <WebAddClusterSection onAdded={handleClusterAdded} />
+                </div>
+              )}
+              {ctxTab === "signin" && (
+                <div className="fl-web-ctx-scroll">
+                  <WebClusterSignInSection refreshNonce={clusterRefresh} />
+                </div>
+              )}
+              {ctxTab === "appearance" &&
+                (contexts === null ? (
                 <p className="fl-settings-context-state">Reading kubeconfig contexts…</p>
               ) : contextError ? (
                 <p className="fl-settings-context-state">Unable to load kubeconfig contexts.</p>
@@ -839,11 +892,11 @@ export function SettingsView({
                     </article>
                   )}
                 </div>
-              )}
+                ))}
             </SectionPanel>
           )}
 
-          {section === "mcp" && (
+          {section === "mcp" && isTauri() && (
             <SectionPanel
               title="MCP"
               description="Expose srelens to agents and MCP clients, and get ready-to-paste client config."
@@ -861,7 +914,7 @@ export function SettingsView({
             </SectionPanel>
           )}
 
-          {section === "updates" && (
+          {section === "updates" && isTauri() && (
             <SectionPanel title="Updates" description="Check for and install new versions of srelens.">
               <div className="fl-settings-update">
                 <div className="fl-settings-update__version">
