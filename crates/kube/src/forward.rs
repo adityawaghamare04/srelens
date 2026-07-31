@@ -2,6 +2,8 @@
 //! each inbound connection through its own port-forward stream to a pod —
 //! Tauri-agnostic so the listener/stream plumbing stays reusable and testable.
 
+use std::fmt;
+use std::io::ErrorKind;
 use std::sync::Arc;
 
 use k8s_openapi::api::core::v1::{Pod, Service, ServicePort};
@@ -13,28 +15,98 @@ use tokio::net::TcpListener;
 
 use crate::client_cache::ClientCache;
 
+/// Why `bind_local` failed. `InUse` carries a `suggested` free port (found by
+/// binding `:0` once) so callers can offer it to the user instead of just
+/// failing outright.
+#[derive(Debug)]
+pub enum BindError {
+    InUse { requested: u16, suggested: u16 },
+    Io(String),
+}
+
+impl fmt::Display for BindError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BindError::InUse { requested, suggested } => write!(
+                f,
+                "port {requested} is already in use; {suggested} is free"
+            ),
+            BindError::Io(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for BindError {}
+
 /// Bind a loopback TCP listener. A `port` of 0 lets the OS pick a free port;
-/// read `local_addr()` on the returned listener for the chosen port.
-pub async fn bind_local(port: u16) -> Result<TcpListener, String> {
-    TcpListener::bind(("127.0.0.1", port))
-        .await
-        .map_err(|e| e.to_string())
+/// read `local_addr()` on the returned listener for the chosen port. If
+/// `port` is already taken, binds `:0` to find a free port to suggest and
+/// returns `BindError::InUse` with that suggestion.
+pub async fn bind_local(port: u16) -> Result<TcpListener, BindError> {
+    match TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(listener) => Ok(listener),
+        Err(e) if e.kind() == ErrorKind::AddrInUse => {
+            let suggested = TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .map_err(|e| BindError::Io(e.to_string()))?
+                .local_addr()
+                .map_err(|e| BindError::Io(e.to_string()))?
+                .port();
+            Err(BindError::InUse {
+                requested: port,
+                suggested,
+            })
+        }
+        Err(e) => Err(BindError::Io(e.to_string())),
+    }
+}
+
+/// Build the port-forward API client for a context/namespace. Split out from
+/// `serve_pod_forward` so callers (the reconnect loop) can tell "the session
+/// established" (this succeeded) apart from "the accept loop ended" (below).
+pub async fn connect_pod_api(
+    cache: Arc<ClientCache>,
+    context: &str,
+    namespace: &str,
+) -> Result<Api<Pod>, String> {
+    let client = cache.get(context).await?;
+    Ok(Api::namespaced(client, namespace))
 }
 
 /// Accept loop for a bound listener: every inbound local connection opens its
 /// own port-forward stream to `pod:remote_port` and is piped bidirectionally.
-/// Runs until the listener errors or the spawning task is aborted.
+/// Runs until the listener errors, the target pod monitor detects the pod is
+/// gone (see below), or the spawning task is aborted. Takes the listener by
+/// reference so a reconnect loop can keep the same bound local port across
+/// attempts and re-accept on it (`TcpListener::accept` only needs `&self`, so
+/// no re-bind is required).
+///
+/// Per-connection port-forward failures (e.g. a single `portforward` call
+/// failing) are swallowed inside the detached per-connection task and do not
+/// end the session by themselves — only the accept loop erroring or the
+/// target-pod monitor detecting pod loss does. This matters for Service
+/// targets: without the monitor, a deleted target pod would leave the accept
+/// loop parked in `listener.accept()` forever, so the outer reconnect loop
+/// (which re-resolves a Service to its current backing pod on every attempt)
+/// would never get a chance to run again.
 pub async fn serve_pod_forward(
-    listener: TcpListener,
-    cache: Arc<ClientCache>,
-    context: String,
-    namespace: String,
+    listener: &TcpListener,
+    api: Api<Pod>,
     pod: String,
     remote_port: u16,
 ) -> Result<(), String> {
-    let client = cache.get(&context).await?;
-    let api: Api<Pod> = Api::namespaced(client, &namespace);
+    tokio::select! {
+        res = accept_loop(listener, api.clone(), pod.clone(), remote_port) => res,
+        res = monitor_target_pod(api, pod) => res,
+    }
+}
 
+async fn accept_loop(
+    listener: &TcpListener,
+    api: Api<Pod>,
+    pod: String,
+    remote_port: u16,
+) -> Result<(), String> {
     loop {
         let (mut local, _peer) = listener.accept().await.map_err(|e| e.to_string())?;
         let api = api.clone();
@@ -49,6 +121,56 @@ pub async fn serve_pod_forward(
             }
         });
     }
+}
+
+/// How often the target-pod monitor polls the cluster for the forwarded
+/// pod's liveness.
+const POD_MONITOR_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Poll `pod` on a short interval and return an error once it's gone (deleted
+/// or no longer `Running`), ending the `serve_pod_forward` session so the
+/// outer reconnect loop gets a chance to re-resolve (a Service target picks
+/// up its replacement pod). A transient API error while polling (e.g. a
+/// momentary network blip) is not treated as "gone" — only an authoritative
+/// answer from the API (not found, or an object that fails `pod_is_gone`)
+/// ends the session, so we don't tear down a healthy forward on a hiccup.
+///
+/// The first check is skipped by `POD_MONITOR_INTERVAL` (rather than firing
+/// immediately) since a freshly resolved target may still be transitioning
+/// into `Running` right as this session starts.
+async fn monitor_target_pod(api: Api<Pod>, pod: String) -> Result<(), String> {
+    let mut interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + POD_MONITOR_INTERVAL,
+        POD_MONITOR_INTERVAL,
+    );
+    loop {
+        interval.tick().await;
+        match api.get_opt(&pod).await {
+            Ok(Some(p)) if !pod_is_gone(&p) => continue,
+            Ok(_) => return Err(format!("target pod {pod} is no longer available")),
+            Err(_) => continue,
+        }
+    }
+}
+
+/// Whether `pod` should be treated as no longer usable as a forward target:
+/// it's mid-deletion (`deletionTimestamp` set) or its phase isn't `Running`
+/// (e.g. `Failed`, `Succeeded`, or missing status entirely).
+pub fn pod_is_gone(pod: &Pod) -> bool {
+    if pod.metadata.deletion_timestamp.is_some() {
+        return true;
+    }
+    pod.status.as_ref().and_then(|s| s.phase.as_deref()) != Some("Running")
+}
+
+/// One-shot readiness probe: true only when the target pod currently exists and
+/// is Running (not terminating). A missing pod or an API error reads as
+/// not-ready. Used to decide whether a reconnect attempt actually *established*
+/// — building an `Api<Pod>` handle does no I/O and always "succeeds", so without
+/// this probe a permanently-dead target would reconnect forever and never reach
+/// the give-up threshold. Mirrors the monitor's own liveness check.
+pub async fn pod_is_ready(api: &Api<Pod>, pod: &str) -> bool {
+    matches!(api.get_opt(pod).await, Ok(Some(p)) if !pod_is_gone(&p))
 }
 
 /// Resolve a Service to a concrete `(pod, container_port)` to forward to: pick
@@ -159,6 +281,20 @@ mod tests {
         assert!(addr.port() > 0);
     }
 
+    #[tokio::test]
+    async fn bind_local_reports_conflict_with_a_free_suggestion() {
+        let taken = bind_local(0).await.unwrap();
+        let p = taken.local_addr().unwrap().port();
+        match bind_local(p).await {
+            Err(BindError::InUse { requested, suggested }) => {
+                assert_eq!(requested, p);
+                assert!(suggested != 0 && suggested != p);
+                bind_local(suggested).await.expect("suggested port is free");
+            }
+            other => panic!("expected InUse, got {other:?}"),
+        }
+    }
+
     #[test]
     fn select_service_port_matches_by_number_else_first() {
         let ports = vec![svc_port(80, None), svc_port(443, None)];
@@ -239,5 +375,43 @@ mod tests {
             Some("pending")
         );
         assert!(pick_ready_pod(&[]).is_none());
+    }
+
+    fn pod_with(phase: Option<&str>, deleted: bool) -> Pod {
+        let deletion_timestamp = deleted.then(|| {
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(k8s_openapi::chrono::Utc::now())
+        });
+        Pod {
+            metadata: kube::core::ObjectMeta {
+                deletion_timestamp,
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: phase.map(String::from),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn pod_is_gone_true_when_running_but_marked_for_deletion() {
+        // A pod mid-termination is still (briefly) `Running` in status, but
+        // the deletionTimestamp means it's on its way out — treat it as gone
+        // so the forward doesn't keep serving through a terminating pod.
+        assert!(pod_is_gone(&pod_with(Some("Running"), true)));
+    }
+
+    #[test]
+    fn pod_is_gone_true_when_phase_is_not_running() {
+        assert!(pod_is_gone(&pod_with(Some("Pending"), false)));
+        assert!(pod_is_gone(&pod_with(Some("Failed"), false)));
+        assert!(pod_is_gone(&pod_with(Some("Succeeded"), false)));
+        assert!(pod_is_gone(&pod_with(None, false)));
+    }
+
+    #[test]
+    fn pod_is_gone_false_when_running_and_not_deleted() {
+        assert!(!pod_is_gone(&pod_with(Some("Running"), false)));
     }
 }
