@@ -93,16 +93,21 @@ The automation cannot run until a human claims the package name on the AUR:
    - `AUR_USERNAME` — your AUR account name
    - `AUR_EMAIL` — the email on that account
    - `AUR_SSH_PRIVATE_KEY` — the private half of the key from step 1
-   - `AUR_KNOWN_HOSTS` — AUR's SSH host keys, so the publish job can verify the
-     server before cloning. These are the server's *public* host keys (not a
-     secret in the cryptographic sense); the secret just keeps them out of the
-     workflow. Generate the value with:
-     ```
-     ssh-keyscan -t ed25519,rsa aur.archlinux.org
-     ```
-     and confirm the fingerprints match AUR's published ones (`ssh-keygen -lf`)
-     — currently ED25519 `SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4`,
-     RSA `SHA256:5s5cIyReIfNNVGRFdDbe3hdYiI5OelHGpw2rOUud3Q8` — before pasting.
+
+   There is deliberately **no** `AUR_KNOWN_HOSTS` secret. The publish job fetches
+   AUR's host key with `ssh-keyscan` and refuses to continue unless its
+   fingerprint matches a constant pinned in `.github/workflows/release.yml`
+   (currently ED25519 `SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4`) — so
+   an unexpected key still stops the push, but the trust decision lives in
+   reviewable code rather than in an opaque secret whose formatting nobody can
+   check. A secret that lost its newlines on paste is what broke the v0.4.0
+   publish, with ssh reporting only "Host key verification failed".
+
+   If AUR rotates its host key, verify the new one against Arch's published
+   fingerprints and update the constant in the workflow:
+   ```
+   ssh-keyscan -t ed25519 aur.archlinux.org | ssh-keygen -lf -
+   ```
 
 The current stable release is **`srelens-v0.2.0`**, so the initial import can be
 done against it today (the PKGBUILD builds cleanly against its published `.deb`).
