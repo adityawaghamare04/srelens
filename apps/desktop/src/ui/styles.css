@@ -2701,13 +2701,45 @@ body {
   margin: 0;
 }
 .fl-settings-update__notes {
-  max-height: 180px;
+  max-height: 220px;
   overflow: auto;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--fl-color-border-faint);
   border-radius: var(--fl-radius-md);
+  font-size: 13px;
+  line-height: 1.5;
+}
+/* First and last child margins would otherwise show as uneven inner padding. */
+.fl-settings-update__notes > :first-child {
+  margin-top: 0;
+}
+.fl-settings-update__notes > :last-child {
+  margin-bottom: 0;
+}
+.fl-release-notes__heading {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fl-color-text-muted);
+}
+.fl-release-notes__list {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+.fl-release-notes__list li {
+  margin: 3px 0;
+}
+.fl-release-notes__para {
+  margin: 8px 0;
+}
+.fl-settings-update__notes code {
+  padding: 1px 4px;
+  border-radius: var(--fl-radius-sm);
+  background: var(--fl-color-surface-alt);
   font-size: 12px;
-  white-space: pre-wrap;
 }
 .fl-settings-width-grid {
   display: grid;
