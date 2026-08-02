@@ -147,18 +147,38 @@ jobs:
   # Publish the srelens web image to GHCR (multi-arch) whenever the version
   # job determined there's something to release — mirrors the desktop build's
   # release gate, independent of the (long) desktop matrix below.
+  #
+  # ONE ARCHITECTURE PER NATIVE RUNNER, joined into a manifest by the job below.
+  # This used to be a single job building linux/amd64,linux/arm64 with QEMU, but
+  # the image compiles the server from source (see Dockerfile) and emulating a
+  # Rust release build is punishing: the last such run took 1h44m, against ~12
+  # minutes for all four desktop targets including Apple notarization. Worse, it
+  # serialized releases — `concurrency: release-<ref>` meant the next stable cut
+  # sat pending behind it. arm64 runners are free for public repos, so the arm
+  # leg now compiles natively instead of instruction-by-instruction.
+  #
+  # Each leg pushes by DIGEST only (no tag): two jobs pushing the same tag would
+  # race, with the loser's architecture silently dropped from the result.
   docker:
-    name: docker image
+    name: docker image (${{ matrix.arch }})
     needs: version
     if: needs.version.outputs.release == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -167,25 +187,83 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compute tags
-        id: tags
-        run: |
-          VERSION="${{ needs.version.outputs.version }}"
-          TAGS="ghcr.io/srelens/srelens:${VERSION}"
-          # `latest` only for stable releases on main.
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAGS="${TAGS},ghcr.io/srelens/srelens:latest"
-          fi
-          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/srelens/srelens,push-by-digest=true,name-canonical=true,push=true
+          # Per-arch cache scope: a shared scope would have the two legs
+          # overwrite each other's layers on every run, costing the cache hit
+          # this is meant to provide.
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+      - name: Export digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          if [ -z "$digest" ]; then
+            echo "::error::build produced no digest for ${{ matrix.arch }}"
+            exit 1
+          fi
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Join the per-arch images into one multi-arch tag. Split from the build jobs
+  # so the tag appears only once BOTH architectures are published — a partial
+  # manifest would serve amd64 users an image while arm64 pulls 404.
+  docker-manifest:
+    name: docker manifest
+    needs: [version, docker]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: docker-digest-*
+          merge-multiple: true
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and push manifest
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+          IMAGE=ghcr.io/srelens/srelens
+          TAGS=(-t "${IMAGE}:${VERSION}")
+          # `latest` only for stable releases on main.
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS+=(-t "${IMAGE}:latest")
+          fi
+          cd /tmp/digests
+          # Both legs must have landed; an empty or short list means a silent
+          # partial publish, which is exactly what this job exists to prevent.
+          count=$(ls -1 | wc -l)
+          if [ "$count" -ne 2 ]; then
+            echo "::error::expected 2 per-arch digests, found ${count}"
+            ls -la
+            exit 1
+          fi
+          docker buildx imagetools create "${TAGS[@]}" $(printf "${IMAGE}@sha256:%s " *)
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
   build:
     needs: version
