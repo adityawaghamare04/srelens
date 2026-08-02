@@ -12,9 +12,10 @@ use kube::config::{Config, KubeConfigOptions, Kubeconfig};
 use kube::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use srelens_capability::{Annotations, Capability};
+use srelens_capability::{Annotations, Capability, CapabilityError};
 
 use crate::client_cache::ClientCache;
+use crate::context_resolve::resolve_context;
 
 /// Default per-request timeout budget (connect + list/get/apply), in seconds.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 8;
@@ -87,7 +88,29 @@ pub fn validate_kubeconfig_yaml(yaml: &str) -> Result<usize, String> {
 /// at this file means `kubectl config get-contexts` lists just that context and
 /// `use-context` can't switch to any other.
 pub fn single_context_kubeconfig_yaml(paths: &[PathBuf], context: &str) -> Result<String, String> {
-    let mut config = load_kubeconfigs(paths)?;
+    // Map the (possibly disambiguated) display name back to its owning file and
+    // in-file name, so a duplicate-named context scopes to its own cluster/user.
+    let resolved = resolve_context(paths, context);
+    let in_config = resolved
+        .as_ref()
+        .map(|target| target.original_name.clone())
+        .unwrap_or_else(|| context.to_string());
+
+    // Prefer the owning file (correct for duplicate names); fall back to the
+    // merged view when the context is a single config split across files.
+    if let Some(target) = &resolved {
+        if let Ok(config) = Kubeconfig::read_from(&target.source) {
+            if let Ok(yaml) = standalone_context_yaml(config, &in_config) {
+                return Ok(yaml);
+            }
+        }
+    }
+    standalone_context_yaml(load_kubeconfigs(paths)?, &in_config)
+}
+
+/// Build a standalone kubeconfig YAML keeping only `context` plus the one
+/// cluster and user it references, with `current-context` pinned to it.
+fn standalone_context_yaml(mut config: Kubeconfig, context: &str) -> Result<String, String> {
     let named = config
         .contexts
         .iter()
@@ -97,6 +120,12 @@ pub fn single_context_kubeconfig_yaml(paths: &[PathBuf], context: &str) -> Resul
         .context
         .clone()
         .ok_or_else(|| format!("context '{context}' has no cluster/user"))?;
+    // A split config might not carry this context's cluster/user in this file.
+    if !config.clusters.iter().any(|c| c.name == inner.cluster)
+        || !config.auth_infos.iter().any(|a| a.name == inner.user)
+    {
+        return Err(format!("context '{context}' is missing its cluster or user here"));
+    }
 
     config.contexts.retain(|c| c.name == context);
     config.clusters.retain(|c| c.name == inner.cluster);
@@ -147,31 +176,39 @@ pub fn write_single_context_kubeconfig(
 
 /// Resolve a kube `Config` for `context`, preferring the file that declares it
 /// (so merge "first-file-wins" can't shadow its cluster/user), else the merge.
+///
+/// `context` is the disambiguated display name from [`resolve_contexts`]; we map
+/// it back to the exact file + in-file name that owns it, so duplicate-named
+/// contexts across merged files each connect to their own cluster and user
+/// instead of always resolving to the first.
 pub(crate) async fn config_for_context(paths: &[PathBuf], context: &str) -> Result<Config, String> {
-    // Prefer the specific kubeconfig file that declares `context`: kube-rs merge
-    // is "first file wins" by name, so a same-named cluster/user in another
-    // merged file can shadow (or drop) this context's own entries. Building from
-    // the owning file uses that context's real cluster + user.
-    for path in paths {
-        let Ok(kc) = Kubeconfig::read_from(path) else {
-            continue;
-        };
-        if !kc.contexts.iter().any(|c| c.name == context) {
-            continue;
-        }
-        let options = KubeConfigOptions {
-            context: Some(context.to_string()),
-            cluster: None,
-            user: None,
-        };
-        if let Ok(config) = Config::from_custom_kubeconfig(kc, &options).await {
-            return Ok(config);
+    let resolved = resolve_context(paths, context);
+    // The name kube-rs must find inside the kubeconfig (display names may be
+    // prefixed for disambiguation; the file itself still uses the raw name).
+    let in_config = resolved
+        .as_ref()
+        .map(|target| target.original_name.clone())
+        .unwrap_or_else(|| context.to_string());
+
+    // Prefer the specific file that owns this context: kube-rs merge is "first
+    // file wins" by name, so a same-named cluster/user in another merged file
+    // can shadow (or drop) this context's own entries.
+    if let Some(target) = &resolved {
+        if let Ok(kc) = Kubeconfig::read_from(&target.source) {
+            let options = KubeConfigOptions {
+                context: Some(target.original_name.clone()),
+                cluster: None,
+                user: None,
+            };
+            if let Ok(config) = Config::from_custom_kubeconfig(kc, &options).await {
+                return Ok(config);
+            }
         }
     }
-    // Fallback: merged resolution (handles configs split across files).
+    // Fallback: merged resolution (handles a single config split across files).
     let kubeconfig = load_kubeconfigs(paths)?;
     let options = KubeConfigOptions {
-        context: Some(context.to_string()),
+        context: Some(in_config),
         cluster: None,
         user: None,
     };
@@ -182,6 +219,76 @@ pub(crate) async fn config_for_context(paths: &[PathBuf], context: &str) -> Resu
 
 pub(crate) async fn build_client(paths: &[PathBuf], context: &str) -> Result<Client, String> {
     let config = config_for_context(paths, context).await?;
+    Client::try_from(config).map_err(|e| e.to_string())
+}
+
+/// Rewrite `kc` so the user of `in_config_ctx` authenticates with a static
+/// Bearer token — strips any auth-provider/exec so kube-rs won't run a plugin.
+/// (Used for srelens-managed OIDC clusters; the id_token is the Bearer.)
+fn set_context_bearer(kc: &mut Kubeconfig, in_config_ctx: &str, bearer: &str) {
+    let user_name = kc
+        .contexts
+        .iter()
+        .find(|c| c.name == in_config_ctx)
+        .and_then(|c| c.context.as_ref())
+        .map(|c| c.user.clone());
+    if let Some(user_name) = user_name {
+        for named in kc.auth_infos.iter_mut() {
+            if named.name == user_name {
+                named.auth_info = Some(kube::config::AuthInfo {
+                    token: Some(bearer.to_string().into()),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+}
+
+/// Like `config_for_context`, but authenticates `context` with `bearer`,
+/// ignoring the kubeconfig's own auth (OIDC-managed clusters).
+async fn config_for_context_with_bearer(
+    paths: &[PathBuf],
+    context: &str,
+    bearer: &str,
+) -> Result<Config, String> {
+    let resolved = resolve_context(paths, context);
+    let in_config = resolved
+        .as_ref()
+        .map(|target| target.original_name.clone())
+        .unwrap_or_else(|| context.to_string());
+
+    if let Some(target) = &resolved {
+        if let Ok(mut kc) = Kubeconfig::read_from(&target.source) {
+            set_context_bearer(&mut kc, &target.original_name, bearer);
+            let options = KubeConfigOptions {
+                context: Some(target.original_name.clone()),
+                cluster: None,
+                user: None,
+            };
+            if let Ok(config) = Config::from_custom_kubeconfig(kc, &options).await {
+                return Ok(config);
+            }
+        }
+    }
+    let mut kubeconfig = load_kubeconfigs(paths)?;
+    set_context_bearer(&mut kubeconfig, &in_config, bearer);
+    let options = KubeConfigOptions {
+        context: Some(in_config),
+        cluster: None,
+        user: None,
+    };
+    Config::from_custom_kubeconfig(kubeconfig, &options)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Build a client for `context` authenticating with a static Bearer token.
+pub async fn build_client_with_bearer(
+    paths: &[PathBuf],
+    context: &str,
+    bearer: &str,
+) -> Result<Client, String> {
+    let config = config_for_context_with_bearer(paths, context, bearer).await?;
     Client::try_from(config).map_err(|e| e.to_string())
 }
 
@@ -219,25 +326,126 @@ pub fn cluster_info_capability(cache: Arc<ClientCache>) -> Capability {
         move |input: ClusterInfoIn| {
             let cache = cache.clone();
             async move {
-                Ok(match connect_and_version(&cache, &input.context).await {
-                    Ok(version) => ClusterInfoOut {
+                match connect_and_version(&cache, &input.context).await {
+                    Ok(version) => Ok(ClusterInfoOut {
                         context: input.context,
                         reachable: true,
                         version: Some(version),
                         error: None,
-                    },
+                    }),
                     Err(error) => {
                         // A failed handshake may mean a stale cached client.
                         cache.invalidate(&input.context).await;
-                        ClusterInfoOut {
+                        // An OIDC cluster with no valid token must surface as a
+                        // login signal (mapped to 401 upstream), not a
+                        // reachable:false result the UI would render with the
+                        // raw marker text.
+                        if crate::auth_resolver::parse_needs_login(&error).is_some() {
+                            return Err(CapabilityError::Handler(error));
+                        }
+                        Ok(ClusterInfoOut {
                             context: input.context,
                             reachable: false,
                             version: None,
                             error: Some(error),
-                        }
+                        })
                     }
-                })
+                }
             }
+        },
+    )
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TestClusterIn {
+    /// The kubeconfig YAML to probe (e.g. a synthesized-but-unsaved cluster).
+    pub yaml: String,
+    /// The context within `yaml` to connect to.
+    pub context: String,
+}
+
+/// Probe whether a kubeconfig's context is reachable WITHOUT running any
+/// exec/auth-provider plugin. This is deliberate: on the shared web server,
+/// running an exec command from user-supplied YAML would be remote code
+/// execution — so auth is stripped and this validates the server URL + CA/TLS
+/// only. A server that responds at all (including 401/403) is reachable; only a
+/// connection/TLS/DNS failure is not. Actual OIDC auth is validated later, when
+/// the cluster is used (native kubelogin on desktop, managed token on web).
+async fn probe_cluster_from_yaml(yaml: &str, context: &str) -> ClusterInfoOut {
+    let fail = |error: String| ClusterInfoOut {
+        context: context.to_string(),
+        reachable: false,
+        version: None,
+        error: Some(error),
+    };
+    let mut kc = match Kubeconfig::from_yaml(yaml) {
+        Ok(kc) => kc,
+        Err(e) => return fail(e.to_string()),
+    };
+    // Strip the target context's user auth so no exec plugin can run.
+    let user_name = kc
+        .contexts
+        .iter()
+        .find(|c| c.name == context)
+        .and_then(|c| c.context.as_ref())
+        .map(|c| c.user.clone());
+    match user_name {
+        Some(user_name) => {
+            for named in kc.auth_infos.iter_mut() {
+                if named.name == user_name {
+                    named.auth_info = Some(kube::config::AuthInfo::default());
+                }
+            }
+        }
+        None => return fail(format!("context not found: {context}")),
+    }
+    let options = KubeConfigOptions {
+        context: Some(context.to_string()),
+        cluster: None,
+        user: None,
+    };
+    let config = match Config::from_custom_kubeconfig(kc, &options).await {
+        Ok(c) => c,
+        Err(e) => return fail(e.to_string()),
+    };
+    let client = match Client::try_from(config) {
+        Ok(c) => c,
+        Err(e) => return fail(e.to_string()),
+    };
+    match tokio::time::timeout(request_timeout(), client.apiserver_version()).await {
+        Ok(Ok(info)) => ClusterInfoOut {
+            context: context.to_string(),
+            reachable: true,
+            version: Some(info.git_version),
+            error: None,
+        },
+        // The server responded with an HTTP error (e.g. 401/403 because auth was
+        // stripped) — it is reachable; it just needs authentication to use.
+        Ok(Err(kube::Error::Api(err))) => ClusterInfoOut {
+            context: context.to_string(),
+            reachable: true,
+            version: None,
+            error: Some(format!(
+                "server reachable (HTTP {}); sign in to authenticate",
+                err.code
+            )),
+        },
+        Ok(Err(e)) => fail(e.to_string()),
+        Err(_) => fail("connection timed out".to_string()),
+    }
+}
+
+/// Build the `k8s.testClusterConnection` capability — reachability check for a
+/// kubeconfig before it's saved. See [`probe_cluster_from_yaml`] for the
+/// no-exec safety rationale.
+pub fn test_cluster_connection_capability() -> Capability {
+    Capability::typed::<TestClusterIn, ClusterInfoOut, _, _>(
+        "k8s.testClusterConnection",
+        "probe a kubeconfig context's server reachability (no exec plugins run)",
+        Annotations::READ_ONLY,
+        move |input: TestClusterIn| async move {
+            Ok(probe_cluster_from_yaml(&input.yaml, &input.context).await)
         },
     )
 }
@@ -261,6 +469,74 @@ mod tests {
         assert_eq!(request_timeout_secs(), 20);
         // Restore the default so other tests see a known value.
         set_request_timeout_secs(DEFAULT_TIMEOUT_SECS);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn probe_strips_exec_and_never_runs_it() {
+        // A kubeconfig user with an exec plugin pointed at a command that, if
+        // run, would be obvious in the error — plus an unreachable server. The
+        // probe must strip the exec (RCE-safety on the shared web server) and
+        // fail with a CONNECTION error, never an exec/command error.
+        let yaml = "apiVersion: v1\nkind: Config\ncurrent-context: c\nclusters:\n- name: cl\n  cluster: {server: \"https://127.0.0.1:1\"}\nusers:\n- name: u\n  user:\n    exec:\n      apiVersion: client.authentication.k8s.io/v1beta1\n      command: srelens-should-never-run-this\ncontexts:\n- name: c\n  context: {cluster: cl, user: u}\n";
+        let out = probe_cluster_from_yaml(yaml, "c").await;
+        assert!(!out.reachable);
+        let err = out.error.unwrap().to_lowercase();
+        assert!(
+            !err.contains("srelens-should-never-run-this"),
+            "exec command must not be run: {err}"
+        );
+        assert!(!err.contains("exec"), "no exec plugin should be attempted: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn probe_reports_context_not_found() {
+        let yaml = "apiVersion: v1\nkind: Config\nclusters:\n- name: cl\n  cluster: {server: https://x}\ncontexts:\n- name: c\n  context: {cluster: cl, user: u}\n";
+        let out = probe_cluster_from_yaml(yaml, "missing").await;
+        assert!(!out.reachable);
+        assert!(out.error.unwrap().contains("context not found"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cluster_info_maps_needs_login_to_handler_error() {
+        use crate::auth_resolver::{needs_login_marker, AuthMode, AuthResolver};
+
+        struct NeedsLogin;
+        #[async_trait::async_trait]
+        impl AuthResolver for NeedsLogin {
+            async fn resolve(&self, context: &str) -> Result<AuthMode, String> {
+                Err(needs_login_marker("K", context))
+            }
+        }
+
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "srelens-clusterinfo-oidc-{}-{}.yaml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(
+            &path,
+            "apiVersion: v1\nkind: Config\ncurrent-context: ctx\nclusters:\n- name: c\n  cluster: {server: https://x}\ncontexts:\n- name: ctx\n  context: {cluster: c, user: u}\nusers:\n- name: u\n  user: {}\n",
+        )
+        .unwrap();
+
+        let cache = ClientCache::new(path.clone());
+        cache.set_auth_resolver(Arc::new(NeedsLogin)).await;
+        let cap = cluster_info_capability(cache);
+        // A needs-login must map to Handler(marker) (→ 401), NOT a
+        // reachable:false Ok result carrying the raw marker string.
+        let err = (cap.handler)(json!({ "context": "ctx" }))
+            .await
+            .expect_err("expected a needs-login handler error");
+        if let CapabilityError::Handler(msg) = err {
+            assert_eq!(msg, needs_login_marker("K", "ctx"));
+        } else {
+            panic!("expected CapabilityError::Handler(marker)");
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -379,6 +655,65 @@ mod tests {
 
         let _ = std::fs::remove_file(&file_a);
         let _ = std::fs::remove_file(&file_b);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn config_for_context_connects_duplicate_named_contexts_to_their_own_file() {
+        // Both files name their context `default` but point at different
+        // servers. kube-rs merge keeps only the first; disambiguation must let
+        // each connect to its own cluster via its (distinct) display name.
+        let file_a = write_temp_kubeconfig(
+            "dupA",
+            "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: https://a.example:6443 }\nusers:\n  - name: u\n    user: {}\ncontexts:\n  - name: default\n    context: { cluster: c, user: u }\n",
+        );
+        let file_b = write_temp_kubeconfig(
+            "dupB",
+            "apiVersion: v1\nkind: Config\nclusters:\n  - name: c\n    cluster: { server: https://b.example:6443 }\nusers:\n  - name: u\n    user: {}\ncontexts:\n  - name: default\n    context: { cluster: c, user: u }\n",
+        );
+
+        let paths = vec![file_a.clone(), file_b.clone()];
+        let resolved = crate::context_resolve::resolve_contexts(&paths);
+        assert_eq!(resolved.len(), 2, "both duplicate-named contexts must be visible");
+        let a_display = resolved.iter().find(|c| c.source == file_a).unwrap().display_name.clone();
+        let b_display = resolved.iter().find(|c| c.source == file_b).unwrap().display_name.clone();
+        assert_ne!(a_display, b_display, "disambiguated names must differ");
+
+        // Connecting by fileB's display name must reach fileB's server, not the
+        // first-merged fileA.
+        let config = config_for_context(&paths, &b_display).await.unwrap();
+        assert!(
+            config.cluster_url.to_string().starts_with("https://b.example"),
+            "expected fileB's server, got {}",
+            config.cluster_url
+        );
+
+        let _ = std::fs::remove_file(&file_a);
+        let _ = std::fs::remove_file(&file_b);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn build_client_with_bearer_strips_auth_provider_and_builds() {
+        // A user with `auth-provider: oidc` would make plain `build_client`
+        // try to run kubelogin (fails headless). `build_client_with_bearer`
+        // must rewrite the AuthInfo to a static token before building, so the
+        // client construction succeeds without ever touching the exec/plugin
+        // path (building a Client doesn't hit the network).
+        let path = write_temp_kubeconfig(
+            "oidc",
+            "apiVersion: v1\nkind: Config\ncurrent-context: ctx-oidc\nclusters:\n  - name: c\n    cluster: { server: https://oidc.example:6443 }\nusers:\n  - name: u\n    user:\n      auth-provider:\n        name: oidc\n        config:\n          idp-issuer-url: https://issuer.example\n          client-id: some-client\ncontexts:\n  - name: ctx-oidc\n    context: { cluster: c, user: u }\n",
+        );
+
+        let result =
+            build_client_with_bearer(std::slice::from_ref(&path), "ctx-oidc", "test-bearer-token")
+                .await;
+        if let Err(e) = &result {
+            panic!("expected Ok, got Err({e})");
+        }
+
+        let missing = build_client_with_bearer(std::slice::from_ref(&path), "missing-ctx", "t").await;
+        assert!(missing.is_err());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test(flavor = "multi_thread")]

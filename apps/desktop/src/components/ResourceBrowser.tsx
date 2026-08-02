@@ -532,6 +532,28 @@ interface ResourceState {
   loading: boolean;
 }
 
+// Last-seen rows per view (`context|namespace|kind`), kept module-level so
+// switching tabs — which unmounts the browser — and returning shows the data
+// instantly instead of an empty spinner + full re-fetch. Stale-while-revalidate:
+// the watch/list still runs on mount and overwrites both the view and this
+// cache, and the existing render shows a subtle inline spinner (not the full
+// LoadingState) while revalidating because rows are already present. Bounded via
+// a simple move-to-end LRU so it can't grow without limit.
+const LIST_CACHE_MAX = 40;
+const listRowCache = new Map<string, Array<{ name: string }>>();
+function cacheRows(key: string, rows: Array<{ name: string }>) {
+  listRowCache.delete(key); // re-insert at the end = most-recently-used
+  listRowCache.set(key, rows);
+  if (listRowCache.size > LIST_CACHE_MAX) {
+    const oldest = listRowCache.keys().next().value;
+    if (oldest !== undefined) listRowCache.delete(oldest);
+  }
+}
+/** Test-only: clear the cross-mount row cache between cases. */
+export function __clearListRowCacheForTests() {
+  listRowCache.clear();
+}
+
 interface OtherDetail {
   kind: string;
   namespace: string | null;
@@ -606,7 +628,12 @@ export function ResourceBrowser({
   }, [nsScope]);
   const watchNamespace = watchNamespaceForSelection(selection);
   const selectionKey = serializeNamespaceSelection(selection);
-  const [res, setRes] = useState<ResourceState>({ rows: [], error: "", loading: false });
+  const [res, setRes] = useState<ResourceState>(() => {
+    // Hydrate from the cross-mount cache on first render so a re-opened tab
+    // paints its previous rows immediately (no empty flash before the effect).
+    const cached = listRowCache.get(`${context}|${watchNamespace}|${kind}`);
+    return { rows: cached ?? [], error: "", loading: false };
+  });
   const [watchStatus, setWatchStatus] = useState<WatchStatus>("live");
   const [selectedPod, setSelectedPod] = useState<PodSummary | null>(null);
   const [otherDetail, setOtherDetail] = useState<OtherDetail | null>(null);
@@ -635,7 +662,10 @@ export function ResourceBrowser({
     if (fresh) {
       setSelectedPod(null);
       setOtherDetail(null);
-      setRes({ rows: [], error: "", loading: true });
+      // Show any cached rows for the new view immediately (revalidate below);
+      // only a view with no cache falls back to the full loading state.
+      const cached = listRowCache.get(viewKey);
+      setRes({ rows: cached ?? [], error: "", loading: true });
     } else {
       setRes((r) => ({ ...r, loading: true }));
     }
@@ -648,7 +678,10 @@ export function ResourceBrowser({
         watchNamespace,
         kind,
         (rows) => {
-          if (!cancelled) setRes({ rows, error: "", loading: false });
+          if (!cancelled) {
+            setRes({ rows, error: "", loading: false });
+            cacheRows(viewKey, rows);
+          }
         },
         (status) => {
           if (!cancelled) setWatchStatus(status);
@@ -686,7 +719,11 @@ export function ResourceBrowser({
             error: o.error,
           }));
     void loader.then(({ rows, error }) => {
-      if (!cancelled) setRes({ rows: rows ?? [], error: error ?? "", loading: false });
+      if (!cancelled) {
+        const loaded = rows ?? [];
+        setRes({ rows: loaded, error: error ?? "", loading: false });
+        if (!error) cacheRows(viewKey, loaded);
+      }
     });
     return () => {
       cancelled = true;

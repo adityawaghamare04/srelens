@@ -1,4 +1,5 @@
 import { invokeCommand, on } from "../transport/transport";
+import { isTauri } from "../transport/platform";
 
 /** A live port-forward: a local port piped to a Pod or Service. */
 export interface ActiveForward {
@@ -10,6 +11,8 @@ export interface ActiveForward {
   name: string;
   remotePort: number;
   localPort: number;
+  /** Live state, driven by `forward:status:<id>` events from the backend. */
+  status: "active" | "reconnecting" | "failed";
 }
 
 export interface ForwardRequest {
@@ -53,12 +56,19 @@ export async function startPortForward(req: ForwardRequest): Promise<ActiveForwa
     remotePort: req.remotePort,
     localPort: req.localPort ?? null,
   });
-  const fwd: ActiveForward = { ...req, id: info.id, localPort: info.localPort };
+  const fwd: ActiveForward = { ...req, id: info.id, localPort: info.localPort, status: "active" };
   forwards = [...forwards, fwd];
-  closers.set(
-    info.id,
-    on(`forward:closed:${info.id}`, () => removeForward(info.id)),
-  );
+  const unsubClosed = on(`forward:closed:${info.id}`, () => removeForward(info.id));
+  const unsubStatus = on(`forward:status:${info.id}`, (payload) => {
+    const state = (payload as { state?: unknown } | null)?.state;
+    if (state === "active" || state === "reconnecting" || state === "failed") {
+      setForwardStatus(info.id, state);
+    }
+  });
+  closers.set(info.id, () => {
+    unsubClosed();
+    unsubStatus();
+  });
   emit();
   return fwd;
 }
@@ -67,6 +77,30 @@ export async function startPortForward(req: ForwardRequest): Promise<ActiveForwa
 export async function stopPortForward(id: number): Promise<void> {
   await invokeCommand("stop_port_forward", { id });
   removeForward(id);
+}
+
+/** Where a live port-forward is reachable from the current UI: the bound
+ *  localhost port on desktop, or the same-origin `/pf/<id>/` reverse proxy on
+ *  web (the container's loopback port isn't reachable from the browser). */
+export function forwardUrl(info: { id: number; localPort: number }): string {
+  return isTauri() ? `http://localhost:${info.localPort}` : `/pf/${info.id}/`;
+}
+
+/** The human-readable, copy-pasteable address of a live forward: the bound
+ *  localhost port on desktop, or the absolute same-origin `/pf/<id>/` proxy URL
+ *  on web (the container's loopback port isn't reachable from the browser). */
+export function forwardAddress(info: { id: number; localPort: number }): string {
+  return isTauri()
+    ? `localhost:${info.localPort}`
+    : `${window.location.origin}/pf/${info.id}/`;
+}
+
+function setForwardStatus(id: number, status: ActiveForward["status"]) {
+  const next = forwards.map((f) => (f.id === id && f.status !== status ? { ...f, status } : f));
+  if (next.some((f, i) => f !== forwards[i])) {
+    forwards = next;
+    emit();
+  }
 }
 
 function removeForward(id: number) {

@@ -1,10 +1,12 @@
 import React, { useSyncExternalStore } from "react";
 import { ArrowLeftRight, CircleStop, Copy } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { StatusPill, type StatusKind } from "../ui";
 import {
   getForwards,
   subscribeForwards,
   stopPortForward,
+  forwardAddress,
   type ActiveForward,
 } from "../lib/forward";
 
@@ -13,9 +15,31 @@ export function useForwards(): ActiveForward[] {
   return useSyncExternalStore(subscribeForwards, getForwards, getForwards);
 }
 
+const STATUS_KIND: Record<ActiveForward["status"], StatusKind> = {
+  active: "success",
+  reconnecting: "warning",
+  failed: "danger",
+};
+
+const STATUS_LABEL: Record<ActiveForward["status"], string> = {
+  active: "Active",
+  reconnecting: "Reconnecting",
+  failed: "Failed",
+};
+
+/** Colour/label for a forward's live status — shared by every view that
+ *  lists forwards, so reconnecting/failed forwards never read as active. */
+export function forwardStatusKind(status: ActiveForward["status"]): StatusKind {
+  return STATUS_KIND[status];
+}
+
+export function forwardStatusLabel(status: ActiveForward["status"]): string {
+  return STATUS_LABEL[status];
+}
+
 /**
  * Status-bar control listing active port-forwards. Hidden when none are
- * running; otherwise a count opens a popover to copy `localhost:<port>` or
+ * running; otherwise a count opens a popover to copy the forward's address or
  * stop each forward.
  */
 export function ForwardsIndicator() {
@@ -44,14 +68,15 @@ export function ForwardsIndicator() {
                   <span className="text-muted-foreground"> · {f.kind.toLowerCase()}</span>
                 </div>
                 <div className="truncate font-mono text-muted-foreground">
-                  localhost:{f.localPort} → {f.remotePort}
+                  {forwardAddress(f)} → {f.remotePort}
                 </div>
+                <StatusPill status={forwardStatusLabel(f.status)} kind={forwardStatusKind(f.status)} />
               </div>
               <button
                 type="button"
                 className="fl-forward-action rounded-sm px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                onClick={() => void navigator.clipboard?.writeText(`localhost:${f.localPort}`)}
-                title="Copy localhost address"
+                onClick={() => void navigator.clipboard?.writeText(forwardAddress(f))}
+                title="Copy address"
               >
                 <Copy aria-hidden="true" />
                 Copy

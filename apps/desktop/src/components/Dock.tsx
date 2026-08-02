@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Logs, Plus, SquareTerminal, X } from "lucide-react";
 import { PodTerminal } from "./PodTerminal";
 import { LocalTerminal } from "./LocalTerminal";
@@ -67,6 +67,26 @@ export function Dock({
   heightRef.current = height;
   const handleRef = useRef<HTMLDivElement>(null);
 
+  // In-memory tab renames (double-click a tab to rename; not persisted).
+  const [titles, setTitles] = useState<Record<number, string>>({});
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const labelOf = (s: DockSession) => titles[s.id] ?? sessionLabel(s);
+  const startRename = (s: DockSession) => {
+    setDraft(labelOf(s));
+    setRenamingId(s.id);
+  };
+  const commitRename = (id: number) => {
+    const name = draft.trim();
+    setTitles((current) => {
+      const next = { ...current };
+      if (name) next[id] = name;
+      else delete next[id];
+      return next;
+    });
+    setRenamingId(null);
+  };
+
   useEffect(() => {
     const handle = handleRef.current;
     if (!handle) return;
@@ -108,7 +128,7 @@ export function Dock({
               key={s.id}
               role="tab"
               aria-selected={s.id === activeId}
-              title={sessionLabel(s)}
+              title={`${labelOf(s)} — double-click to rename`}
               className={`fl-dock__tab${s.id === activeId ? " fl-dock__tab--active" : ""}`}
               onClick={() => onActivate(s.id)}
             >
@@ -118,11 +138,35 @@ export function Dock({
                 ) : (
                   <Logs aria-hidden="true" />
                 )}
-                <span className="fl-dock__tab-label">{sessionLabel(s)}</span>
+                {renamingId === s.id ? (
+                  <input
+                    className="fl-dock__tab-rename"
+                    value={draft}
+                    autoFocus
+                    onChange={(e) => setDraft(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitRename(s.id);
+                      else if (e.key === "Escape") setRenamingId(null);
+                    }}
+                    onBlur={() => commitRename(s.id)}
+                    aria-label={`Rename ${sessionLabel(s)}`}
+                  />
+                ) : (
+                  <span
+                    className="fl-dock__tab-label"
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      startRename(s);
+                    }}
+                  >
+                    {labelOf(s)}
+                  </span>
+                )}
               </span>
               <button
                 className="fl-dock__tab-close"
-                aria-label={`Close ${sessionLabel(s)} ${s.kind}`}
+                aria-label={`Close ${labelOf(s)} ${s.kind}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onCloseTab(s.id);

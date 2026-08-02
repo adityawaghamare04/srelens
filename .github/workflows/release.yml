@@ -1,15 +1,31 @@
 name: Release
 
-# dev  branch -> rolling pre-release tagged `srelens-v<version>-<run>`
-# main branch -> the version is derived AUTOMATICALLY from Conventional Commits
-#                since the last stable tag (feat -> minor, fix/perf -> patch,
-#                BREAKING CHANGE or `!` -> major). The version files are bumped +
-#                committed back to main with [skip ci], then a stable
-#                `srelens-v<version>` release is built. No manual bump needed; if
-#                there are no releasable commits the release is skipped.
+# dev  branch  -> rolling pre-release tagged `srelens-v<version>-<run>`. NOT built
+#                 on every push: a dev release is cut once a day (see the cron
+#                 below) or on demand via "Run workflow". If nothing has landed
+#                 since the last dev pre-release the run skips the build, so we
+#                 don't burn an Apple notarization request on an identical
+#                 binary. A manual run can override that with `force`.
+# main branch  -> the version is derived AUTOMATICALLY from Conventional Commits
+#                 since the last stable tag (feat -> minor, fix/perf -> patch,
+#                 BREAKING CHANGE or `!` -> major). The version files are bumped +
+#                 committed back to main with [skip ci], then a stable
+#                 `srelens-v<version>` release is built. No manual bump needed; if
+#                 there are no releasable commits the release is skipped.
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
+  # Once-a-day dev pre-release at 18:00 UTC. Scheduled runs always use the
+  # default branch (dev). Skipped automatically when nothing has landed since
+  # the last dev pre-release.
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Release even if nothing changed since the last dev pre-release'
+        type: boolean
+        default: false
 
 # Don't cancel an in-flight release run (it could leave partial assets).
 concurrency:
@@ -48,6 +64,23 @@ jobs:
           # use the run number alone. Not committed; the build job writes it into
           # the version files locally before building.
           if [ "${{ github.ref_name }}" != "main" ]; then
+            # Nothing new since the last dev pre-release? Skip — rebuilding the
+            # same tree yields an identical app and costs an Apple notarization
+            # request, which is what we're economizing. `force` (manual runs
+            # only) overrides; inputs.force is empty on schedule/push events, so
+            # the check applies there.
+            LAST_DEV_TAG=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' 'refs/tags/srelens-v*' \
+              | grep -vE '^srelens-v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+            if [ "${{ inputs.force }}" != "true" ] && [ -n "$LAST_DEV_TAG" ]; then
+              LAST_SHA=$(git rev-list -n 1 "$LAST_DEV_TAG" 2>/dev/null || true)
+              if [ -n "$LAST_SHA" ] && [ "$LAST_SHA" = "$(git rev-parse HEAD)" ]; then
+                echo "release=false" >> "$GITHUB_OUTPUT"
+                echo "No new commits since ${LAST_DEV_TAG} — skipping dev release."
+                exit 0
+              fi
+              echo "Changes since ${LAST_DEV_TAG}:"
+              git log --oneline "${LAST_DEV_TAG}..HEAD" || true
+            fi
             CUR=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
             BASE=${CUR%%-*}
             NEXT=$(node -e 'const p=process.argv[1].split(".").map(Number);p[2]++;process.stdout.write(p.join("."))' "$BASE")
@@ -105,11 +138,55 @@ jobs:
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "release=true" >> "$GITHUB_OUTPUT"
 
+  # Publish the srelens web image to GHCR (multi-arch) whenever the version
+  # job determined there's something to release — mirrors the desktop build's
+  # release gate, independent of the (long) desktop matrix below.
+  docker:
+    name: docker image
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          TAGS="ghcr.io/srelens/srelens:${VERSION}"
+          # `latest` only for stable releases on main.
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS="${TAGS},ghcr.io/srelens/srelens:latest"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   build:
     needs: version
-    # Always run on dev (prereleases); on main only when the version job
-    # determined there is something to release.
-    if: ${{ always() && needs.version.result == 'success' && (github.ref_name != 'main' || needs.version.outputs.release == 'true') }}
+    # Run only when the version job decided to release. On main that's when
+    # there are releasable commits; on dev that's a scheduled/manual run with
+    # new commits since the last dev pre-release (or a forced run).
+    if: ${{ always() && needs.version.result == 'success' && needs.version.outputs.release == 'true' }}
     permissions:
       contents: write
     env:
@@ -523,13 +600,28 @@ jobs:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
           AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
 
           install -d -m 700 ~/.ssh
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519,rsa aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          # AUR's SSH host keys come from the AUR_KNOWN_HOSTS secret (the two
+          # `known_hosts` lines) rather than a runtime ssh-keyscan, whose errors
+          # were swallowed (2>/dev/null) and surfaced only as an opaque "Host key
+          # verification failed" at clone time. These are the server's PUBLIC
+          # host keys; the secret just keeps them out of the workflow. Generate
+          # the value with `ssh-keyscan -t ed25519,rsa aur.archlinux.org` and
+          # verify against AUR's published fingerprints (ED25519
+          # SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4). See
+          # packaging/aur/README.md.
+          if [ -z "${AUR_KNOWN_HOSTS:-}" ]; then
+            echo "AUR_KNOWN_HOSTS secret is not set — add it (see packaging/aur/README.md)." >&2
+            exit 1
+          fi
+          printf '%s\n' "$AUR_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
 
           git config --global user.name "$AUR_USERNAME"

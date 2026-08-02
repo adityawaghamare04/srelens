@@ -1,6 +1,9 @@
+mod app_log;
 mod appimage;
 mod bridge;
 pub mod capabilities;
+mod cluster_oidc;
+mod cluster_oidc_cmd;
 mod exec;
 mod files;
 mod forward;
@@ -8,30 +11,39 @@ mod helm;
 mod logs;
 mod mcp;
 mod settings;
+mod sink;
 mod terminal;
 mod toolbox;
 mod updater;
 mod watch;
 
+use app_log::{app_log_path, read_app_log, reveal_app_log};
 use bridge::{invoke_capability, AppRegistry};
-use exec::{exec_close, exec_input, start_pod_exec, ExecManager};
+use exec::{exec_close, exec_input, exec_resize, start_pod_exec};
 use files::{pick_kubeconfig_files, save_pasted_kubeconfig, save_text_file};
-use forward::{start_port_forward, stop_port_forward, ForwardManager};
-use helm::{helm_op_close, start_helm_op, HelmManager};
-use logs::{start_log_stream, stop_log_stream, LogStreamManager};
+use forward::{start_port_forward, stop_port_forward};
+use helm::{helm_op_close, start_helm_op};
+use logs::{start_log_stream, stop_log_stream};
 use mcp::{
     install_srelens_cli, mcp_http_start, mcp_http_status, mcp_http_stop, srelens_cli_status,
     McpHttpManager,
 };
 use settings::{get_request_timeout, set_request_timeout};
 use srelens_kube::client_cache::ClientCache;
-use terminal::{start_terminal, terminal_close, terminal_input, terminal_resize, TerminalManager};
+use srelens_streams::exec::ExecManager;
+use srelens_streams::forward::ForwardManager;
+use srelens_streams::helm::HelmManager;
+use srelens_streams::logs::LogStreamManager;
+use srelens_streams::terminal::TerminalManager;
+use srelens_streams::watch::WatchManager;
+use tauri::Manager;
+use terminal::{start_terminal, terminal_close, terminal_input, terminal_resize};
 use toolbox::start_tool_install;
 use updater::{update_check, update_install};
-use watch::{start_resource_watch, stop_watch, WatchManager};
+use watch::{start_resource_watch, stop_watch};
 
 pub use appimage::gio_module_dir_for_appimage;
-pub use capabilities::build_registry;
+pub use capabilities::{build_registry, build_registry_with_paths};
 
 /// Size the main window to a comfortable default, clamped to the screen it
 /// opens on: on a large display it stays at the preferred ~16" size (centered),
@@ -196,6 +208,15 @@ async fn watch_kubeconfig_files(app_handle: tauri::AppHandle, cache: std::sync::
 
         if changed {
             cache.clear().await;
+            // A cluster added/removed at runtime (Add-cluster form, edited
+            // kubeconfig) may change which contexts are OIDC-managed; rebuild
+            // the registry and reinstall the resolver so it's recognized
+            // without an app restart.
+            if let Some(oidc) =
+                app_handle.try_state::<std::sync::Arc<crate::cluster_oidc::DesktopClusterOidc>>()
+            {
+                oidc.rebuild(&cache).await;
+            }
             let _ = app_handle.emit("kubeconfig-changed", ());
         }
     }
@@ -211,22 +232,45 @@ pub fn run() {
     let cache = ClientCache::new_many(capabilities::default_kubeconfig_paths());
     let registry = capabilities::build_registry_with(cache.clone());
 
-    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
     let watcher_cache = cache.clone();
+    let oidc_cache = cache.clone();
     builder
         .setup(move |app| {
+            // Application logging: always write a rotating file to the OS log
+            // directory so the Settings "Application logs" view (and post-hoc
+            // debugging of a shipped build) has something to read; mirror to
+            // stdout in dev for convenience.
+            let mut log_targets = vec![tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::LogDir {
+                    file_name: Some("srelens".into()),
+                },
+            )];
             if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+                log_targets.push(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                ));
             }
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    // Keep noisy transport crates out of the file so it stays
+                    // readable for triage.
+                    .level_for("hyper", log::LevelFilter::Warn)
+                    .level_for("rustls", log::LevelFilter::Warn)
+                    .max_file_size(5_000_000)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                    .targets(log_targets)
+                    .build(),
+            )?;
+            log::info!("srelens {} starting", env!("CARGO_PKG_VERSION"));
             #[cfg(desktop)]
             size_main_window(app);
             #[cfg(target_os = "macos")]
@@ -244,6 +288,38 @@ pub fn run() {
                 watch_kubeconfig_files(handle, watcher_cache).await;
             });
 
+            // Managed cluster OIDC (desktop): install the resolver so OIDC
+            // contexts sign in through srelens's own browser flow instead of
+            // an exec plugin. Non-OIDC contexts are unaffected — the resolver
+            // returns `AuthMode::Default` for them, falling back to kube-rs's
+            // native kubeconfig auth.
+            // Best-effort: a corrupt token db or unwritable config dir logs and
+            // is skipped (OIDC contexts then fall back to native exec) rather
+            // than aborting app startup.
+            let oidc_env = app
+                .path()
+                .app_config_dir()
+                .map_err(|e| e.to_string())
+                .map(|dir| dir.join("cluster-oidc"))
+                .and_then(|config_dir| {
+                    let paths = capabilities::default_kubeconfig_paths();
+                    let yamls = cluster_oidc::read_kubeconfig_yamls(&paths);
+                    tauri::async_runtime::block_on(cluster_oidc::DesktopClusterOidc::build(
+                        &config_dir,
+                        &yamls,
+                    ))
+                });
+            match oidc_env {
+                Ok(oidc) => {
+                    tauri::async_runtime::block_on(oidc.install_on(&oidc_cache));
+                    app.manage(std::sync::Arc::new(oidc));
+                    // Expose the shared cache so the login commands can clear it
+                    // (force a re-resolve) after a token change.
+                    app.manage(oidc_cache);
+                }
+                Err(e) => log::warn!("cluster OIDC unavailable: {e}"),
+            }
+
             Ok(())
         })
         .manage(AppRegistry(registry))
@@ -260,6 +336,7 @@ pub fn run() {
             stop_watch,
             start_pod_exec,
             exec_input,
+            exec_resize,
             exec_close,
             start_port_forward,
             stop_port_forward,
@@ -283,7 +360,13 @@ pub fn run() {
             terminal_resize,
             terminal_close,
             start_helm_op,
-            helm_op_close
+            helm_op_close,
+            read_app_log,
+            app_log_path,
+            reveal_app_log,
+            cluster_oidc_cmd::cluster_login,
+            cluster_oidc_cmd::cluster_logout,
+            cluster_oidc_cmd::list_clusters
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

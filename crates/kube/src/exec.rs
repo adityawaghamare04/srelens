@@ -6,10 +6,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use k8s_openapi::api::core::v1::Pod;
-use kube::api::AttachParams;
+use kube::api::{AttachParams, TerminalSize};
 use kube::Api;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::Receiver;
+
+/// Map an xterm `(cols, rows)` to a kube [`TerminalSize`]. Columns are the
+/// width and rows are the height — a pure helper so the mapping can't silently
+/// get swapped.
+pub fn terminal_size(cols: u16, rows: u16) -> TerminalSize {
+    TerminalSize { width: cols, height: rows }
+}
 
 use crate::client_cache::ClientCache;
 
@@ -75,6 +82,8 @@ pub async fn exec_shell<F>(
     container: Option<String>,
     shell: Option<String>,
     command: Option<Vec<String>>,
+    initial_size: Option<(u16, u16)>,
+    mut resize_rx: Receiver<(u16, u16)>,
     mut on_output: F,
     mut input_rx: Receiver<String>,
 ) -> Result<(), String>
@@ -108,9 +117,22 @@ where
         .await
         .map_err(|e| e.to_string())?;
 
+    // Resize channel (present because `tty(true)` above). Send the initial size
+    // so the remote PTY starts matching the panel, then forward later resizes.
+    // `terminal_size()` yields a futures `Sender`; `try_send` keeps resizes
+    // non-blocking and best-effort.
+    let mut size_tx = attached.terminal_size();
+    if let (Some(tx), Some((cols, rows))) = (size_tx.as_mut(), initial_size) {
+        let _ = tx.try_send(terminal_size(cols, rows));
+    }
+
     let mut stdout = attached.stdout().ok_or_else(|| "exec: no stdout".to_string())?;
     let mut stdin = attached.stdin().ok_or_else(|| "exec: no stdin".to_string())?;
     let mut buf = vec![0u8; 8192];
+    // Once the resize channel closes we stop polling it (a closed `recv()`
+    // returns immediately, which would otherwise spin the `select!`). A closed
+    // resize channel must NOT end the session, unlike stdin closing.
+    let mut resize_open = true;
 
     loop {
         tokio::select! {
@@ -128,6 +150,15 @@ where
                 }
                 None => break,
             },
+            size = resize_rx.recv(), if resize_open => match size {
+                // Resize the remote PTY; best-effort, never fatal.
+                Some((cols, rows)) => {
+                    if let Some(tx) = size_tx.as_mut() {
+                        let _ = tx.try_send(terminal_size(cols, rows));
+                    }
+                }
+                None => resize_open = false,
+            },
         }
     }
 
@@ -144,6 +175,15 @@ mod tests {
         assert_eq!(shell_command(None), vec!["/bin/sh".to_string()]);
         assert_eq!(shell_command(Some("")), vec!["/bin/sh".to_string()]);
         assert_eq!(shell_command(Some("/bin/bash")), vec!["/bin/bash".to_string()]);
+    }
+
+    #[test]
+    fn terminal_size_maps_cols_to_width_and_rows_to_height() {
+        // xterm reports (cols, rows); the k8s TerminalSize is (width, height).
+        // Columns are width and rows are height — guard against swapping them.
+        let size = terminal_size(120, 40);
+        assert_eq!(size.width, 120);
+        assert_eq!(size.height, 40);
     }
 
     fn pod_with(json: serde_json::Value) -> Pod {

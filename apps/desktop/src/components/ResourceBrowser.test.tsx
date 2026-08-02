@@ -107,7 +107,7 @@ vi.mock("../lib/access", async (importOriginal) => {
   };
 });
 
-import { ResourceBrowser } from "./ResourceBrowser";
+import { ResourceBrowser, __clearListRowCacheForTests } from "./ResourceBrowser";
 
 const pod = {
   name: "web-1",
@@ -119,7 +119,12 @@ const pod = {
 };
 
 // watchResource(ctx, ns, kind, onRows) — push one snapshot, return a handle.
-function watchWith(rows: Array<{ name: string }>) {
+// Row shape varies by resource kind (deployments, statefulsets, PVCs, …), so
+// the parameter only pins down the field every caller shares (`name`) and
+// leaves the rest open via the index signature — otherwise TS's excess
+// property check on the inline object literals below would reject every
+// kind-specific field (namespace, capacity, provisioner, rules, role, …).
+function watchWith(rows: Array<{ name: string } & Record<string, unknown>>) {
   return (_ctx: string, _ns: string, _kind: string, onRows: (r: unknown) => void) => {
     onRows(rows);
     return Promise.resolve({ stop: vi.fn() });
@@ -127,6 +132,9 @@ function watchWith(rows: Array<{ name: string }>) {
 }
 
 beforeEach(() => {
+  // The row cache is module-level and persists across tests in this file;
+  // clear it so one test's loaded rows don't hydrate the next test's fresh mount.
+  __clearListRowCacheForTests();
   listNamespacesMock.mockReset();
   podLogsMock.mockReset();
   watchResourceMock.mockReset();
@@ -151,6 +159,23 @@ describe("ResourceBrowser", () => {
     expect(screen.getByText("live")).toBeDefined();
     // The column picker is now available on every resource table, not just Nodes.
     expect(screen.getByRole("button", { name: "Choose columns" })).toBeDefined();
+  });
+
+  it("re-opening a tab shows cached rows instantly instead of a full re-fetch", async () => {
+    listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
+    watchResourceMock.mockImplementation(watchWith([pod]));
+    const first = render(<ResourceBrowser context="kind-dev" kind="pods" />);
+    await waitFor(() => expect(screen.getByText("web-1")).toBeDefined());
+    first.unmount();
+
+    // Re-open the tab: the watch returns a handle but never pushes rows, so
+    // anything visible must have come from the cross-mount row cache.
+    watchResourceMock.mockImplementation(() => Promise.resolve({ stop: vi.fn() }));
+    render(<ResourceBrowser context="kind-dev" kind="pods" />);
+    await waitFor(() => expect(screen.getByText("web-1")).toBeDefined());
+    // Cached rows are present, so the full "Loading pods" state never shows
+    // (stale-while-revalidate: revalidation happens with rows already on screen).
+    expect(screen.queryByText("Loading pods")).toBeNull();
   });
 
   it("registers configured kubeconfig paths before building a client for the context", async () => {
