@@ -121,8 +121,14 @@ jobs:
             sub("apps/desktop/src-tauri/Cargo.toml",/^version = "[^"]+"/m,`version = "${v}"`);
             sub("Cargo.lock",/(name = "srelens-desktop"\r?\nversion = ")[^"]+(")/,`$1${v}$2`);
           ' "$NEW"
-          # Grouped changelog for the release body.
-          strip='s/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//'
+          # Grouped changelog for the release body. The Conventional Commit type
+          # is dropped (the section heading already says Features / Fixes) but
+          # the SCOPE is kept as a bold lead-in: without it, subjects written to
+          # follow a scope read as context-free fragments in the release notes
+          # and the in-app updater — "full action coverage, capability audit,
+          # and smarter ranking" tells a user nothing that "**palette:** ..."
+          # does. Line 1 handles scoped commits, line 2 unscoped ones.
+          strip='s/^[a-z]+\(([^)]*)\)!?:[[:space:]]*/**\1:** /; s/^[a-z]+!?:[[:space:]]*//'
           FEATS=$(git log --no-merges --pretty=%s ${RANGE} | grep -E '^feat' | sed -E "$strip" | sed 's/^/- /' || true)
           FIXES=$(git log --no-merges --pretty=%s ${RANGE} | grep -E '^(fix|perf)' | sed -E "$strip" | sed 's/^/- /' || true)
           {
