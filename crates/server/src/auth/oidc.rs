@@ -3,17 +3,34 @@
 //! issuer discovery.
 
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
-use openidconnect::reqwest::async_http_client;
 use openidconnect::{
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, ErrorResponse, IssuerUrl, Nonce,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope,
+    AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet,
+    EndpointSet, ErrorResponse, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
+    RequestTokenError, Scope,
 };
 
 use super::idp::{IdentityClaims, IdentityProvider, LoginBegin};
 use super::OidcSettings;
 
+/// The client typestate `from_provider_metadata(..).set_redirect_uri(..)`
+/// produces in openidconnect v4: authorization endpoint known, token and
+/// userinfo endpoints *maybe* set (discovery may omit them), the device-auth /
+/// introspection / revocation endpoints unset. Named once so the struct field
+/// and the constructor can't drift apart.
+type DiscoveredClient = CoreClient<
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
 pub struct OidcProvider {
-    client: CoreClient,
+    client: DiscoveredClient,
+    /// Reused across logins so the connection pool survives; see
+    /// [`crate::oidc_http_client`] for why it refuses redirects.
+    http: openidconnect::reqwest::Client,
 }
 
 impl OidcProvider {
@@ -22,7 +39,8 @@ impl OidcProvider {
     pub async fn discover(settings: &OidcSettings, public_url: &str) -> Result<Self, String> {
         let issuer = IssuerUrl::new(settings.issuer.clone())
             .map_err(|e| format!("invalid SRELENS_OIDC_ISSUER: {e}"))?;
-        let metadata = CoreProviderMetadata::discover_async(issuer, async_http_client)
+        let http = crate::oidc_http_client()?;
+        let metadata = CoreProviderMetadata::discover_async(issuer, &http)
             .await
             .map_err(|e| format!("OIDC discovery failed: {e}"))?;
         let redirect = RedirectUrl::new(format!("{public_url}/auth/callback"))
@@ -33,7 +51,7 @@ impl OidcProvider {
             Some(ClientSecret::new(settings.client_secret.clone())),
         )
         .set_redirect_uri(redirect);
-        Ok(Self { client })
+        Ok(Self { client, http })
     }
 }
 
@@ -96,8 +114,9 @@ impl IdentityProvider for OidcProvider {
         let tokens = self
             .client
             .exchange_code(AuthorizationCode::new(code.to_string()))
+            .map_err(|e| format!("IdP advertised no token endpoint: {e}"))?
             .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_string()))
-            .request_async(async_http_client)
+            .request_async(&self.http)
             .await
             .map_err(|e| summarize_exchange_error(&e))?;
         let id_token = tokens
