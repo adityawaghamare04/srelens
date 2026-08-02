@@ -70,6 +70,7 @@ import { isTauri } from "../transport/platform";
 import { WebKubeconfigSection } from "./WebKubeconfigSection";
 import { WebAddClusterSection } from "./WebAddClusterSection";
 import { WebClusterSignInSection } from "./WebClusterSignInSection";
+import { ReleaseNotes } from "./ReleaseNotes";
 
 const MODE_OPTIONS: Array<{ mode: ThemeMode; label: string; description: string; icon: React.ElementType }> = [
   { mode: "dark", label: "Dark", description: "Low-light operational workspace", icon: Moon },
@@ -960,9 +961,7 @@ export function SettingsView({
                       Version <strong>{updateState.update.version}</strong> is available on the {updateChannel}{" "}
                       channel.
                     </p>
-                    {updateState.update.notes && (
-                      <pre className="fl-settings-update__notes">{updateState.update.notes}</pre>
-                    )}
+                    {updateState.update.notes && <ReleaseNotes notes={updateState.update.notes} />}
                     {updateState.update.external ? (
                       <p className="fl-settings-update__status">
                         This install is managed by your system package manager — update it there

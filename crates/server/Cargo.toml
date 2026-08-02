@@ -25,7 +25,7 @@ getrandom = "0.2"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 async-trait = "0.1"
-openidconnect = { version = "3", default-features = false, features = ["reqwest", "rustls-tls"] }
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
