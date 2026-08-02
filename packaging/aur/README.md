@@ -109,6 +109,15 @@ The automation cannot run until a human claims the package name on the AUR:
    ssh-keyscan -t ed25519 aur.archlinux.org | ssh-keygen -lf -
    ```
 
+   **Keep every ssh path in that job absolute, and pass `known_hosts` to ssh
+   explicitly.** A container job runs with `HOME=/github/home` while the
+   container user is root, whose passwd entry says `/root`. The shell expands
+   `~` via `$HOME`; ssh resolves its *default* `UserKnownHostsFile` against the
+   password database. Relying on `~` therefore writes the file to one path and
+   reads it from another — which is how v0.4.1 managed to log "host key
+   verified" and then fail with "Host key verification failed" on the very next
+   line.
+
 The current stable release is **`srelens-v0.2.0`**, so the initial import can be
 done against it today (the PKGBUILD builds cleanly against its published `.deb`).
 Rolling `dev` pre-releases (`srelens-v<version>-<run>`) are never published: AUR
