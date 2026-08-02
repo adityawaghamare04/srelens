@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata};
-use openidconnect::reqwest::async_http_client;
 use openidconnect::{
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, OAuth2TokenResponse,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
+    AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet,
+    EndpointSet, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, RefreshToken, Scope,
 };
 
 use srelens_kube::oidc_detect::OidcClusterConfig;
@@ -17,13 +17,29 @@ use srelens_kube::oidc_detect::OidcClusterConfig;
 use crate::cluster_registry::ClusterOidcRegistry;
 use crate::oidc_provider::{RefreshFn, RefreshedToken};
 
+/// The client typestate `from_provider_metadata(..).set_redirect_uri(..)`
+/// produces in openidconnect v4: authorization endpoint known, token and
+/// userinfo endpoints *maybe* set (discovery may omit them), the device-auth /
+/// introspection / revocation endpoints unset.
+type DiscoveredClient = CoreClient<
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointMaybeSet,
+    EndpointMaybeSet,
+>;
+
 /// Discover the cluster's IdP and build a client bound to srelens's callback.
+/// Returns the HTTP client alongside it: openidconnect v4 takes the transport
+/// per request, and every call in one flow must use the same one.
 pub async fn build_core_client(
     cfg: &OidcClusterConfig,
     redirect_uri: &str,
-) -> Result<CoreClient, String> {
+) -> Result<(DiscoveredClient, openidconnect::reqwest::Client), String> {
     let issuer = IssuerUrl::new(cfg.issuer.clone()).map_err(|e| format!("invalid issuer: {e}"))?;
-    let metadata = CoreProviderMetadata::discover_async(issuer, async_http_client)
+    let http = crate::oidc_http_client()?;
+    let metadata = CoreProviderMetadata::discover_async(issuer, &http)
         .await
         .map_err(|e| format!("cluster OIDC discovery failed: {e}"))?;
     let redirect = RedirectUrl::new(redirect_uri.to_string()).map_err(|e| e.to_string())?;
@@ -33,7 +49,7 @@ pub async fn build_core_client(
         cfg.client_secret.clone().map(ClientSecret::new),
     )
     .set_redirect_uri(redirect);
-    Ok(client)
+    Ok((client, http))
 }
 
 pub struct ClusterLoginBegin {
@@ -51,7 +67,7 @@ pub async fn begin_login(
     cfg: &OidcClusterConfig,
     redirect_uri: &str,
 ) -> Result<ClusterLoginBegin, String> {
-    let client = build_core_client(cfg, redirect_uri).await?;
+    let (client, _http) = build_core_client(cfg, redirect_uri).await?;
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
     let mut req = client
         .authorize_url(
@@ -86,11 +102,12 @@ pub async fn exchange_code(
     pkce_verifier: &str,
     now: i64,
 ) -> Result<RefreshedToken, String> {
-    let client = build_core_client(cfg, redirect_uri).await?;
+    let (client, http) = build_core_client(cfg, redirect_uri).await?;
     let tokens = client
         .exchange_code(AuthorizationCode::new(code.to_string()))
+        .map_err(|_| "cluster IdP advertised no token endpoint".to_string())?
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_string()))
-        .request_async(async_http_client)
+        .request_async(&http)
         .await
         .map_err(|_| "cluster code exchange failed".to_string())?;
     into_refreshed(&tokens, now)
@@ -135,10 +152,11 @@ pub fn make_refresh_fn(
             let cfg = registry
                 .config_for_key(&oidc_key)
                 .ok_or_else(|| "unknown cluster oidc key".to_string())?;
-            let client = build_core_client(&cfg, &redirect_uri).await?;
+            let (client, http) = build_core_client(&cfg, &redirect_uri).await?;
             let tokens = client
                 .exchange_refresh_token(&RefreshToken::new(refresh_token))
-                .request_async(async_http_client)
+                .map_err(|_| "cluster IdP advertised no token endpoint".to_string())?
+                .request_async(&http)
                 .await
                 .map_err(|_| "cluster token refresh failed".to_string())?;
             into_refreshed(&tokens, now_fn())

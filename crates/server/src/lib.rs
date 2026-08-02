@@ -37,6 +37,20 @@ pub mod ws;
 pub type RegistryFactory =
     Arc<dyn Fn(Arc<ClientCache>, Vec<std::path::PathBuf>) -> Registry + Send + Sync>;
 
+/// The HTTP client every OIDC flow (app login and per-cluster sign-in) uses.
+///
+/// Redirects are disabled deliberately: `openidconnect` v4 requires the caller
+/// to supply the client, and a redirect-following one turns discovery and the
+/// token exchange into an SSRF primitive — the IdP URL comes from config or, for
+/// cluster sign-in, from a user's kubeconfig. Redirects there are never
+/// legitimate, so refusing them is both safer and more honest than chasing them.
+pub fn oidc_http_client() -> Result<openidconnect::reqwest::Client, String> {
+    openidconnect::reqwest::ClientBuilder::new()
+        .redirect(openidconnect::reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("failed to build OIDC http client: {e}"))
+}
+
 /// Current unix time in seconds — the single clock read for the HTTP edge.
 pub fn unix_now() -> i64 {
     std::time::SystemTime::now()
