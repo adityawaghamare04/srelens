@@ -609,38 +609,45 @@ jobs:
         run: |
           set -euo pipefail
 
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
+          # EVERY ssh path here is absolute, and known_hosts is passed to ssh
+          # explicitly. This is not style — it is the v0.4.1 bug.
+          #
+          # A container job runs with `-e HOME=/github/home`, but the container
+          # user is root, whose passwd entry says /root. The shell expands `~`
+          # via $HOME, while ssh resolves its DEFAULT UserKnownHostsFile against
+          # the password database. So `~/.ssh/known_hosts` written by this step
+          # landed in /github/home, and ssh looked in /root — which is how the
+          # job could print "host key verified" from a file it had just checked
+          # and then die with "Host key verification failed" one line later.
+          # (`-i ~/.ssh/aur` was unaffected: the shell expanded that one before
+          # ssh ever saw it, which is exactly what made the failure confusing.)
+          SSH_DIR=/tmp/aur-ssh
+          install -d -m 700 "$SSH_DIR"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$SSH_DIR/id"
+          chmod 600 "$SSH_DIR/id"
 
           # AUR's host key, fetched at runtime and PINNED BY FINGERPRINT.
           #
           # This deliberately does not come from a secret. Carrying the
-          # `known_hosts` lines in AUR_KNOWN_HOSTS made the trust decision
-          # depend on a value nobody can inspect or lint: a paste that loses
-          # the newlines (or the `aur.archlinux.org ` prefix) produces a file
-          # ssh silently ignores, and the only symptom is "Host key
-          # verification failed" at clone time — which is exactly how the
-          # v0.4.0 publish failed.
-          #
-          # Fetching and then checking the fingerprint against the value AUR
-          # publishes keeps the same security property (we still refuse an
-          # unexpected key — this is not TOFU) while making every failure mode
-          # self-describing. Rotate the constant if AUR ever rotates the key;
-          # the job then fails with both fingerprints in the log instead of an
-          # opaque ssh error. See packaging/aur/README.md.
+          # `known_hosts` lines in a secret makes the trust decision depend on a
+          # value nobody can inspect or lint. Fetching the key and checking its
+          # fingerprint against the value AUR publishes keeps the same security
+          # property — an unexpected key still aborts, this is not TOFU — while
+          # living in reviewable code. Rotate the constant if AUR rotates the
+          # key; the job then fails with both fingerprints in the log instead of
+          # an opaque ssh error. See packaging/aur/README.md.
           AUR_ED25519_FP="SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4"
-          if ! ssh-keyscan -t ed25519 aur.archlinux.org > ~/.ssh/known_hosts 2> keyscan.err; then
+          if ! ssh-keyscan -t ed25519 aur.archlinux.org > "$SSH_DIR/known_hosts" 2> "$SSH_DIR/keyscan.err"; then
             echo "::error::ssh-keyscan could not reach aur.archlinux.org"
-            cat keyscan.err >&2
+            cat "$SSH_DIR/keyscan.err" >&2
             exit 1
           fi
-          if [ ! -s ~/.ssh/known_hosts ]; then
+          if [ ! -s "$SSH_DIR/known_hosts" ]; then
             echo "::error::ssh-keyscan returned no host key for aur.archlinux.org"
-            cat keyscan.err >&2
+            cat "$SSH_DIR/keyscan.err" >&2
             exit 1
           fi
-          GOT_FP=$(ssh-keygen -lf ~/.ssh/known_hosts | awk '{print $2}')
+          GOT_FP=$(ssh-keygen -lf "$SSH_DIR/known_hosts" | awk '{print $2}')
           if [ "$GOT_FP" != "$AUR_ED25519_FP" ]; then
             echo "::error::aur.archlinux.org host key fingerprint mismatch — refusing to push"
             echo "  expected: $AUR_ED25519_FP" >&2
@@ -648,8 +655,27 @@ jobs:
             exit 1
           fi
           echo "aur.archlinux.org host key verified: $GOT_FP"
-          chmod 600 ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
+          chmod 600 "$SSH_DIR/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $SSH_DIR/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$SSH_DIR/known_hosts -o StrictHostKeyChecking=yes"
+
+          # Preflight: prove the host key and the deploy key both work before
+          # touching the package. AUR answers `ssh -T` with an "Interactive
+          # shell is disabled" banner and exit 4, so a non-zero status here is
+          # expected — what matters is telling a host-key failure apart from an
+          # auth failure, which the clone alone could not do.
+          ssh -o BatchMode=yes -T aur@aur.archlinux.org > "$SSH_DIR/preflight.log" 2>&1 || true
+          if grep -qi "host key verification failed" "$SSH_DIR/preflight.log"; then
+            echo "::error::ssh rejected AUR's host key even though the fingerprint matched — known_hosts is not being read from $SSH_DIR"
+            cat "$SSH_DIR/preflight.log" >&2
+            exit 1
+          fi
+          if grep -qi "permission denied" "$SSH_DIR/preflight.log"; then
+            echo "::error::AUR rejected the deploy key — check AUR_SSH_PRIVATE_KEY and that its public half is on the AUR account"
+            cat "$SSH_DIR/preflight.log" >&2
+            exit 1
+          fi
+          echo "AUR ssh preflight OK:"
+          cat "$SSH_DIR/preflight.log"
 
           git config --global user.name "$AUR_USERNAME"
           git config --global user.email "$AUR_EMAIL"
