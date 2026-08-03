@@ -154,14 +154,28 @@ jobs:
           fi
           echo "aur.archlinux.org host key verified: $GOT_FP"
           chmod 600 "$SSH_DIR/known_hosts"
-          export GIT_SSH_COMMAND="ssh -i $SSH_DIR/id -o IdentitiesOnly=yes -o UserKnownHostsFile=$SSH_DIR/known_hosts -o StrictHostKeyChecking=yes"
+
+          # ONE definition of the ssh options, used by both git and the direct
+          # preflight below. They were separate once: GIT_SSH_COMMAND carried
+          # the options while the preflight invoked a bare `ssh`, so the
+          # preflight read the default known_hosts (empty), failed, and aborted
+          # the job before the clone it was supposed to be de-risking ever ran.
+          # A check that doesn't test the real code path is worse than none.
+          # $SSH_DIR has no spaces, so [*] expands safely into the git command.
+          SSH_OPTS=(
+            -i "$SSH_DIR/id"
+            -o IdentitiesOnly=yes
+            -o UserKnownHostsFile="$SSH_DIR/known_hosts"
+            -o StrictHostKeyChecking=yes
+          )
+          export GIT_SSH_COMMAND="ssh ${SSH_OPTS[*]}"
 
           # Preflight: prove the host key and the deploy key both work before
           # touching the package. AUR answers `ssh -T` with an "Interactive
           # shell is disabled" banner and a non-zero exit, so a failed status
           # here is expected — what matters is telling a host-key failure apart
           # from an auth failure, which the clone alone could not do.
-          ssh -o BatchMode=yes -T aur@aur.archlinux.org > "$SSH_DIR/preflight.log" 2>&1 || true
+          ssh "${SSH_OPTS[@]}" -o BatchMode=yes -T aur@aur.archlinux.org > "$SSH_DIR/preflight.log" 2>&1 || true
           if grep -qi "host key verification failed" "$SSH_DIR/preflight.log"; then
             echo "::error::ssh rejected AUR's host key even though the fingerprint matched — known_hosts is not being read from $SSH_DIR"
             cat "$SSH_DIR/preflight.log" >&2
