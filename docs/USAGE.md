@@ -327,9 +327,72 @@ srelens --mcp-stdio
 srelens --mcp-http 127.0.0.1:8765
 ```
 
-Mutating and destructive tools require an explicit `"_confirm": true` argument
-before they run. Review tool calls and use appropriate Kubernetes RBAC,
-especially with critical clusters.
+### Security model
+
+- **HTTP requires a bearer token.** The transport never serves unauthenticated.
+  Settings → MCP shows the current token (masked, with reveal/copy) plus
+  **Rotate** and **Revoke** buttons. If the server is running, rotating
+  restarts it immediately so the new token takes effect — any in-flight agent
+  request is dropped, and every client still configured with the old value
+  needs the new one before it works again. (Rotating while the server is
+  stopped just replaces the stored token; it does not start the server.)
+  Revoking also stops the server — it must never run without a valid token.
+- A **Host header check** rejects requests whose `Host` isn't a loopback value
+  (`127.0.0.1`, `::1`, or `localhost`). Binding loopback alone doesn't stop a
+  page on another domain from resolving to 127.0.0.1 and posting to the port;
+  the Host check does. It applies to every route, including the unauthenticated
+  `/healthz`, so nothing here answers a caller that isn't genuinely local.
+- **stdio needs no token** — the client spawned the `srelens --mcp-stdio`
+  process itself and already holds your privileges.
+- **To supply your own token**, set `SRELENS_MCP_TOKEN` to 64 hex characters.
+  There is deliberately **no `--mcp-token` flag**: command-line arguments are
+  visible to every account on the machine via `ps`, which would hand the token
+  to exactly the local processes it exists to keep out. Without the variable,
+  srelens reads a token from the store, or generates one and prints it to
+  stderr. HTTP only — stdio takes no token at all.
+- **Destructive tools prompt in the app.** The MCP call blocks until you approve
+  or deny the dialog that pops up. Letting it time out, dismissing it, or
+  having no srelens window open at all count as **deny**. Confirmation
+  requests from concurrent calls queue rather than colliding.
+- **Headless use** (`--mcp-stdio` / `--mcp-http` with no GUI to show a dialog)
+  needs an explicit opt-in instead: a process-level flag *and* `"_confirm":
+  true` on the individual tool call. Neither alone is enough — `_confirm` states
+  intent, it does not authorize anything by itself. There are two flags, because
+  they are two different risks and granting one must not grant the other:
+
+  | Flag | Authorizes |
+  | --- | --- |
+  | `--mcp-allow-destructive` | anything that changes state — delete, drain, scale, apply, helm install, installing local tooling |
+  | `--mcp-allow-sensitive-reads` | reads that return secret material, i.e. `k8s.getSecret` |
+
+  So an agent allowed to read a Secret still cannot drain a node, and an agent
+  allowed to drain nodes cannot read your Secrets. Both flags apply to both
+  transports.
+- **There is no GUI toggle for stdio.** A GUI can't govern a process a client
+  spawned directly, so those CLI flags are the entire stdio control surface.
+- Every call is recorded to an **audit log** at `<app config dir>/mcp/audit.jsonl`
+  (mode `0600`, rotated once to `.1` past 5 MB), viewable in Settings → MCP
+  under recent agent activity. Argument values are redacted before they're
+  written, so the log records the shape of a call without its contents:
+  - sensitive capabilities redact every value;
+  - keys that look like credentials (`token`, `secret`, `password`, `key`) are
+    redacted at any nesting depth;
+  - whole payload fields are redacted — `data`/`stringData` on a Secret write,
+    `yaml` on `k8s.applyManifest`, and `values` on the helm capabilities. These
+    carry secret material under key names that look perfectly ordinary
+    (`username`, `ca.crt`), so matching key names alone would miss them.
+
+  Identifying fields like `context`, `namespace`, `name` and `kind` survive, so
+  you can still see which cluster and object an agent touched.
+- The bearer token lives in your **OS keychain** where one is available,
+  falling back to a `0600` file otherwise (headless Linux, minimal window
+  managers). Settings → MCP only speaks up about this when it has fallen back:
+  a warning appears saying the token is stored in a plain file on disk
+  (readable only by your user account) instead of the keychain. No warning
+  means the keychain is serving.
+
+Review tool calls and use appropriate Kubernetes RBAC, especially with
+critical clusters.
 
 ## Settings reference
 

@@ -10,9 +10,11 @@ mod forward;
 mod helm;
 mod logs;
 mod mcp;
+mod mcp_confirm;
 mod settings;
 mod sink;
 mod terminal;
+pub mod token_store;
 mod toolbox;
 mod updater;
 mod watch;
@@ -25,8 +27,9 @@ use forward::{start_port_forward, stop_port_forward};
 use helm::{helm_op_close, start_helm_op};
 use logs::{start_log_stream, stop_log_stream};
 use mcp::{
-    install_srelens_cli, mcp_http_start, mcp_http_status, mcp_http_stop, srelens_cli_status,
-    McpHttpManager,
+    install_srelens_cli, mcp_audit_tail, mcp_confirm_respond, mcp_http_start, mcp_http_status,
+    mcp_http_stop, mcp_token_get, mcp_token_revoke, mcp_token_rotate, mcp_token_storage,
+    srelens_cli_status, McpAuditPath, McpHttpManager,
 };
 use settings::{get_request_timeout, set_request_timeout};
 use srelens_kube::client_cache::ClientCache;
@@ -320,6 +323,35 @@ pub fn run() {
                 Err(e) => log::warn!("cluster OIDC unavailable: {e}"),
             }
 
+            // MCP: the token store and audit log live under the app config
+            // dir, same convention as cluster OIDC above. Absence of a
+            // resolvable config dir is logged and skipped — the MCP token/
+            // audit commands simply error until the app is restarted somewhere
+            // that dir resolution succeeds, rather than aborting startup.
+            //
+            // The token store itself prefers the OS keychain, falling back to
+            // a 0600 file (same path `main.rs`'s headless CLI resolves) the
+            // first time a keychain operation genuinely fails — see
+            // `token_store::keychain_or_file`. Managed both as the concrete
+            // `Arc<ResilientTokenStore>` (so `mcp_token_storage` can read the
+            // live backend flag) and, via unsized coercion, as the
+            // `Arc<dyn TokenStore>` the other MCP commands take.
+            match app.path().app_config_dir().map(|d| d.join("mcp")) {
+                Ok(dir) => {
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        log::warn!("could not create MCP config dir {}: {e}", dir.display());
+                    }
+                    let resilient_store = token_store::keychain_or_file(dir.join("token"));
+                    let token_store: std::sync::Arc<dyn srelens_mcp::auth::TokenStore> =
+                        resilient_store.clone();
+                    app.manage(token_store);
+                    app.manage(resilient_store);
+                    app.manage(McpAuditPath(dir.join("audit.jsonl")));
+                }
+                Err(e) => log::warn!("MCP config dir unavailable: {e}"),
+            }
+            app.manage(std::sync::Arc::new(mcp_confirm::Pending::default()));
+
             Ok(())
         })
         .manage(AppRegistry(registry))
@@ -353,6 +385,12 @@ pub fn run() {
             mcp_http_start,
             mcp_http_stop,
             mcp_http_status,
+            mcp_confirm_respond,
+            mcp_token_get,
+            mcp_token_rotate,
+            mcp_token_revoke,
+            mcp_token_storage,
+            mcp_audit_tail,
             install_srelens_cli,
             srelens_cli_status,
             start_terminal,

@@ -14,6 +14,17 @@ const { mcp } = vi.hoisted(() => ({
 vi.mock("../lib/mcp", () => mcp);
 vi.mock("../lib/notify", () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
+const { mcpSecurity } = vi.hoisted(() => ({
+  mcpSecurity: {
+    getMcpToken: vi.fn(),
+    getMcpTokenStorage: vi.fn(),
+    rotateMcpToken: vi.fn(),
+    revokeMcpToken: vi.fn(),
+    auditTail: vi.fn(),
+  },
+}));
+vi.mock("../lib/mcpSecurity", () => mcpSecurity);
+
 import { McpSettingsSection } from "./McpSettingsSection";
 
 beforeEach(() => {
@@ -26,6 +37,10 @@ beforeEach(() => {
     links_to: null,
     on_path: true,
   });
+  Object.values(mcpSecurity).forEach((m) => m.mockReset());
+  mcpSecurity.getMcpToken.mockResolvedValue(null);
+  mcpSecurity.getMcpTokenStorage.mockResolvedValue("keychain");
+  mcpSecurity.auditTail.mockResolvedValue([]);
 });
 
 describe("McpSettingsSection", () => {
@@ -79,5 +94,42 @@ describe("McpSettingsSection", () => {
     // Switch to Codex → TOML block.
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
     expect(screen.getByText(/\[mcp_servers\.srelens\]/)).toBeDefined();
+  });
+
+  it("masks the token until revealed and rotates on request", async () => {
+    const token = `${"a".repeat(60)}wxyz`;
+    mcpSecurity.getMcpToken.mockResolvedValue(token);
+    mcpSecurity.rotateMcpToken.mockResolvedValue(`${"b".repeat(60)}1234`);
+    render(<McpSettingsSection />);
+
+    // The masked form (last 4 chars only) is visible once the token loads,
+    // but the raw 64-char value must not be anywhere in the DOM yet.
+    await screen.findByText(/wxyz/);
+    expect(screen.queryByText(token)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal token" }));
+    expect(await screen.findByText(token)).toBeDefined();
+
+    // Rotating warns inline before it commits, then calls rotateMcpToken on confirm.
+    fireEvent.click(screen.getByRole("button", { name: "Rotate token" }));
+    expect(screen.getByText(/need the new value/i)).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Rotate" }));
+    await waitFor(() => expect(mcpSecurity.rotateMcpToken).toHaveBeenCalled());
+
+    // The freshly rotated token is masked again until explicitly revealed.
+    expect(screen.queryByText(token)).toBeNull();
+  });
+
+  it("warns when the token fell back to the plain file, and stays quiet for the keychain", async () => {
+    mcpSecurity.getMcpTokenStorage.mockResolvedValue("file");
+    render(<McpSettingsSection />);
+    expect(await screen.findByText(/stored in a plain file on disk/)).toBeDefined();
+  });
+
+  it("shows no fallback warning when the token is in the OS keychain", async () => {
+    mcpSecurity.getMcpTokenStorage.mockResolvedValue("keychain");
+    render(<McpSettingsSection />);
+    await waitFor(() => expect(mcpSecurity.getMcpTokenStorage).toHaveBeenCalled());
+    expect(screen.queryByText(/stored in a plain file on disk/)).toBeNull();
   });
 });

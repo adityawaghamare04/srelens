@@ -22,6 +22,11 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# Headless MCP (`--mcp-http`/`--mcp-stdio`) never boots a Tauri `App`, so
+# `app.path().app_config_dir()` isn't callable there. `dirs` reproduces that
+# resolver's formula directly (see `mcp_token_path` in main.rs) so the CLI and
+# the GUI resolve to the same config dir and share one token file.
+dirs = "6"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
@@ -32,7 +37,22 @@ srelens-kube = { path = "../../../crates/kube" }
 srelens-streams = { path = "../../../crates/streams" }
 srelens-server = { path = "../../../crates/server" }
 srelens-registry = { path = "../../../crates/registry" }
+# MCP bearer token storage: prefer the OS keychain, falling back to the 0600
+# file (`FileTokenStore`) where none exists. Feature selection:
+#   - apple-native: macOS/iOS Keychain via `security-framework`.
+#   - windows-native: Windows Credential Manager via `windows-sys`.
+#   - sync-secret-service: Linux/BSD D-Bus Secret Service via `dbus-secret-service`,
+#     synchronous — matches `TokenStore`'s sync API without pulling in an async
+#     D-Bus runtime (the `async-secret-service` alternative needs zbus/tokio).
+#   - crypto-rust: the Secret Service session is encrypted; this backs that
+#     with a pure-Rust implementation instead of `crypto-openssl`, so we don't
+#     need a system OpenSSL dev package at build time.
+# Each backend's transitive deps are already gated to their own target by the
+# keyring crate itself, so enabling all four is safe cross-platform.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "macros"] }
+uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"
 # Blocking HTTP for Toolbox tool downloads (run inside spawn_blocking).
 # rustls-no-provider matches tauri-plugin-updater's reqwest so no second TLS
 # crypto provider (aws-lc-rs) enters the tree — the workspace standardises on

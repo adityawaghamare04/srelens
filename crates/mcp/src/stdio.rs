@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::McpServer;
+use crate::{McpServer, Transport};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -20,7 +20,11 @@ fn err(id: Value, code: i64, message: &str) -> Value {
 
 /// Handle a single JSON-RPC request. Returns `None` for notifications (no id),
 /// which must not produce a response.
-pub async fn handle_request(server: &McpServer, req: &Value) -> Option<Value> {
+pub async fn handle_request(
+    server: &McpServer,
+    req: &Value,
+    transport: Transport,
+) -> Option<Value> {
     let method = req.get("method").and_then(Value::as_str).unwrap_or("");
     let id = req.get("id").cloned();
 
@@ -61,28 +65,57 @@ pub async fn handle_request(server: &McpServer, req: &Value) -> Option<Value> {
                 .cloned()
                 .unwrap_or_else(|| json!({}));
 
-            // Consent gate: a mutating tool must carry `"_confirm": true`.
-            let confirmed = args.get("_confirm").and_then(Value::as_bool).unwrap_or(false);
+            // `_confirm` is a caller-supplied hint, never authorization: strip it
+            // before the tool sees it, and let the injected policy decide.
             if let Some(obj) = args.as_object_mut() {
                 obj.remove("_confirm");
             }
-            if server.requires_confirm(name) && !confirmed {
-                return Some(ok(
-                    id?,
-                    json!({
-                        "content": [{
-                            "type": "text",
-                            "text": format!(
-                                "Tool `{name}` mutates the cluster and requires confirmation. \
-                                 Re-send the call with \"_confirm\": true in arguments."
-                            )
-                        }],
-                        "isError": true
-                    }),
-                ));
+            // Deliberately re-read from `params` rather than reusing `args`: the
+            // policy (e.g. `FlagGated`) needs to see `_confirm` to make its
+            // decision, but the tool must never receive it. Two views of the
+            // same call, scoped to who is allowed to see what.
+            let raw_args = params
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+
+            let sensitive = server.is_sensitive(name);
+            let mut decision = "auto";
+
+            if let Some(kind) = server.consent_kind(name) {
+                if let crate::policy::Decision::Denied(reason) =
+                    server.confirm_policy().confirm(name, &raw_args, kind).await
+                {
+                    server.audit().record(crate::audit::AuditRecord {
+                        transport,
+                        tool: name.to_string(),
+                        args: crate::audit::redact(&args, sensitive),
+                        decision: "denied",
+                        outcome: "error",
+                        error: Some(reason.clone()),
+                    });
+                    // A result, not a transport error, so the agent can adapt.
+                    return Some(ok(
+                        id?,
+                        json!({
+                            "content": [{ "type": "text", "text": reason }],
+                            "isError": true
+                        }),
+                    ));
+                }
+                decision = "approved";
             }
 
-            let result = match server.call_tool(name, args).await {
+            let called = server.call_tool(name, args.clone()).await;
+            server.audit().record(crate::audit::AuditRecord {
+                transport,
+                tool: name.to_string(),
+                args: crate::audit::redact(&args, sensitive),
+                decision,
+                outcome: if called.is_ok() { "ok" } else { "error" },
+                error: called.as_ref().err().map(|e| e.to_string()),
+            });
+            let result = match called {
                 Ok(v) => json!({
                     "content": [{ "type": "text", "text": v.to_string() }],
                     "isError": false
@@ -115,7 +148,7 @@ where
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(resp) = handle_request(&server, &req).await {
+        if let Some(resp) = handle_request(&server, &req, crate::Transport::Stdio).await {
             let s = serde_json::to_string(&resp)?;
             writer.write_all(s.as_bytes()).await?;
             writer.write_all(b"\n").await?;
@@ -142,18 +175,26 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_returns_protocol_and_server_info() {
-        let resp = handle_request(&server_with_ping(), &json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))
-            .await
-            .unwrap();
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
         assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(resp["result"]["serverInfo"]["name"], "srelens");
     }
 
     #[tokio::test]
     async fn tools_list_includes_registry_capabilities() {
-        let resp = handle_request(&server_with_ping(), &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
-            .await
-            .unwrap();
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "ping");
@@ -165,6 +206,7 @@ mod tests {
         let resp = handle_request(
             &server_with_ping(),
             &json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping","arguments":"hi"}}),
+            Transport::Stdio,
         )
         .await
         .unwrap();
@@ -184,32 +226,155 @@ mod tests {
         McpServer::new(Arc::new(reg))
     }
 
+    // `Capability`'s field set in this codebase includes `output_schema`,
+    // which the brief's literal omits — so this mirrors `server_with_destructive`
+    // (build via `Capability::read_only`, then override only what differs)
+    // rather than constructing the struct literal directly.
+    fn server_with_readonly() -> McpServer {
+        use srelens_capability::{Annotations, Capability};
+        let mut reg = Registry::new();
+        let mut cap = Capability::read_only("readit", "reads", |_| async {
+            Ok(json!({ "ok": true }))
+        });
+        cap.annotations = Annotations::READ_ONLY;
+        reg.register(cap);
+        McpServer::new(Arc::new(reg))
+    }
+
     #[tokio::test]
     async fn destructive_tool_is_gated_without_confirm() {
         let server = server_with_destructive();
         let resp = handle_request(
             &server,
             &json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"danger","arguments":{}}}),
+            Transport::Http,
         )
         .await
         .unwrap();
         assert_eq!(resp["result"]["isError"], true);
-        assert!(resp["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("_confirm"));
     }
 
+    /// The bug this closes: the gate used to read `_confirm` from the caller's
+    /// own arguments, so any client could authorize itself.
     #[tokio::test]
-    async fn destructive_tool_runs_with_confirm() {
+    async fn caller_supplied_confirm_does_not_authorize() {
         let server = server_with_destructive();
         let resp = handle_request(
             &server,
-            &json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"danger","arguments":{"_confirm":true}}}),
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "danger", "arguments": { "_confirm": true } }
+            }),
+            Transport::Http,
         )
         .await
-        .unwrap();
-        assert_eq!(resp["result"]["isError"], false);
+        .expect("response");
+        assert_eq!(resp["result"]["isError"], json!(true), "expected denial, got {resp}");
+    }
+
+    #[tokio::test]
+    async fn destructive_denied_when_no_policy_wired() {
+        let server = server_with_destructive(); // default policy = AlwaysDeny
+        let resp = handle_request(
+            &server,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "danger", "arguments": {} }
+            }),
+            Transport::Http,
+        )
+        .await
+        .expect("response");
+        assert_eq!(resp["result"]["isError"], json!(true));
+    }
+
+    /// The pair of assertions here is the point: the tool must never see
+    /// `_confirm`, while the policy must. A regression that reordered the
+    /// strip, or that started passing the stripped `args` to the policy
+    /// instead of `raw_args`, would silently break `FlagGated` in production
+    /// with nothing else in this suite catching it.
+    #[tokio::test]
+    async fn approving_policy_lets_the_tool_run_and_strips_confirm() {
+        use srelens_capability::Annotations;
+        use std::sync::Mutex;
+
+        // Captures what each side actually received, rather than trusting
+        // that "the tool ran" and "the policy approved" implies either saw
+        // the right shape of arguments.
+        let policy_saw: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let tool_saw: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+
+        struct Yes(Arc<Mutex<Option<Value>>>);
+        #[async_trait::async_trait]
+        impl crate::policy::ConfirmPolicy for Yes {
+            async fn confirm(
+                &self,
+                _t: &str,
+                a: &serde_json::Value,
+                _kind: crate::policy::ConsentKind,
+            ) -> crate::policy::Decision {
+                *self.0.lock().unwrap() = Some(a.clone());
+                crate::policy::Decision::Approved
+            }
+        }
+
+        let mut reg = Registry::new();
+        let mut cap = {
+            let tool_saw = tool_saw.clone();
+            Capability::read_only("danger", "destructive", move |args| {
+                let tool_saw = tool_saw.clone();
+                async move {
+                    *tool_saw.lock().unwrap() = Some(args.clone());
+                    Ok(json!({ "done": true }))
+                }
+            })
+        };
+        cap.annotations = Annotations::DESTRUCTIVE;
+        reg.register(cap);
+        let server =
+            McpServer::new(Arc::new(reg)).with_policy(Arc::new(Yes(policy_saw.clone())));
+
+        let resp = handle_request(
+            &server,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "danger", "arguments": { "_confirm": true } }
+            }),
+            Transport::Http,
+        )
+        .await
+        .expect("response");
+        assert_eq!(resp["result"]["isError"], json!(false), "got {resp}");
+
+        let seen_by_tool = tool_saw.lock().unwrap().clone().expect("tool ran");
+        assert!(
+            seen_by_tool.get("_confirm").is_none(),
+            "tool must not see _confirm, got {seen_by_tool}"
+        );
+
+        let seen_by_policy = policy_saw.lock().unwrap().clone().expect("policy consulted");
+        assert_eq!(
+            seen_by_policy.get("_confirm"),
+            Some(&json!(true)),
+            "policy must see _confirm, got {seen_by_policy}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_tool_never_consults_the_policy() {
+        // AlwaysDeny is the default; a read-only tool must still work.
+        let server = server_with_readonly();
+        let resp = handle_request(
+            &server,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "readit", "arguments": {} }
+            }),
+            Transport::Stdio,
+        )
+        .await
+        .expect("response");
+        assert_eq!(resp["result"]["isError"], json!(false), "got {resp}");
     }
 
     #[tokio::test]
@@ -217,9 +382,119 @@ mod tests {
         let resp = handle_request(
             &server_with_ping(),
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            Transport::Stdio,
         )
         .await;
         assert!(resp.is_none());
+    }
+
+    #[tokio::test]
+    async fn every_tool_call_is_audited_with_its_decision() {
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Spy(Mutex<Vec<(String, &'static str, &'static str)>>);
+        impl crate::audit::AuditSink for Spy {
+            fn record(&self, rec: crate::audit::AuditRecord) {
+                self.0.lock().unwrap().push((rec.tool, rec.decision, rec.outcome));
+            }
+        }
+        let spy = Arc::new(Spy::default());
+        let server = server_with_destructive().with_audit(spy.clone());
+
+        let _ = handle_request(
+            &server,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "danger", "arguments": {} }
+            }),
+            Transport::Http,
+        )
+        .await;
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].0, "danger");
+        assert_eq!(seen[0].1, "denied");
+    }
+
+    /// Sibling of `every_tool_call_is_audited_with_its_decision`, pinning the
+    /// `"approved"` value: without this, `"approved"` and `"auto"` could be
+    /// swapped in the implementation and no test would notice — `decision` is
+    /// the whole point of the audit log.
+    #[tokio::test]
+    async fn a_destructive_call_approved_by_policy_is_audited_as_approved() {
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Spy(Mutex<Vec<(String, &'static str, &'static str)>>);
+        impl crate::audit::AuditSink for Spy {
+            fn record(&self, rec: crate::audit::AuditRecord) {
+                self.0.lock().unwrap().push((rec.tool, rec.decision, rec.outcome));
+            }
+        }
+        struct AlwaysApprove;
+        #[async_trait::async_trait]
+        impl crate::policy::ConfirmPolicy for AlwaysApprove {
+            async fn confirm(
+                &self,
+                _tool: &str,
+                _args: &Value,
+                _kind: crate::policy::ConsentKind,
+            ) -> crate::policy::Decision {
+                crate::policy::Decision::Approved
+            }
+        }
+
+        let spy = Arc::new(Spy::default());
+        let server = server_with_destructive()
+            .with_policy(Arc::new(AlwaysApprove))
+            .with_audit(spy.clone());
+
+        let _ = handle_request(
+            &server,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "danger", "arguments": {} }
+            }),
+            Transport::Http,
+        )
+        .await;
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].0, "danger");
+        assert_eq!(seen[0].1, "approved");
+    }
+
+    /// Sibling pinning the `"auto"` value: a read-only tool never consults
+    /// the policy, so it must be recorded as `"auto"`, not `"approved"`.
+    #[tokio::test]
+    async fn a_read_only_call_is_audited_as_auto() {
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Spy(Mutex<Vec<(String, &'static str, &'static str)>>);
+        impl crate::audit::AuditSink for Spy {
+            fn record(&self, rec: crate::audit::AuditRecord) {
+                self.0.lock().unwrap().push((rec.tool, rec.decision, rec.outcome));
+            }
+        }
+
+        let spy = Arc::new(Spy::default());
+        let server = server_with_readonly().with_audit(spy.clone());
+
+        let _ = handle_request(
+            &server,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "readit", "arguments": {} }
+            }),
+            Transport::Stdio,
+        )
+        .await;
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].0, "readit");
+        assert_eq!(seen[0].1, "auto");
     }
 
     #[tokio::test]
