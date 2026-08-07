@@ -33,7 +33,7 @@ pub async fn handle_request(
             id?,
             json!({
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {} },
+                "capabilities": { "tools": {}, "prompts": {} },
                 "serverInfo": { "name": "srelens", "version": env!("CARGO_PKG_VERSION") }
             }),
         )),
@@ -126,6 +126,77 @@ pub async fn handle_request(
                 }),
             };
             Some(ok(id?, result))
+        }
+        "prompts/list" => {
+            let prompts: Vec<Value> = server
+                .prompts()
+                .list()
+                .into_iter()
+                .map(|p| {
+                    let arguments: Vec<Value> = p
+                        .arguments
+                        .into_iter()
+                        .map(|a| {
+                            json!({
+                                "name": a.name,
+                                "description": a.description.unwrap_or_default(),
+                                "required": a.required
+                            })
+                        })
+                        .collect();
+                    json!({
+                        "name": p.name,
+                        "description": p.description,
+                        "arguments": arguments
+                    })
+                })
+                .collect();
+            Some(ok(id?, json!({ "prompts": prompts })))
+        }
+        "prompts/get" => {
+            let params = req.get("params");
+            let name = params
+                .and_then(|p| p.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            // MCP prompt arguments are strings; anything else is stringified
+            // rather than rejected, so a client sending a number still works.
+            // A JSON `null`, though, is dropped instead of becoming the string
+            // "null": null means the argument is absent, and inserting it as
+            // a value would let it pass the required/target presence checks
+            // it should fail.
+            let supplied: std::collections::BTreeMap<String, String> = params
+                .and_then(|p| p.get("arguments"))
+                .and_then(Value::as_object)
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| {
+                            let s = match v {
+                                Value::Null => return None,
+                                Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            Some((k.clone(), s))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            match server.prompts().get(name, &supplied) {
+                Ok(rendered) => Some(ok(
+                    id?,
+                    json!({
+                        "description": rendered.description,
+                        "messages": [{
+                            "role": "user",
+                            "content": { "type": "text", "text": rendered.text }
+                        }]
+                    }),
+                )),
+                // Invalid params, not a tool error: the client sent a name or an
+                // argument set this server cannot serve.
+                Err(message) => Some(err(id?, -32602, &message)),
+            }
         }
         _ => id.map(|id| err(id, -32601, "method not found")),
     }
@@ -517,5 +588,201 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("protocolVersion"));
         assert!(lines[1].contains("echo"));
+    }
+
+    #[tokio::test]
+    async fn initialize_advertises_prompts() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        assert!(
+            resp["result"]["capabilities"]["prompts"].is_object(),
+            "a client that is not told about prompts will never ask for them: {resp}"
+        );
+        assert!(resp["result"]["capabilities"]["tools"].is_object());
+    }
+
+    #[tokio::test]
+    async fn prompts_list_returns_the_builtin_flows() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":2,"method":"prompts/list"}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        let prompts = resp["result"]["prompts"].as_array().unwrap();
+        assert_eq!(prompts.len(), 4);
+        let names: Vec<&str> = prompts.iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"pod-crashloop"), "got {names:?}");
+        let first = &prompts[0];
+        assert!(first["description"].is_string());
+        let args = first["arguments"].as_array().unwrap();
+        assert!(args.iter().any(|a| a["name"] == "context" && a["required"] == true));
+    }
+
+    #[tokio::test]
+    async fn prompts_get_returns_a_rendered_user_message() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{
+                "name":"pod-crashloop",
+                "arguments":{"context":"kind","namespace":"prod","pod":"web-0"}
+            }}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        let messages = resp["result"]["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"]["type"], "text");
+        let text = messages[0]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("web-0"));
+        assert!(text.contains("prod"));
+        assert!(!text.contains("{{"), "no placeholder may reach the agent");
+    }
+
+    #[tokio::test]
+    async fn prompts_get_rejects_an_unknown_name_as_invalid_params() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"nope"}}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["error"]["code"], -32602, "got {resp}");
+        assert!(resp["error"]["message"].as_str().unwrap().contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn prompts_get_rejects_a_missing_required_argument() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{
+                "name":"pod-crashloop","arguments":{}
+            }}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["error"]["code"], -32602);
+        assert!(resp["error"]["message"].as_str().unwrap().contains("context"));
+    }
+
+    /// Prompts touch no cluster, so there is nothing to account for. The reads
+    /// the agent then makes are audited as ordinary tool calls.
+    #[tokio::test]
+    async fn prompts_are_not_audited() {
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Spy(Mutex<usize>);
+        impl crate::audit::AuditSink for Spy {
+            fn record(&self, _rec: crate::audit::AuditRecord) {
+                *self.0.lock().unwrap() += 1;
+            }
+        }
+        let spy = Arc::new(Spy::default());
+        let server = server_with_ping().with_audit(spy.clone());
+
+        for method in ["prompts/list", "prompts/get"] {
+            let _ = handle_request(
+                &server,
+                &json!({"jsonrpc":"2.0","id":1,"method":method,"params":{
+                    "name":"pod-crashloop","arguments":{"context":"kind"}
+                }}),
+                Transport::Stdio,
+            )
+            .await;
+        }
+        assert_eq!(*spy.0.lock().unwrap(), 0, "prompts must not be audited");
+    }
+
+    /// `context` is the one argument documented as never safe to guess, so a
+    /// present-but-blank value must be rejected the same as an absent one —
+    /// otherwise the agent renders instructions against an empty context and
+    /// either fails every downstream call or invents one.
+    #[tokio::test]
+    async fn prompts_get_rejects_a_blank_required_argument() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":9,"method":"prompts/get","params":{
+                "name":"pod-crashloop","arguments":{"context": "", "pod": "web-0"}
+            }}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["error"]["code"], -32602, "got {resp}");
+        assert!(resp["error"]["message"].as_str().unwrap().contains("context"));
+    }
+
+    /// A JSON `null` is the absence of a value, not the string "null". A
+    /// client whose templating omits an unset variable by emitting `null`
+    /// (common) must trip the same required-argument error an omitted key
+    /// would.
+    #[tokio::test]
+    async fn prompts_get_rejects_a_null_required_argument() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":6,"method":"prompts/get","params":{
+                "name":"pod-crashloop","arguments":{"context": null}
+            }}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["error"]["code"], -32602, "got {resp}");
+        assert!(resp["error"]["message"].as_str().unwrap().contains("context"));
+    }
+
+    /// A `null` target argument must not count as "supplied": it must fall
+    /// back to discover mode rather than rendering a targeted flow with a
+    /// null-ish resource name baked in.
+    #[tokio::test]
+    async fn prompts_get_treats_a_null_target_as_absent_and_uses_discover_mode() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":7,"method":"prompts/get","params":{
+                "name":"pod-crashloop",
+                "arguments":{"context":"kind","pod":null}
+            }}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        let text = resp["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(
+            text.contains("k8s.listPods"),
+            "expected discover-mode body, got {text}"
+        );
+    }
+
+    /// Sibling of the two null-handling tests above, pinning that a
+    /// non-null coercion (a JSON number) still stringifies and is accepted
+    /// as a supplied target — only `null` is special-cased.
+    #[tokio::test]
+    async fn prompts_get_still_coerces_a_non_null_target_value() {
+        let resp = handle_request(
+            &server_with_ping(),
+            &json!({"jsonrpc":"2.0","id":8,"method":"prompts/get","params":{
+                "name":"pod-crashloop",
+                "arguments":{"context":"kind","pod":123}
+            }}),
+            Transport::Stdio,
+        )
+        .await
+        .unwrap();
+        let text = resp["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("123"), "got {text}");
     }
 }
