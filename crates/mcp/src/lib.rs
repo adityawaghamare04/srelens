@@ -6,7 +6,9 @@ pub mod completeness;
 pub mod http;
 pub mod policy;
 pub mod prompts;
+pub mod resources;
 pub mod stdio;
+pub mod subscriptions;
 
 use std::sync::Arc;
 
@@ -42,6 +44,8 @@ pub struct McpServer {
     confirm_policy: Arc<dyn crate::policy::ConfirmPolicy>,
     audit: Arc<dyn crate::audit::AuditSink>,
     prompts: crate::prompts::PromptLibrary,
+    resources: std::sync::Arc<dyn crate::resources::KindResolver>,
+    watcher: std::sync::Arc<dyn crate::resources::ObjectWatcher>,
 }
 
 impl McpServer {
@@ -53,6 +57,12 @@ impl McpServer {
             audit: Arc::new(crate::audit::NoopAudit),
             // Built-ins only until a host supplies a user prompt directory.
             prompts: crate::prompts::PromptLibrary::new(None),
+            // Fail closed: no resolver means no object resources, only the two
+            // fixed ones.
+            resources: std::sync::Arc::new(crate::resources::NoKinds),
+            // Fail closed: refuse subscriptions rather than accept ones that
+            // will never fire.
+            watcher: std::sync::Arc::new(crate::resources::NoWatcher),
         }
     }
 
@@ -81,6 +91,30 @@ impl McpServer {
 
     pub fn prompts(&self) -> &crate::prompts::PromptLibrary {
         &self.prompts
+    }
+
+    pub fn with_resources(
+        mut self,
+        kinds: std::sync::Arc<dyn crate::resources::KindResolver>,
+    ) -> Self {
+        self.resources = kinds;
+        self
+    }
+
+    pub fn resources(&self) -> &std::sync::Arc<dyn crate::resources::KindResolver> {
+        &self.resources
+    }
+
+    pub fn with_watcher(
+        mut self,
+        watcher: std::sync::Arc<dyn crate::resources::ObjectWatcher>,
+    ) -> Self {
+        self.watcher = watcher;
+        self
+    }
+
+    pub fn watcher(&self) -> &std::sync::Arc<dyn crate::resources::ObjectWatcher> {
+        &self.watcher
     }
 
     /// Whether a tool reads sensitive material, so the audit log can redact
