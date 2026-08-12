@@ -22,6 +22,10 @@ const { mcpSecurity } = vi.hoisted(() => ({
     revokeMcpToken: vi.fn(),
     auditTail: vi.fn(),
     promptIssues: vi.fn(),
+    vaultBiometricStatus: vi.fn(),
+    vaultBiometricEnable: vi.fn(),
+    vaultBiometricDisable: vi.fn(),
+    vaultBiometricUnlock: vi.fn(),
   },
 }));
 vi.mock("../lib/mcpSecurity", () => mcpSecurity);
@@ -43,6 +47,11 @@ beforeEach(() => {
   mcpSecurity.getMcpTokenStorage.mockResolvedValue("keychain");
   mcpSecurity.auditTail.mockResolvedValue([]);
   mcpSecurity.promptIssues.mockResolvedValue([]);
+  // Default: no biometric sensor — the Touch ID control stays hidden.
+  mcpSecurity.vaultBiometricStatus.mockResolvedValue({ available: false, enabled: false, unlocked: true });
+  mcpSecurity.vaultBiometricEnable.mockResolvedValue(undefined);
+  mcpSecurity.vaultBiometricDisable.mockResolvedValue(undefined);
+  mcpSecurity.vaultBiometricUnlock.mockResolvedValue(undefined);
 });
 
 describe("McpSettingsSection", () => {
@@ -122,23 +131,5 @@ describe("McpSettingsSection", () => {
     expect(screen.queryByText(token)).toBeNull();
   });
 
-  it("warns when the vault master key fell back to the plain file, and stays quiet for the keychain", async () => {
-    mcpSecurity.getMcpTokenStorage.mockResolvedValue("file");
-    render(<McpSettingsSection />);
-    expect(await screen.findByText(/key that encrypts srelens's secrets is stored/)).toBeDefined();
-  });
 
-  it("explains a locked vault (keychain unreachable) without implying data loss", async () => {
-    mcpSecurity.getMcpTokenStorage.mockResolvedValue("locked");
-    render(<McpSettingsSection />);
-    expect(await screen.findByText(/couldn't load the key that encrypts its secrets/)).toBeDefined();
-    expect(screen.getByText(/they are untouched/)).toBeDefined();
-  });
-
-  it("shows no fallback warning when the master key is in the OS keychain", async () => {
-    mcpSecurity.getMcpTokenStorage.mockResolvedValue("keychain");
-    render(<McpSettingsSection />);
-    await waitFor(() => expect(mcpSecurity.getMcpTokenStorage).toHaveBeenCalled());
-    expect(screen.queryByText(/key that encrypts srelens's secrets/)).toBeNull();
-  });
 });

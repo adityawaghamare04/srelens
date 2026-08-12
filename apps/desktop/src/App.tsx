@@ -21,6 +21,7 @@ import { ToolboxView } from "./components/ToolboxView";
 import { AssistantTab } from "./components/AssistantTab";
 import { CommandPalette } from "./components/CommandPalette";
 import { McpConfirmDialog } from "./components/McpConfirmDialog";
+import { VaultGate } from "./components/VaultGate";
 import { Toaster } from "./components/ui/sonner";
 import { Dock, type DockSession, type DockKind } from "./components/Dock";
 import { StatusBar } from "./components/StatusBar";
@@ -148,6 +149,10 @@ export function App() {
       void unlistenPromise.then((unlisten) => unlisten());
     };
   }, []);
+
+  // The master-password gate (issue #208) mounts as a blocking overlay via
+  // <VaultGate /> below — setup at first launch, unlock (password or the
+  // enrolled biometric skip) on later ones.
 
   const handleDeleteContext = async (name: string) => {
     try {
@@ -400,13 +405,19 @@ export function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Start the in-app MCP HTTP server on launch if the user left it enabled, so
-  // agents can connect without opening Settings first.
+  // The MCP server needs the vault's token, so its auto-start must wait for
+  // the VaultGate to report the vault usable (set up + unlocked). Flipped by
+  // the gate's onReady exactly once per launch; starting while locked would
+  // fail to persist a token and silently never retry.
+  const [vaultReady, setVaultReady] = useState(false);
+
+  // Start the in-app MCP HTTP server once the vault is ready if the user left
+  // it enabled, so agents can connect without opening Settings first.
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !vaultReady) return;
     const mcp = loadMcpSettings();
     if (mcp.enabled) void startMcpHttp(mcp.port).catch(() => {});
-  }, []);
+  }, [vaultReady]);
 
   /** Open a resource's kind view and deep-link to its detail (from search). */
   function openResource(kind: ResourceKind, namespace: string | null, name: string) {
@@ -795,6 +806,7 @@ export function App() {
       />
       <Toaster position="top-right" richColors closeButton />
       <McpConfirmDialog />
+      <VaultGate onReady={() => setVaultReady(true)} />
     </div>
   );
 }
