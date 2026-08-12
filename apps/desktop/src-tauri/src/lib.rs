@@ -1,9 +1,15 @@
 mod app_log;
 mod appimage;
+mod assistant;
+mod assistant_history;
+mod assistant_prompts;
+mod assistant_skills;
 mod bridge;
 pub mod capabilities;
 mod cluster_oidc;
 mod cluster_oidc_cmd;
+mod llm_agent;
+mod llm_config;
 mod exec;
 mod files;
 mod forward;
@@ -369,10 +375,32 @@ pub fn run() {
         .manage(ExecManager::new(cache.clone()))
         .manage(ForwardManager::new(cache.clone()))
         .manage(McpHttpManager::new(cache.clone()))
+        .manage(assistant::ChatManager::default())
+        .manage(llm_agent::NativeHistory::default())
         .manage(LogStreamManager::new(cache))
         .manage(TerminalManager::new())
         .manage(HelmManager::new())
         .invoke_handler(tauri::generate_handler![
+            assistant::agent_list,
+            assistant::chat_start,
+            assistant::chat_send,
+            assistant::chat_cancel,
+            llm_agent::llm_get_settings,
+            llm_agent::llm_set_settings,
+            llm_agent::llm_set_key,
+            llm_agent::llm_clear_key,
+            llm_agent::llm_key_status,
+            llm_agent::llm_list_models,
+            assistant_history::chat_history_list,
+            assistant_history::chat_history_load,
+            assistant_history::chat_history_save,
+            assistant_history::chat_history_delete,
+            assistant_prompts::assistant_prompts_list,
+            assistant_prompts::assistant_prompt_get,
+            assistant_skills::skills_list,
+            assistant_skills::skill_load,
+            assistant_skills::skill_save,
+            assistant_skills::skill_delete,
             invoke_capability,
             start_resource_watch,
             stop_watch,

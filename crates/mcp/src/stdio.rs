@@ -10,6 +10,13 @@ use crate::{McpServer, Transport};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// Stable prefix on the text of a consent-denied tool result. CLI transports
+/// strip `_meta`, so this text is the only denial signal that survives the
+/// round trip through an agent CLI's transcript. `srelens_agent` defines the
+/// same constant for its parsers (neither crate depends on the other); the
+/// desktop crate has a test pinning the two equal.
+pub const DENIED_PREFIX: &str = "consent denied: ";
+
 fn ok(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
@@ -72,7 +79,20 @@ pub async fn handle_request(
                     } else {
                         t.input_schema
                     };
-                    json!({ "name": t.name, "description": t.description, "inputSchema": schema })
+                    json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "inputSchema": schema,
+                        // MCP tool annotations. `readOnlyHint` lets a client
+                        // (Cursor) auto-approve read-only calls in headless
+                        // mode instead of rejecting them; destructive/consent-
+                        // gated tools are `false` and stay gated by srelens's
+                        // own confirm dialog.
+                        "annotations": {
+                            "readOnlyHint": t.read_only,
+                            "destructiveHint": t.destructive,
+                        },
+                    })
                 })
                 .collect();
             Some(ok(id?, json!({ "tools": tools })))
@@ -118,11 +138,18 @@ pub async fn handle_request(
                         error: Some(reason.clone()),
                     });
                     // A result, not a transport error, so the agent can adapt.
+                    // `_meta` (reserved by MCP for exactly this) marks the
+                    // refusal so the in-process native agent can report "the
+                    // user declined" rather than a failed execution; CLI
+                    // clients strip it, which is why the text also carries
+                    // `DENIED_PREFIX` — the only signal that survives a CLI's
+                    // transcript for the srelens_agent parsers to match on.
                     return Some(ok(
                         id?,
                         json!({
-                            "content": [{ "type": "text", "text": reason }],
-                            "isError": true
+                            "content": [{ "type": "text", "text": format!("{DENIED_PREFIX}{reason}") }],
+                            "isError": true,
+                            "_meta": { "srelens/denied": true }
                         }),
                     ));
                 }
@@ -601,6 +628,10 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0]["name"], "ping");
         assert_eq!(tools[0]["inputSchema"]["type"], "object");
+        // A read-only capability advertises `readOnlyHint: true` so MCP clients
+        // (Cursor) can auto-approve the call in non-interactive mode.
+        assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
+        assert_eq!(tools[0]["annotations"]["destructiveHint"], false);
     }
 
     #[tokio::test]
@@ -688,6 +719,12 @@ mod tests {
         .await
         .expect("response");
         assert_eq!(resp["result"]["isError"], json!(true));
+        // The refusal marker that lets the native agent report "user declined"
+        // instead of a failed execution.
+        assert_eq!(resp["result"]["_meta"]["srelens/denied"], json!(true));
+        // And the text marker that survives CLI transports (which strip _meta).
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with(DENIED_PREFIX), "got: {text}");
     }
 
     /// The pair of assertions here is the point: the tool must never see
