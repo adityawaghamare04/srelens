@@ -78,12 +78,16 @@ export function ClusterHotbar({
 
   return (
     <div className="fl-hotbar">
-      {remoteContexts.map(renderItem)}
-      {remoteContexts.length > 0 && localContexts.length > 0 && (
-        <div className="fl-hotbar__divider" role="separator" aria-label="Local clusters" />
-      )}
-      {localContexts.map(renderItem)}
-      <div className="fl-hotbar__spacer" aria-hidden="true" />
+      {/* Only the cluster list scrolls — with many contexts it must never
+          push the fixed controls below (toolbox, assistant, settings) out
+          of the window. */}
+      <div className="fl-hotbar__clusters">
+        {remoteContexts.map(renderItem)}
+        {remoteContexts.length > 0 && localContexts.length > 0 && (
+          <div className="fl-hotbar__divider" role="separator" aria-label="Local clusters" />
+        )}
+        {localContexts.map(renderItem)}
+      </div>
       <button
         className="fl-hotbar__theme"
         aria-label={theme.mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
