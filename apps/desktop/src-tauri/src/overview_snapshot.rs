@@ -42,14 +42,17 @@ fn read_all(path: &Path) -> BTreeMap<String, PersistedSnapshot> {
 }
 
 /// Write the whole snapshot map atomically (`.tmp` + rename) so a crash
-/// mid-write never leaves a half-written file behind.
+/// mid-write never leaves a half-written file behind. Owner-only (`0600` on
+/// Unix; `rename` preserves the mode): the map names contexts and carries
+/// warning-event messages, which mustn't be world-readable on a shared host.
 fn write_all(path: &Path, all: &BTreeMap<String, PersistedSnapshot>) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }
     let tmp = path.with_extension("json.tmp");
     let raw = serde_json::to_string(all).map_err(|e| e.to_string())?;
-    fs::write(&tmp, raw).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
+    crate::assistant_history::write_private(&tmp, &raw)
+        .map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
     fs::rename(&tmp, path).map_err(|e| format!("could not finalize {}: {e}", path.display()))
 }
 
@@ -235,6 +238,21 @@ mod tests {
 
         assert_eq!(load(&tmp.file(), "kind-a"), None);
         assert!(!tmp.file().exists());
+    }
+
+    /// The snapshot names contexts and carries warning-event messages, so on a
+    /// shared Unix host the file must not be world-readable (same reasoning as
+    /// the assistant-history store).
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new("perms");
+        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
+
+        let mode = fs::metadata(tmp.file()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "overview.json must be 0600, got {mode:o}");
     }
 
     #[test]
