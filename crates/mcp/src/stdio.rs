@@ -271,9 +271,11 @@ pub async fn handle_request(
                 Err(message) => return Some(err(id?, -32602, &message)),
             };
 
-            // The catalog is assembled here rather than by invoking a
-            // capability: it describes this server, not the cluster.
-            let text = if read.capability == crate::resources::CATALOG_IN_PROCESS {
+            // `capability_id() == None` IS the in-process catalog (the enum
+            // makes that a type-level fact, not a sentinel-string
+            // comparison): it is assembled here rather than by invoking a
+            // capability, because it describes this server, not the cluster.
+            let text = if read.capability.capability_id().is_none() {
                 json!({
                     "tools": server.list_tools().into_iter().map(|t| t.name).collect::<Vec<_>>(),
                     "prompts": server.prompts().list().into_iter().map(|p| p.name).collect::<Vec<_>>(),
@@ -281,30 +283,31 @@ pub async fn handle_request(
                 })
                 .to_string()
             } else {
+                let capability_id =
+                    read.capability.capability_id().expect("the None arm returned above");
                 // `McpServer::call_tool` is a bare registry invocation with no
                 // gating or auditing of its own — that lives in the
                 // `tools/call` arm, wrapped around the same call. This arm
                 // reproduces both here so a resource read leaves the same
                 // audit trail as the identical read via `tools/call`.
-                if server.consent_kind(read.capability).is_some() {
-                    // Unreachable today: `plan_read` only ever names the four
-                    // hardcoded, unconditionally-read-only capabilities in
-                    // `MAPPED_CAPABILITIES`, none of which are consent-gated.
+                if server.consent_kind(capability_id).is_some() {
+                    // Unreachable today: `plan_read` only ever names the
+                    // unconditionally-read-only capabilities in the
+                    // compiler-known `MappedCapability` set, none of which are consent-gated.
                     // Guarded explicitly anyway, fail-closed, rather than
                     // assuming that stays true — clients auto-fetch
                     // resources, so raising a confirm dialog here (as
                     // `tools/call` does) would be exactly the consent-fatigue
                     // vector the design avoids.
                     let message = format!(
-                        "{} is consent-gated and must be called as a tool, not read as a resource",
-                        read.capability
+                        "{capability_id} is consent-gated and must be called as a tool, not read as a resource"
                     );
                     server.audit().record(crate::audit::AuditRecord {
                         transport,
-                        tool: read.capability.to_string(),
+                        tool: capability_id.to_string(),
                         args: crate::audit::redact(
                             &read.args,
-                            server.is_sensitive(read.capability),
+                            server.is_sensitive(capability_id),
                         ),
                         decision: "denied",
                         outcome: "error",
@@ -313,12 +316,12 @@ pub async fn handle_request(
                     return Some(err(id?, -32602, &message));
                 }
 
-                let sensitive = server.is_sensitive(read.capability);
+                let sensitive = server.is_sensitive(capability_id);
                 let redacted_args = crate::audit::redact(&read.args, sensitive);
-                let called = server.call_tool(read.capability, read.args.clone()).await;
+                let called = server.call_tool(capability_id, read.args.clone()).await;
                 server.audit().record(crate::audit::AuditRecord {
                     transport,
-                    tool: read.capability.to_string(),
+                    tool: capability_id.to_string(),
                     args: redacted_args,
                     decision: "auto",
                     outcome: if called.is_ok() { "ok" } else { "error" },
