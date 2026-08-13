@@ -160,14 +160,17 @@ export function ClusterOverview({
     }
 
     // Cold start: while the fetch runs, restore the last persisted snapshot so
-    // the dashboard paints known values instead of a spinner (#148). The fetch
-    // populates `overviewCache` when it lands, so a snapshot that loses the
-    // race is discarded rather than clobbering fresher data — and after a
-    // failed fetch it still gives the error state stale-but-real numbers.
+    // the dashboard paints known values instead of a spinner (#148). The
+    // restored values go only into component state, never `overviewCache` —
+    // the cache means "live data from this run", and a persisted snapshot
+    // recent enough to pass the TTL check would otherwise let a remount skip
+    // joining the still-pending request and strand the screen on stale values.
+    // A snapshot that loses the race with the fetch (cache already populated)
+    // is discarded rather than clobbering fresher data — while after a failed
+    // fetch it still gives the error state stale-but-real numbers.
     if (!cached) {
       void loadPersistedOverview(context).then((persisted) => {
         if (!active || !persisted || overviewCache.has(context)) return;
-        overviewCache.set(context, persisted);
         setStats(persisted.stats);
         setLastUpdated(formatUpdatedAt(persisted.updatedAt));
       });

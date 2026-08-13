@@ -134,6 +134,24 @@ describe("ClusterOverview persistence", () => {
     expect(screen.getAllByText("1 / 1")).toHaveLength(2);
   });
 
+  it("remounting during the first fetch still applies the fresh result", async () => {
+    // A recent (within-TTL) persisted snapshot must not let a remount skip
+    // joining the pending live request — the fresh data has to reach the
+    // screen, not just the module cache.
+    mocks.loadPersistedOverview.mockResolvedValue(persistedSnapshot(Date.now() - 1000));
+    const slowNodes = deferred<{ nodes: Array<{ status: string }> }>();
+    mocks.listNodes.mockReturnValue(slowNodes.promise);
+
+    const first = render(<ClusterOverview context="kind-remount" />);
+    expect(await screen.findByText("3 / 4")).toBeDefined();
+    first.unmount();
+
+    render(<ClusterOverview context="kind-remount" />);
+    slowNodes.resolve({ nodes: [{ status: "Ready" }] });
+
+    expect(await screen.findAllByText("1 / 1")).toHaveLength(2);
+  });
+
   it("persists a successful fetch for the next cold start", async () => {
     render(<ClusterOverview context="kind-dev" />);
     expect(await screen.findAllByText("1 / 1")).toHaveLength(2);
