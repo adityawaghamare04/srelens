@@ -18,6 +18,7 @@ mod logs;
 mod mcp;
 mod mcp_confirm;
 pub mod mcp_watch;
+mod overview_snapshot;
 mod settings;
 mod sink;
 mod terminal;
@@ -401,6 +402,9 @@ pub fn run() {
             assistant_history::chat_history_load,
             assistant_history::chat_history_save,
             assistant_history::chat_history_delete,
+            overview_snapshot::overview_snapshot_load,
+            overview_snapshot::overview_snapshot_save,
+            overview_snapshot::overview_snapshot_clear,
             assistant_prompts::assistant_prompts_list,
             assistant_prompts::assistant_prompt_get,
             assistant_skills::skills_list,
