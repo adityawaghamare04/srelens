@@ -45,11 +45,24 @@ fn read_all(path: &Path) -> BTreeMap<String, PersistedSnapshot> {
 /// mid-write never leaves a half-written file behind. Owner-only (`0600` on
 /// Unix; `rename` preserves the mode): the map names contexts and carries
 /// warning-event messages, which mustn't be world-readable on a shared host.
+///
+/// The tmp name is writer-unique (pid + counter) so overlapping writers — a
+/// second app instance, two commands in flight — can never truncate or rename
+/// away each other's in-progress file. The map update itself stays
+/// last-writer-wins: this is a self-healing cache (a lost entry is re-persisted
+/// by the next successful fetch), so an interprocess lock isn't warranted.
 fn write_all(path: &Path, all: &BTreeMap<String, PersistedSnapshot>) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = path.with_extension(format!(
+        "json.{}-{}.tmp",
+        std::process::id(),
+        WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     let raw = serde_json::to_string(all).map_err(|e| e.to_string())?;
     crate::assistant_history::write_private(&tmp, &raw)
         .map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
@@ -253,6 +266,24 @@ mod tests {
 
         let mode = fs::metadata(tmp.file()).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "overview.json must be 0600, got {mode:o}");
+    }
+
+    /// Concurrent writers (a second app instance, two commands in flight) must
+    /// not share a temp file: a save may never truncate or rename away another
+    /// writer's in-progress tmp.
+    #[test]
+    fn save_leaves_a_foreign_tmp_file_untouched() {
+        let tmp = TempDir::new("foreign-tmp");
+        let foreign = tmp.file().with_extension("json.tmp");
+        fs::write(&foreign, "other writer's half-finished payload").unwrap();
+
+        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&foreign).unwrap(),
+            "other writer's half-finished payload"
+        );
+        assert_eq!(load(&tmp.file(), "kind-a"), Some(snapshot(1000, 3)));
     }
 
     #[test]
