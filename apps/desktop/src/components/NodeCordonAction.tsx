@@ -4,7 +4,9 @@ import { getObject } from "../lib/manifest";
 import { cordonNode, drainNode, createNodeDebugPod } from "../lib/actions";
 import { notify } from "../lib/notify";
 import { useAccess, rbac, denyReason, reportActionError } from "../lib/access";
-import { IconButton, ConfirmDialog } from "../ui";
+import { IconButton, ConfirmDialog, KubectlPreview } from "../ui";
+import { toKubectl } from "../lib/kubectlMapper";
+import { copyKubectlCommand } from "../lib/copyKubectl";
 
 /** Enter the host's namespaces from the privileged debug pod for a real node
  *  shell — run via exec (the pod itself just stays alive). */
@@ -116,6 +118,12 @@ export function NodeCordonAction({
     setCordoned(true); // drain cordons the node
   }
 
+  // ResourceActions already renders a "Copy as kubectl" affordance for Node
+  // (ResourceBrowser.tsx mounts both alongside each other), so this component
+  // only needs the cordon/drain previews below.
+  const cordonCmd = toKubectl({ action: cordoned ? "uncordon" : "cordon", kind: "Node", name, context });
+  const drainCmd = toKubectl({ action: "drain", kind: "Node", name, context });
+
   return (
     <>
       <IconButton
@@ -179,6 +187,7 @@ export function NodeCordonAction({
               <p style={{ marginTop: 0 }}>
                 {cordoned ? "Allow" : "Stop"} scheduling new pods on <code>{name}</code>?
               </p>
+              <KubectlPreview command={cordonCmd} onCopy={() => void copyKubectlCommand(cordonCmd)} />
               {err && <p className="text-destructive">Error: {err}</p>}
             </>
           }
@@ -197,6 +206,7 @@ export function NodeCordonAction({
               <p style={{ marginTop: 0 }}>
                 Cordon <code>{name}</code> and evict its pods (DaemonSet and static pods stay)?
               </p>
+              <KubectlPreview command={drainCmd} onCopy={() => void copyKubectlCommand(drainCmd)} />
               {err && <p className="text-destructive">Error: {err}</p>}
             </>
           }

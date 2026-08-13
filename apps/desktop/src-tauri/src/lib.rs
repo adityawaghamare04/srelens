@@ -1,18 +1,29 @@
 mod app_log;
 mod appimage;
+mod assistant;
+mod assistant_history;
+mod assistant_prompts;
+mod assistant_skills;
 mod bridge;
 pub mod capabilities;
 mod cluster_oidc;
 mod cluster_oidc_cmd;
+mod llm_agent;
+mod llm_config;
 mod exec;
 mod files;
 mod forward;
 mod helm;
 mod logs;
 mod mcp;
+mod mcp_confirm;
+pub mod mcp_watch;
 mod settings;
 mod sink;
 mod terminal;
+pub mod vault;
+mod vault_biometric;
+mod vault_password;
 mod toolbox;
 mod updater;
 mod watch;
@@ -25,8 +36,9 @@ use forward::{start_port_forward, stop_port_forward};
 use helm::{helm_op_close, start_helm_op};
 use logs::{start_log_stream, stop_log_stream};
 use mcp::{
-    install_srelens_cli, mcp_http_start, mcp_http_status, mcp_http_stop, srelens_cli_status,
-    McpHttpManager,
+    install_srelens_cli, mcp_audit_tail, mcp_confirm_respond, mcp_http_start, mcp_http_status,
+    mcp_http_stop, mcp_prompt_issues, mcp_token_get, mcp_token_revoke, mcp_token_rotate,
+    mcp_token_storage, srelens_cli_status, McpAuditPath, McpHttpManager, McpPromptsDir,
 };
 use settings::{get_request_timeout, set_request_timeout};
 use srelens_kube::client_cache::ClientCache;
@@ -234,6 +246,7 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_biometry::init())
         .plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder
@@ -320,6 +333,47 @@ pub fn run() {
                 Err(e) => log::warn!("cluster OIDC unavailable: {e}"),
             }
 
+            // MCP: the token store and audit log live under the app config
+            // dir, same convention as cluster OIDC above. Absence of a
+            // resolvable config dir is logged and skipped — the MCP token/
+            // audit commands simply error until the app is restarted somewhere
+            // that dir resolution succeeds, rather than aborting startup.
+            //
+            // Secrets live in the encrypted vault (`vault.rs`): one
+            // `secrets.enc` under the MCP config dir, keyed by ONE keychain
+            // entry resolved right here — the process's only keychain touch,
+            // so dev builds prompt at most once per launch instead of once
+            // per secret. Managed both as the concrete `Arc<Vault>` (so
+            // `mcp_token_storage` can report where the master key lives, and
+            // the llm key commands can reach it) and, via `VaultTokenStore`,
+            // as the `Arc<dyn TokenStore>` the MCP commands take. Same dir
+            // `main.rs`'s headless CLI resolves, so a token provisioned in
+            // one is usable from the other.
+            match app.path().app_config_dir().map(|d| d.join("mcp")) {
+                Ok(dir) => {
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        log::warn!("could not create MCP config dir {}: {e}", dir.display());
+                    }
+                    let vault = std::sync::Arc::new(vault::Vault::open(&dir));
+                    let token_store: std::sync::Arc<dyn srelens_mcp::auth::TokenStore> =
+                        std::sync::Arc::new(vault::VaultTokenStore(vault.clone()));
+                    app.manage(token_store);
+                    app.manage(vault);
+                    app.manage(McpAuditPath(dir.join("audit.jsonl")));
+
+                    let prompts_dir = dir.join("prompts");
+                    if let Err(e) = std::fs::create_dir_all(&prompts_dir) {
+                        log::warn!(
+                            "could not create MCP prompts dir {}: {e}",
+                            prompts_dir.display()
+                        );
+                    }
+                    app.manage(McpPromptsDir(prompts_dir));
+                }
+                Err(e) => log::warn!("MCP config dir unavailable: {e}"),
+            }
+            app.manage(std::sync::Arc::new(mcp_confirm::Pending::default()));
+
             Ok(())
         })
         .manage(AppRegistry(registry))
@@ -327,10 +381,32 @@ pub fn run() {
         .manage(ExecManager::new(cache.clone()))
         .manage(ForwardManager::new(cache.clone()))
         .manage(McpHttpManager::new(cache.clone()))
+        .manage(assistant::ChatManager::default())
+        .manage(llm_agent::NativeHistory::default())
         .manage(LogStreamManager::new(cache))
         .manage(TerminalManager::new())
         .manage(HelmManager::new())
         .invoke_handler(tauri::generate_handler![
+            assistant::agent_list,
+            assistant::chat_start,
+            assistant::chat_send,
+            assistant::chat_cancel,
+            llm_agent::llm_get_settings,
+            llm_agent::llm_set_settings,
+            llm_agent::llm_set_key,
+            llm_agent::llm_clear_key,
+            llm_agent::llm_key_status,
+            llm_agent::llm_list_models,
+            assistant_history::chat_history_list,
+            assistant_history::chat_history_load,
+            assistant_history::chat_history_save,
+            assistant_history::chat_history_delete,
+            assistant_prompts::assistant_prompts_list,
+            assistant_prompts::assistant_prompt_get,
+            assistant_skills::skills_list,
+            assistant_skills::skill_load,
+            assistant_skills::skill_save,
+            assistant_skills::skill_delete,
             invoke_capability,
             start_resource_watch,
             stop_watch,
@@ -353,6 +429,22 @@ pub fn run() {
             mcp_http_start,
             mcp_http_stop,
             mcp_http_status,
+            mcp_confirm_respond,
+            mcp_token_get,
+            mcp_token_rotate,
+            mcp_token_revoke,
+            mcp_token_storage,
+            vault_biometric::vault_biometric_status,
+            vault_biometric::vault_biometric_enable,
+            vault_biometric::vault_biometric_disable,
+            vault_biometric::vault_biometric_unlock,
+            vault_password::vault_status,
+            vault_password::vault_setup_password,
+            vault_password::vault_unlock_password,
+            vault_password::vault_recover_password,
+            vault_password::vault_change_password,
+            mcp_audit_tail,
+            mcp_prompt_issues,
             install_srelens_cli,
             srelens_cli_status,
             start_terminal,

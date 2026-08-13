@@ -4,11 +4,27 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+async-trait = "0.1"
+getrandom = "0.2"
 srelens-capability = { path = "../capability" }
 serde_json = "1"
-tokio = { version = "1", features = ["io-util", "net", "rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+subtle = "2"
+tokio = { version = "1", features = ["io-util", "net", "rt-multi-thread", "macros", "sync"] }
 axum = "0.7"
+# URI segments are percent-encoded because kube context names are arbitrary —
+# EKS names contexts with ARNs containing `/` and `:`, which would otherwise
+# reshape the path. Already in the workspace lockfile via reqwest/url.
+percent-encoding = "2"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt", "io-util", "time"] }
 tower = { version = "0.5", features = ["util"] }
+# Dev-only, so this does not create a real dependency cycle: `registry`
+# depends on `mcp` only as a dev-dependency too (for its own e2e prompt
+# test). Gives the built-in prompt bodies' argument keys a real schema to be
+# checked against instead of a hand-maintained field list — see
+# `every_argument_key_in_a_builtin_body_is_a_real_capability_input_field` in
+# `src/prompts.rs`.
+srelens-registry = { path = "../registry" }

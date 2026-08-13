@@ -1221,6 +1221,17 @@ async fn run_suite() {
         "expected the busybox loop's output: {out}"
     );
 
+    // === MCP resources (#24) ===================================================
+    // srelens's k8s:// resource-addressing feature, exercised end to end
+    // against this real cluster. Reuses `pod_name`, the Deployment pod
+    // already discovered above for the logs check, rather than provisioning
+    // new cluster state: the fixtures create only a Deployment (no
+    // directly-named pod), so any pod used here has to be discovered via
+    // listPods the same way the logs check above does.
+    println!("=== mcp resources (#24) ===");
+    mcp_resource_reads(&ctx, &pod_name).await;
+    mcp_resource_subscription(&ctx, &pod_name).await;
+
     // === 6. Metrics ============================================================
     // A bare kind cluster ships no metrics-server, so the metrics API may be
     // absent. Don't let that make the happy path vacuous: probe once, and when
@@ -1878,6 +1889,147 @@ async fn delete_context_on_a_copy(h: &mut Harness, ctx: &str) {
     println!("deleteContext: removed from the throwaway copy only; real kubeconfig untouched");
 }
 
+/// #24's read acceptance criterion: a manifest, an events list and pod logs
+/// all read successfully over MCP's `resources/read`, plus the curation
+/// guarantee that a Secret which genuinely exists in this cluster is still
+/// not addressable. CI can only exercise the error paths (parse/plan
+/// failures pinned by unit tests in `crates/mcp/src/resources.rs` and
+/// `stdio.rs`) since a successful read needs a real object; this is the
+/// real-cluster half.
+///
+/// The `logs` expectation is an empty string deliberately: a pod may
+/// legitimately have produced no output, so the assertion is that the read
+/// *succeeds* and returns text, not that the text contains anything specific
+/// (this suite's Deployment pods do log "hello", so the substring check
+/// against "" is trivially satisfied either way).
+async fn mcp_resource_reads(ctx: &str, pod: &str) {
+    println!("=== mcp resources: reads ===");
+    let server = srelens_mcp::McpServer::new(Arc::new(build_registry_with(cache())))
+        .with_resources(srelens_registry::kind_resolver());
+
+    for (uri, expect) in [
+        (format!("k8s://{ctx}/{NS}/Pod/{pod}"), "kind: Pod"),
+        (format!("k8s://{ctx}/{NS}/Pod/{pod}/events"), "["),
+        (format!("k8s://{ctx}/{NS}/Pod/{pod}/logs"), ""),
+    ] {
+        let resp = srelens_mcp::stdio::handle_request(
+            &server,
+            &json!({"jsonrpc":"2.0","id":1,"method":"resources/read",
+                                "params":{"uri":uri}}),
+            srelens_mcp::Transport::Stdio,
+        )
+        .await
+        .expect("a response");
+        let contents = &resp["result"]["contents"][0];
+        let text = contents["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("read of {uri} failed: {resp}"));
+        assert!(text.contains(expect), "read of {uri} returned {text}");
+        assert!(contents["mimeType"].is_string());
+    }
+
+    // The curation guarantee against a real cluster: the SECRET fixture
+    // genuinely exists in NS, and is still not addressable.
+    let resp = srelens_mcp::stdio::handle_request(
+        &server,
+        &json!({"jsonrpc":"2.0","id":2,"method":"resources/read",
+                            "params":{"uri":format!("k8s://{ctx}/{NS}/Secret/{SECRET}")}}),
+        srelens_mcp::Transport::Stdio,
+    )
+    .await
+    .expect("a response");
+    assert_eq!(resp["error"]["code"], -32602, "unexpected response: {resp}");
+    println!("mcp resources: manifest/events/logs read OK; Secret still unaddressable");
+}
+
+/// #24's subscription acceptance criterion: subscribe to a pod's manifest and
+/// see a notification when it changes.
+///
+/// The initial list a subscribe triggers DOES notify: classification in
+/// `is_object_change` (`crates/kube/src/watch.rs`) fires `on_change` for
+/// every `InitDone`, including the very first one, because a read followed by
+/// a subscribe is not atomic — the object can already differ from what the
+/// client last saw by the time the subscription's first list completes, and
+/// staying silent would leave the client trusting stale state with no
+/// correction. So `hits` is already nonzero once the watch is confirmed
+/// running, before any mutation. To still prove that a REAL subsequent change
+/// produces its own notification (not just the guaranteed initial one), this
+/// test records the hit count as a baseline after the watch is up, then
+/// mutates the watched pod, and asserts the count rises *above that
+/// baseline* — not merely `> 0`, which the initial notification alone would
+/// already satisfy and would make this test pass without exercising the
+/// mutation path at all.
+///
+/// The mutation is a label added via server-side apply (an `Apply` event)
+/// rather than deleting the pod: the pod is the live Deployment replica the
+/// logs check above already exercised, and a label patch leaves it running
+/// under the same name, so nothing else in the suite has to wait for the
+/// Deployment to notice and recreate a differently-named replacement.
+async fn mcp_resource_subscription(ctx: &str, pod: &str) {
+    println!("=== mcp resources: subscription ===");
+    let server = srelens_mcp::McpServer::new(Arc::new(build_registry_with(cache())))
+        .with_resources(srelens_registry::kind_resolver())
+        .with_watcher(Arc::new(srelens_desktop_lib::mcp_watch::CacheWatcher::new(
+            cache(),
+        )));
+
+    let uri = srelens_mcp::resources::ResourceUri::parse(&format!("k8s://{ctx}/{NS}/Pod/{pod}"))
+        .unwrap();
+
+    let hits = Arc::new(std::sync::Mutex::new(0usize));
+    let counter = hits.clone();
+    let handle = srelens_mcp::resources::ObjectWatcher::watch(
+        server.watcher().as_ref(),
+        &uri,
+        Box::new(move || *counter.lock().unwrap() += 1),
+    )
+    .expect("watch spawns");
+
+    // Establish the watch first, and confirm it is actually running, before
+    // mutating anything: the ordering is what makes the assertion below mean
+    // "the notification followed our change" rather than "something fired at
+    // some point".
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        !handle.is_finished(),
+        "the watch task ended before the mutation ran; it should still be watching"
+    );
+
+    // Baseline after the initial list, which itself notifies (see the doc
+    // comment above) — the mutation must push the count *past* this, not
+    // merely make it nonzero.
+    let baseline = *hits.lock().unwrap();
+
+    let label_yaml = format!(
+        "apiVersion: v1\nkind: Pod\nmetadata:\n  name: {pod}\n  namespace: {NS}\n  labels:\n    e2e-subscription-marker: touched\n"
+    );
+    let out = server
+        .call_tool(
+            "k8s.applyManifest",
+            json!({ "context": ctx, "yaml": label_yaml }),
+        )
+        .await
+        .expect("labeling the watched pod must succeed");
+    assert_eq!(out["applied"], true, "label apply must succeed: {out}");
+
+    let dl = deadline(30);
+    loop {
+        if *hits.lock().unwrap() > baseline {
+            break;
+        }
+        if Instant::now() > dl {
+            handle.abort();
+            panic!(
+                "expected the hit count to rise above the post-initial-list baseline \
+                 ({baseline}) after labeling {pod}, but it did not"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    handle.abort();
+    println!("mcp resources: subscription fired on Apply after a label change");
+}
+
 /// Delete the `srelens-e2e` namespace and its CRD, and make sure the node(s)
 /// end up uncordoned — runs unconditionally (even after a panic) so the suite
 /// is re-runnable back-to-back with no manual cleanup.
@@ -1952,6 +2104,89 @@ async fn teardown() {
                     .await;
             }
             println!("teardown: node(s) uncordoned");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MCP prompts, issue #25
+// ---------------------------------------------------------------------------
+
+/// #25's acceptance criterion: a client can run a CrashLoop triage end-to-end
+/// using only advertised tools. This checks the prompt half — the flow is
+/// advertised, renders against a real context, and every tool it names is a
+/// capability that actually exists in the registry. A prompt that instructs a
+/// call to a renamed tool sends the agent down a dead end, and nothing else in
+/// the suite would notice.
+///
+/// Unlike its neighbour above, this test is NOT `#[ignore]`d: `build_registry`
+/// only constructs a lazy client cache and registers capability closures (no
+/// connection attempt), `Registry::ids()` is a synchronous map-key read, and
+/// `PromptLibrary`/`prompts/list`/`prompts/get` are pure in-memory string
+/// work — nothing here touches a cluster, `helm`, or `kubectl`. It runs safely
+/// in CI with no kubeconfig at all (verified with a nonexistent `KUBECONFIG`
+/// and an empty `HOME`), and it is the only check that would notice a
+/// referenced capability being renamed or removed out from under a prompt
+/// body — `every_referenced_tool_is_on_the_read_only_allowlist` in
+/// `crates/mcp/src/prompts.rs` only checks against a hardcoded allowlist, so
+/// it can't see the registry drift.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_prompts_name_only_real_capabilities() {
+    let registry = srelens_desktop_lib::build_registry();
+    let ids: Vec<String> = registry.ids().into_iter().map(str::to_string).collect();
+    let server = srelens_mcp::McpServer::new(std::sync::Arc::new(registry))
+        .with_prompts(srelens_mcp::prompts::PromptLibrary::new(None));
+
+    let listed = srelens_mcp::stdio::handle_request(
+        &server,
+        &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"prompts/list"}),
+        srelens_mcp::Transport::Stdio,
+    )
+    .await
+    .expect("prompts/list responds");
+    let names: Vec<String> = listed["result"]["prompts"]
+        .as_array()
+        .expect("prompts array")
+        .iter()
+        .map(|p| p["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&"pod-crashloop".to_string()), "got {names:?}");
+
+    for name in &names {
+        for arguments in [
+            serde_json::json!({ "context": context() }),
+            serde_json::json!({ "context": context(), "namespace": NS,
+                                "pod": "any", "node": "any", "service": "any" }),
+        ] {
+            let resp = srelens_mcp::stdio::handle_request(
+                &server,
+                &serde_json::json!({"jsonrpc":"2.0","id":2,"method":"prompts/get",
+                    "params": { "name": name, "arguments": arguments }}),
+                srelens_mcp::Transport::Stdio,
+            )
+            .await
+            .expect("prompts/get responds");
+            let text = resp["result"]["messages"][0]["content"]["text"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{name} did not render: {resp}"));
+            assert!(!text.contains("{{"), "{name} left a placeholder: {text}");
+
+            // Every `k8s.foo` the prompt tells the agent to call must exist.
+            for token in text.split_whitespace() {
+                // Trim all non-alphanumeric edge punctuation, including '.':
+                // an internal dot (`k8s.getObject`) sits between two
+                // alphanumeric runs, so it is never at an edge and survives
+                // the trim untouched. Only a glued sentence-ending period (or
+                // backtick) at the token's edge gets stripped. Mirrors
+                // `tool_tokens` in `crates/mcp/src/prompts.rs`.
+                let candidate = token.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+                if candidate.starts_with("k8s.") || candidate.starts_with("toolbox.") {
+                    assert!(
+                        ids.iter().any(|id| id == candidate),
+                        "{name} names `{candidate}`, which is not a registered capability"
+                    );
+                }
+            }
         }
     }
 }

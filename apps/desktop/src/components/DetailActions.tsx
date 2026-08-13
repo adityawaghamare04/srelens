@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   ArrowLeftRight,
+  Bot,
   LogOut,
   Logs,
   Pause,
@@ -23,10 +24,16 @@ import {
 } from "../lib/actions";
 import { notify } from "../lib/notify";
 import { useAccess, rbac, kindToResource, denyReason, reportActionError, type AccessCheck } from "../lib/access";
-import { IconButton, ConfirmDialog, TextInput } from "../ui";
+import { IconButton, ConfirmDialog, TextInput, KubectlPreview } from "../ui";
 import { ForwardDialog } from "./ForwardDialog";
+import { CopyAsKubectlButton } from "./CopyAsKubectlButton";
+import { toKubectl } from "../lib/kubectlMapper";
+import { copyKubectlCommand } from "../lib/copyKubectl";
+import type { AssistantContext } from "./AssistantDrawer";
 
 type Opener = (s: { context: string; namespace: string; pod: string; container?: string }) => void;
+/** Opens the assistant drawer with the current resource attached as context. */
+export type AskAssistant = (s: AssistantContext) => void;
 
 const SCALABLE = ["Deployment", "StatefulSet", "ReplicaSet"];
 const RESTARTABLE = ["Deployment", "StatefulSet", "DaemonSet"];
@@ -41,6 +48,7 @@ export function PodActions({
   onOpenTerminal,
   onOpenLogs,
   onEdit,
+  onAskAssistant,
 }: {
   context: string;
   pod: PodSummary;
@@ -48,6 +56,7 @@ export function PodActions({
   onOpenTerminal?: Opener;
   onOpenLogs?: Opener;
   onEdit?: () => void;
+  onAskAssistant?: AskAssistant;
 }) {
   const [dialog, setDialog] = useState<"delete" | "evict" | "forward" | "debug" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -107,10 +116,13 @@ export function PodActions({
     onDeleted?.();
   }
 
+  const deleteCmd = toKubectl({ action: "delete", kind: "Pod", namespace: pod.namespace, name: pod.name, context });
+
   return (
     <>
       <IconButton icon={Logs} label="Logs" onClick={() => onOpenLogs?.(target)} />
       <IconButton icon={SquareTerminal} label="Shell" onClick={() => onOpenTerminal?.(target)} />
+      <CopyAsKubectlButton kind="Pod" name={pod.name} namespace={pod.namespace} context={context} />
       <IconButton
         icon={Zap}
         label="Debug"
@@ -151,6 +163,14 @@ export function PodActions({
           setDialog("delete");
         }}
       />
+      {onAskAssistant && (
+        <IconButton
+          icon={Bot}
+          label="Ask assistant"
+          title="Ask the assistant about this pod"
+          onClick={() => onAskAssistant({ context, namespace: pod.namespace, kind: "Pod", name: pod.name })}
+        />
+      )}
       {dialog === "forward" && (
         <ForwardDialog
           context={context}
@@ -169,6 +189,7 @@ export function PodActions({
                 Delete <code>{pod.name}</code> in <code>{pod.namespace}</code>? This cannot be
                 undone.
               </p>
+              <KubectlPreview command={deleteCmd} onCopy={() => void copyKubectlCommand(deleteCmd)} />
               {error && <p className="text-destructive">Error: {error}</p>}
             </>
           }
@@ -220,6 +241,7 @@ export function PodActions({
                 Gracefully evict <code>{pod.name}</code> in <code>{pod.namespace}</code> (respects
                 disruption budgets)?
               </p>
+              <KubectlPreview note="No single-line kubectl equivalent — eviction uses the pod's /eviction subresource, which respects PodDisruptionBudgets (a plain delete does not)." />
               {error && <p className="text-destructive">Error: {error}</p>}
             </>
           }
@@ -272,6 +294,7 @@ export function ResourceActions({
   onChanged,
   onOpenLogs,
   onEdit,
+  onAskAssistant,
 }: {
   context: string;
   kind: string;
@@ -284,6 +307,7 @@ export function ResourceActions({
   onChanged?: () => void;
   onOpenLogs?: (s: { context: string; namespace: string; kind: string; name: string }) => void;
   onEdit?: () => void;
+  onAskAssistant?: AskAssistant;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -398,6 +422,25 @@ export function ResourceActions({
     onChanged?.();
   }
 
+  // Only a syntactically valid non-negative integer produces a meaningful
+  // preview — mirrors the same guard `doScale` enforces before submitting.
+  const replicasN = Number(replicas);
+  const validReplicas = replicas.trim() !== "" && Number.isInteger(replicasN) && replicasN >= 0;
+
+  const restartCmd = toKubectl({ action: "rollout-restart", kind, namespace: namespace ?? "", name, context });
+  const suspendCmd = toKubectl({
+    action: cronjobSuspended ? "cronjob-resume" : "cronjob-suspend",
+    kind,
+    namespace: namespace ?? "",
+    name,
+    context,
+  });
+  const triggerCmd = toKubectl({ action: "cronjob-trigger", kind, namespace: namespace ?? "", name, context });
+  const scaleCmd = validReplicas
+    ? toKubectl({ action: "scale", kind, namespace: namespace ?? "", name, context, replicas: replicasN })
+    : null;
+  const deleteCmd = toKubectl({ action: "delete", kind, namespace: namespace ?? "", name, context });
+
   return (
     <>
       {LOGGABLE.includes(kind) && onOpenLogs && (
@@ -407,6 +450,7 @@ export function ResourceActions({
           onClick={() => onOpenLogs({ context, namespace: namespace ?? "", kind, name })}
         />
       )}
+      <CopyAsKubectlButton kind={kind} name={name} namespace={namespace} context={context} />
       {onEdit && (
         <IconButton
           icon={Pencil}
@@ -466,6 +510,14 @@ export function ResourceActions({
         title={deleteCheck ? denyReason(access, deleteCheck) : undefined}
         onClick={() => setConfirmDelete(true)}
       />
+      {onAskAssistant && (
+        <IconButton
+          icon={Bot}
+          label="Ask assistant"
+          title={`Ask the assistant about this ${kind}`}
+          onClick={() => onAskAssistant({ context, namespace: namespace ?? undefined, kind, name })}
+        />
+      )}
 
       {restarting && (
         <ConfirmDialog
@@ -482,6 +534,7 @@ export function ResourceActions({
                 ) : null}
                 ? This reschedules all of its pods.
               </p>
+              <KubectlPreview command={restartCmd} onCopy={() => void copyKubectlCommand(restartCmd)} />
               {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
             </>
           }
@@ -510,6 +563,7 @@ export function ResourceActions({
                   ? "Scheduled runs will resume."
                   : "Scheduled runs will be paused; already-running jobs are unaffected."}
               </p>
+              <KubectlPreview command={suspendCmd} onCopy={() => void copyKubectlCommand(suspendCmd)} />
               {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
             </>
           }
@@ -528,6 +582,7 @@ export function ResourceActions({
               <p style={{ marginTop: 0 }}>
                 Create a one-off Job from <code>{name}</code> and run it immediately.
               </p>
+              <KubectlPreview command={triggerCmd} onCopy={() => void copyKubectlCommand(triggerCmd)} />
               {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
             </>
           }
@@ -554,6 +609,9 @@ export function ResourceActions({
                   aria-label="Replicas"
                 />
               </div>
+              {scaleCmd && (
+                <KubectlPreview command={scaleCmd} onCopy={() => void copyKubectlCommand(scaleCmd)} />
+              )}
               {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
             </>
           }
@@ -579,6 +637,7 @@ export function ResourceActions({
                 ) : null}
                 ? This cannot be undone.
               </p>
+              <KubectlPreview command={deleteCmd} onCopy={() => void copyKubectlCommand(deleteCmd)} />
               {err && <p style={{ color: "var(--fl-color-danger)" }}>Error: {err}</p>}
             </>
           }

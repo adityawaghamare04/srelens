@@ -95,12 +95,20 @@ jobs:
           RANGE=""
           [ -n "$LAST_TAG" ] && RANGE="${LAST_TAG}..HEAD"
           SUBJECTS=$(git log --no-merges --pretty=%B ${RANGE})
+          # Each pattern also accepts a leading "* " so a SQUASH-merged
+          # dev→main promotion still releases: GitHub's default squash message
+          # lists the squashed commits as "* <subject>" bullets in the body,
+          # and without this the only commit in range would be the
+          # non-conventional "release: ..." subject itself — BUMP=none, and
+          # the entire release (desktop, docker, AUR) silently skips. The
+          # documented path is still a plain merge commit; this is the
+          # backstop for the wrong button.
           if echo "$SUBJECTS" | grep -qiE '(^|[[:space:]])BREAKING[ -]CHANGE' \
-             || echo "$SUBJECTS" | grep -qE '^[a-z]+(\([^)]*\))?!:'; then
+             || echo "$SUBJECTS" | grep -qE '^(\* )?[a-z]+(\([^)]*\))?!:'; then
             BUMP=major
-          elif echo "$SUBJECTS" | grep -qE '^feat(\([^)]*\))?:'; then
+          elif echo "$SUBJECTS" | grep -qE '^(\* )?feat(\([^)]*\))?:'; then
             BUMP=minor
-          elif echo "$SUBJECTS" | grep -qE '^(fix|perf)(\([^)]*\))?:'; then
+          elif echo "$SUBJECTS" | grep -qE '^(\* )?(fix|perf)(\([^)]*\))?:'; then
             BUMP=patch
           else
             BUMP=none
@@ -129,8 +137,16 @@ jobs:
           # and smarter ranking" tells a user nothing that "**palette:** ..."
           # does. Line 1 handles scoped commits, line 2 unscoped ones.
           strip='s/^[a-z]+\(([^)]*)\)!?:[[:space:]]*/**\1:** /; s/^[a-z]+!?:[[:space:]]*//'
-          FEATS=$(git log --no-merges --pretty=%s ${RANGE} | grep -E '^feat' | sed -E "$strip" | sed 's/^/- /' || true)
-          FIXES=$(git log --no-merges --pretty=%s ${RANGE} | grep -E '^(fix|perf)' | sed -E "$strip" | sed 's/^/- /' || true)
+          # Subjects, plus "* <subject>" bullets from commit BODIES — the shape
+          # GitHub's squash merge records the squashed commits in. Without the
+          # bullets, a squash-merged promotion (whose only subject is the
+          # non-conventional "release: ..." title) would pass the bump gate
+          # above but publish a release with EMPTY notes. Plain body prose
+          # stays excluded: only "* "-bulleted, type-prefixed lines qualify.
+          SOURCES=$( { git log --no-merges --pretty=%s ${RANGE}; \
+                       git log --no-merges --pretty=%b ${RANGE} | sed -nE 's/^\* ([a-z]+(\([^)]*\))?!?:.*)$/\1/p'; } )
+          FEATS=$(echo "$SOURCES" | grep -E '^feat' | sed -E "$strip" | sed 's/^/- /' || true)
+          FIXES=$(echo "$SOURCES" | grep -E '^(fix|perf)' | sed -E "$strip" | sed 's/^/- /' || true)
           {
             echo "notes<<__NOTES_EOF__"
             [ -n "$FEATS" ] && printf '### Features\n%s\n\n' "$FEATS"
@@ -147,18 +163,38 @@ jobs:
   # Publish the srelens web image to GHCR (multi-arch) whenever the version
   # job determined there's something to release — mirrors the desktop build's
   # release gate, independent of the (long) desktop matrix below.
+  #
+  # ONE ARCHITECTURE PER NATIVE RUNNER, joined into a manifest by the job below.
+  # This used to be a single job building linux/amd64,linux/arm64 with QEMU, but
+  # the image compiles the server from source (see Dockerfile) and emulating a
+  # Rust release build is punishing: the last such run took 1h44m, against ~12
+  # minutes for all four desktop targets including Apple notarization. Worse, it
+  # serialized releases — `concurrency: release-<ref>` meant the next stable cut
+  # sat pending behind it. arm64 runners are free for public repos, so the arm
+  # leg now compiles natively instead of instruction-by-instruction.
+  #
+  # Each leg pushes by DIGEST only (no tag): two jobs pushing the same tag would
+  # race, with the loser's architecture silently dropped from the result.
   docker:
-    name: docker image
+    name: docker image (${{ matrix.arch }})
     needs: version
     if: needs.version.outputs.release == 'true'
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -167,25 +203,83 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compute tags
-        id: tags
-        run: |
-          VERSION="${{ needs.version.outputs.version }}"
-          TAGS="ghcr.io/srelens/srelens:${VERSION}"
-          # `latest` only for stable releases on main.
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAGS="${TAGS},ghcr.io/srelens/srelens:latest"
-          fi
-          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/srelens/srelens,push-by-digest=true,name-canonical=true,push=true
+          # Per-arch cache scope: a shared scope would have the two legs
+          # overwrite each other's layers on every run, costing the cache hit
+          # this is meant to provide.
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+      - name: Export digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          if [ -z "$digest" ]; then
+            echo "::error::build produced no digest for ${{ matrix.arch }}"
+            exit 1
+          fi
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Join the per-arch images into one multi-arch tag. Split from the build jobs
+  # so the tag appears only once BOTH architectures are published — a partial
+  # manifest would serve amd64 users an image while arm64 pulls 404.
+  docker-manifest:
+    name: docker manifest
+    needs: [version, docker]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: docker-digest-*
+          merge-multiple: true
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and push manifest
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+          IMAGE=ghcr.io/srelens/srelens
+          TAGS=(-t "${IMAGE}:${VERSION}")
+          # `latest` only for stable releases on main.
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS+=(-t "${IMAGE}:latest")
+          fi
+          cd /tmp/digests
+          # Both legs must have landed; an empty or short list means a silent
+          # partial publish, which is exactly what this job exists to prevent.
+          count=$(ls -1 | wc -l)
+          if [ "$count" -ne 2 ]; then
+            echo "::error::expected 2 per-arch digests, found ${count}"
+            ls -la
+            exit 1
+          fi
+          docker buildx imagetools create "${TAGS[@]}" $(printf "${IMAGE}@sha256:%s " *)
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
   build:
     needs: version
@@ -561,126 +655,16 @@ jobs:
   # build job now excludes those libs and asserts it, so the AppImage is no
   # longer affected either. See packaging/aur/README.md.
   #
-  # Requires (one-time, see packaging/aur/README.md): the srelens-bin name claimed
-  # on the AUR, plus AUR_USERNAME / AUR_EMAIL / AUR_SSH_PRIVATE_KEY secrets. The
-  # job no-ops when the key isn't configured, so it can land before that's done.
+  # The steps live in their own reusable workflow so the same publish can be run
+  # BY HAND for an already-released version. Welded to this pipeline, a failed
+  # AUR push could only be retried by cutting another release — which is how AUR
+  # sat at 0.2.0 while four stable releases came and went.
   aur:
-    name: publish AUR (srelens-bin)
     # Also needs publish-release: updpkgsums fetches the release assets over
     # plain HTTPS, which only works once the release is out of draft.
     needs: [version, build, publish-release]
     if: ${{ github.ref_name == 'main' && needs.publish-release.result == 'success' && needs.version.outputs.release == 'true' }}
-    runs-on: ubuntu-22.04
-    # Do the AUR push ourselves rather than via a third-party action: an AUR
-    # PKGBUILD executes arbitrary code on a user's machine at build time, so
-    # push access to the package is a high-value target. Handing the AUR SSH key
-    # to an external action would put that entirely in someone else's supply
-    # chain for the sake of ~20 lines of shell.
-    container:
-      image: archlinux:base-devel
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Skip when the AUR key isn't configured
-        id: gate
-        shell: bash
-        env:
-          KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-        run: |
-          if [ -z "${KEY:-}" ]; then
-            echo "AUR_SSH_PRIVATE_KEY not set — skipping AUR publish."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Install toolchain
-        if: steps.gate.outputs.publish == 'true'
-        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib namcap
-
-      - name: Build, lint and publish
-        if: steps.gate.outputs.publish == 'true'
-        shell: bash
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
-          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
-        run: |
-          set -euo pipefail
-
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
-
-          # AUR's host key, fetched at runtime and PINNED BY FINGERPRINT.
-          #
-          # This deliberately does not come from a secret. Carrying the
-          # `known_hosts` lines in AUR_KNOWN_HOSTS made the trust decision
-          # depend on a value nobody can inspect or lint: a paste that loses
-          # the newlines (or the `aur.archlinux.org ` prefix) produces a file
-          # ssh silently ignores, and the only symptom is "Host key
-          # verification failed" at clone time — which is exactly how the
-          # v0.4.0 publish failed.
-          #
-          # Fetching and then checking the fingerprint against the value AUR
-          # publishes keeps the same security property (we still refuse an
-          # unexpected key — this is not TOFU) while making every failure mode
-          # self-describing. Rotate the constant if AUR ever rotates the key;
-          # the job then fails with both fingerprints in the log instead of an
-          # opaque ssh error. See packaging/aur/README.md.
-          AUR_ED25519_FP="SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4"
-          if ! ssh-keyscan -t ed25519 aur.archlinux.org > ~/.ssh/known_hosts 2> keyscan.err; then
-            echo "::error::ssh-keyscan could not reach aur.archlinux.org"
-            cat keyscan.err >&2
-            exit 1
-          fi
-          if [ ! -s ~/.ssh/known_hosts ]; then
-            echo "::error::ssh-keyscan returned no host key for aur.archlinux.org"
-            cat keyscan.err >&2
-            exit 1
-          fi
-          GOT_FP=$(ssh-keygen -lf ~/.ssh/known_hosts | awk '{print $2}')
-          if [ "$GOT_FP" != "$AUR_ED25519_FP" ]; then
-            echo "::error::aur.archlinux.org host key fingerprint mismatch — refusing to push"
-            echo "  expected: $AUR_ED25519_FP" >&2
-            echo "  got:      $GOT_FP" >&2
-            exit 1
-          fi
-          echo "aur.archlinux.org host key verified: $GOT_FP"
-          chmod 600 ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
-
-          git config --global user.name "$AUR_USERNAME"
-          git config --global user.email "$AUR_EMAIL"
-          git config --global --add safe.directory '*'
-
-          git clone ssh://aur@aur.archlinux.org/srelens-bin.git aur
-          cp packaging/aur/PKGBUILD aur/PKGBUILD
-          cd aur
-          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" PKGBUILD
-          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-
-          # makepkg refuses to run as root.
-          useradd -m builder
-          chown -R builder:builder .
-
-          # Pin real checksums from the published release assets, then regenerate
-          # .SRCINFO (the AUR reads metadata from it, not the PKGBUILD).
-          su builder -c 'updpkgsums'
-          su builder -c 'makepkg --printsrcinfo > .SRCINFO'
-
-          # Actually BUILD it before publishing. A PKGBUILD that does not build
-          # would otherwise reach users as a broken AUR package; --nodeps keeps
-          # this to a packaging check, not a full GUI dependency install.
-          su builder -c 'makepkg -f --nodeps --noconfirm'
-          su builder -c 'namcap PKGBUILD' || true
-          rm -f ./*.pkg.tar.* 
-
-          if git diff --quiet PKGBUILD .SRCINFO; then
-            echo "AUR package already at ${VERSION} — nothing to push."
-            exit 0
-          fi
-          git add PKGBUILD .SRCINFO
-          git commit -m "srelens-bin ${VERSION}"
-          git push origin master
+    uses: ./.github/workflows/aur-publish.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+    secrets: inherit

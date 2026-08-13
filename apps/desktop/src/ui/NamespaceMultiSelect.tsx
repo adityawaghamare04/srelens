@@ -41,6 +41,13 @@ export function NamespaceMultiSelect({
     onChange([...next]);
   };
 
+  // Selected namespaces first (in their given order), then the rest — so a
+  // selection doesn't get lost among dozens of other namespaces.
+  const orderedNamespaces =
+    selected.size === 0
+      ? namespaces
+      : [...selection.filter((ns) => namespaces.includes(ns)), ...namespaces.filter((ns) => !selected.has(ns))];
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -68,7 +75,7 @@ export function NamespaceMultiSelect({
                 <Check className={cn("size-3.5 shrink-0", selection.length === 0 ? "opacity-100" : "opacity-0")} />
                 <span className="truncate">All namespaces</span>
               </CommandItem>
-              {namespaces.map((ns) => (
+              {orderedNamespaces.map((ns) => (
                 <CommandItem key={ns} value={ns} onSelect={() => toggle(ns)}>
                   <Check className={cn("size-3.5 shrink-0", selected.has(ns) ? "opacity-100" : "opacity-0")} />
                   <span className="truncate">{ns}</span>

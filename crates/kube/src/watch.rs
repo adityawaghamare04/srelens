@@ -722,6 +722,149 @@ where
     .await
 }
 
+/// Classify a watcher event as an object change. `Apply`/`Delete` always are.
+/// `Init`/`InitApply` never are — they are just the replay of the current list
+/// building up in memory, with nothing yet to report. `InitDone` — which
+/// closes *every* init sequence, the very first list and every subsequent
+/// relist alike — always is a change.
+///
+/// That includes the first list deliberately. A subscribe is never atomic
+/// with the read that precedes it: the client reads the object at version A,
+/// the object changes to B, and only then does the client subscribe. If the
+/// initial list stayed silent, the client would be stuck believing A is
+/// current until some unrelated later change happened to notify it — a lost
+/// update with no bound on how long it lasts. Notifying on the first list
+/// costs one redundant re-read when nothing actually changed between the read
+/// and the subscribe; that is the correct direction to be wrong in. This
+/// module's documented contract is that the signal may over-notify but must
+/// never under-notify, and firing on every `InitDone` — not just relists — is
+/// what makes that hold.
+///
+/// kube-runtime also runs additional init sequences (`Init` → `InitApply`* →
+/// `InitDone`) whenever it re-lists after a desync (410 GONE, etcd
+/// compaction, apiserver restart), and a change that lands during that
+/// reconnect gap arrives only as part of the replayed list, never as a
+/// standalone `Apply`. Firing on every `InitDone` covers that case too, for
+/// the same reason.
+///
+/// Do not special-case the first `InitDone` back to silent "for tidiness" —
+/// that reintroduces the lost-update window this rule closes.
+///
+/// Pulled out as a pure function (rather than inlined in `watch_object`)
+/// because `watch_object` itself cannot be unit-tested without an API server,
+/// and getting this classification wrong would either under-notify from
+/// missing a change made before a subscribe or during a relist, or spuriously
+/// notify on a relist that changed nothing.
+fn is_object_change<K>(event: &Event<K>) -> bool {
+    match event {
+        Event::Apply(_) | Event::Delete(_) => true,
+        Event::Init | Event::InitApply(_) => false,
+        Event::InitDone => true,
+    }
+}
+
+/// Watch a single object by name, calling `on_change` on every apply, delete,
+/// or relist-that-changed-something.
+///
+/// One API watch per object via a `metadata.name` field selector, rather than
+/// streaming a whole namespace to observe one member. `on_change` takes no
+/// payload deliberately: the MCP subscription it backs sends only a URI and the
+/// client re-reads, so this needs to detect *that* something changed.
+///
+/// **Every list notifies, initial and relists alike:** each init sequence
+/// (`Init` → `InitApply`* → `InitDone`) fires `on_change` once, on its
+/// `InitDone` — see `is_object_change`. The initial list is included
+/// deliberately: a read followed by a subscribe is not atomic, so the object
+/// can already differ from what the client last saw by the time the
+/// subscription's first list completes, and staying silent would leave the
+/// client trusting stale state with nothing to correct it. A redundant
+/// notification when nothing actually changed is the correct failure
+/// direction, not a bug to tidy away. The same rule also covers a relist after
+/// a watch desync, which is the only way a change made during the reconnect
+/// gap ever arrives.
+///
+/// **Namespace contract:** `namespace: None` means the caller has already
+/// established that `gvk` is cluster-scoped. This function cannot detect a
+/// kind's scope itself, so passing `None` for a *namespaced* kind will watch
+/// with `Api::all_with` and the bare `metadata.name={name}` selector will
+/// match same-named objects in every namespace, silently firing `on_change`
+/// for a different object than the one the caller subscribed to. Establishing
+/// scope before calling is the caller's responsibility.
+pub async fn watch_object<F, G>(
+    cache: Arc<ClientCache>,
+    context: String,
+    namespace: Option<String>,
+    gvk: kube::api::GroupVersionKind,
+    name: String,
+    mut on_change: F,
+    mut on_status: G,
+) -> Result<(), String>
+where
+    F: FnMut() + Send,
+    G: FnMut(WatchStatus) + Send,
+{
+    use kube::api::{ApiResource, DynamicObject};
+
+    if name.is_empty() {
+        return Err(
+            "watch_object: object name must not be empty (an empty metadata.name \
+             selector matches nothing, so the watch would sit forever without firing)"
+                .into(),
+        );
+    }
+    if let Some(bad) = name.chars().find(|c| *c == ',' || *c == '=') {
+        return Err(format!(
+            "watch_object: object name {name:?} contains '{bad}', which is not valid in \
+             a Kubernetes object name and would corrupt the metadata.name field selector"
+        ));
+    }
+    if namespace.as_deref() == Some("") {
+        return Err(
+            "watch_object: namespace must not be an empty string; pass None for a \
+             cluster-scoped kind, not Some(\"\") — an empty namespace would silently \
+             widen the watch to Api::all_with, matching same-named objects in every \
+             namespace"
+                .into(),
+        );
+    }
+
+    let client = cache.get(&context).await?;
+    let ar = ApiResource::from_gvk(&gvk);
+    let api: Api<DynamicObject> = match namespace.as_deref() {
+        Some(ns) => Api::namespaced_with(client, ns, &ar),
+        None => Api::all_with(client, &ar),
+    };
+
+    let config = Config::default().fields(&format!("metadata.name={name}"));
+    let mut stream = kube::runtime::watcher(api, config).boxed();
+    let mut reconnecting = false;
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(event) => {
+                if reconnecting {
+                    reconnecting = false;
+                    on_status(WatchStatus::Live);
+                }
+                if is_object_change(&event) {
+                    on_change();
+                }
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if is_permanent_watch_error(&msg) {
+                    return Err(msg);
+                }
+                if !reconnecting {
+                    reconnecting = true;
+                    on_status(WatchStatus::Reconnecting);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,6 +914,152 @@ mod tests {
         let snap = snapshot(&state);
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0].name, "b");
+    }
+
+    /// `watch_object` cannot be exercised without an API server, so this pins
+    /// the part that is pure: a permanent error must stop the loop rather than
+    /// reconnect forever, and everything else must be treated as transient.
+    #[test]
+    fn only_forbidden_is_a_permanent_watch_error_for_object_watches() {
+        assert!(is_permanent_watch_error("Forbidden: User cannot watch pods"));
+        assert!(is_permanent_watch_error("FORBIDDEN"));
+        assert!(!is_permanent_watch_error("connection reset by peer"));
+        assert!(!is_permanent_watch_error("401 Unauthorized"));
+        assert!(!is_permanent_watch_error("too old resource version"));
+    }
+
+    #[tokio::test]
+    async fn watch_object_surfaces_a_client_error_instead_of_panicking() {
+        // No such context, so `cache.get` fails before any watch begins.
+        let cache = ClientCache::new(std::path::PathBuf::from("/nonexistent/kubeconfig"));
+        let gvk = kube::api::GroupVersionKind::gvk("", "v1", "Pod");
+        let err = watch_object(
+            cache,
+            "no-such-context".into(),
+            Some("ns".into()),
+            gvk,
+            "web-0".into(),
+            || {},
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(!err.is_empty(), "the client failure must be surfaced as an error string");
+    }
+
+    #[tokio::test]
+    async fn watch_object_rejects_an_empty_name_before_touching_the_client() {
+        // An empty `metadata.name=` selector matches nothing, so the watch
+        // would sit forever without ever firing `on_change` or erroring — the
+        // worst possible failure shape for a subscription. Reject up front.
+        // Uses the same nonexistent kubeconfig as the client-error test above;
+        // if this reached `cache.get` it would still error, but for the wrong
+        // reason, so the assertion pins the *message*, not just `is_err()`.
+        let cache = ClientCache::new(std::path::PathBuf::from("/nonexistent/kubeconfig"));
+        let gvk = kube::api::GroupVersionKind::gvk("", "v1", "Pod");
+        let err = watch_object(
+            cache,
+            "no-such-context".into(),
+            Some("ns".into()),
+            gvk,
+            "".into(),
+            || {},
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("empty"), "expected an empty-name error, got: {err}");
+    }
+
+    #[tokio::test]
+    async fn watch_object_rejects_a_name_containing_a_selector_metacharacter() {
+        // A `,` or `=` in `name` reshapes `metadata.name={name}` into extra or
+        // malformed field-selector terms. Neither character is valid in a real
+        // Kubernetes object name (RFC 1123), so reject both before any client
+        // work rather than silently producing a selector that matches the
+        // wrong thing (or nothing).
+        let gvk = kube::api::GroupVersionKind::gvk("", "v1", "Pod");
+        for bad_name in ["web-0,evil=1", "web=0"] {
+            let cache = ClientCache::new(std::path::PathBuf::from("/nonexistent/kubeconfig"));
+            let err = watch_object(
+                cache,
+                "no-such-context".into(),
+                Some("ns".into()),
+                gvk.clone(),
+                bad_name.into(),
+                || {},
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.contains(bad_name),
+                "expected the offending name {bad_name:?} to be named in the error, got: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn watch_object_rejects_an_empty_namespace_instead_of_widening_the_watch() {
+        // `ResourceUri::parse` cannot currently produce `Some("")` (the `-`
+        // sentinel maps to `None`), so this is defence at the layer that
+        // documents the contract, not a live bug from the URI path. But
+        // silently coercing `Some("")` into `Api::all_with` would be exactly
+        // the cross-namespace wrong-object watch this function's own doc
+        // comment warns about, so it must be rejected like the empty-name and
+        // metacharacter cases above rather than swallowed.
+        let cache = ClientCache::new(std::path::PathBuf::from("/nonexistent/kubeconfig"));
+        let gvk = kube::api::GroupVersionKind::gvk("", "v1", "Pod");
+        let err = watch_object(
+            cache,
+            "no-such-context".into(),
+            Some("".into()),
+            gvk,
+            "web-0".into(),
+            || {},
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("namespace"), "expected a namespace error, got: {err}");
+    }
+
+    /// `Event` is generic; `()` is the cheapest `K` that still lets us
+    /// construct every variant, since `is_object_change` never inspects the
+    /// payload. `Apply`/`Delete` and `InitDone` are always changes;
+    /// `Init`/`InitApply` never are.
+    #[test]
+    fn is_object_change_fires_on_apply_delete_and_init_done() {
+        assert!(!is_object_change(&Event::<()>::Init));
+        assert!(!is_object_change(&Event::InitApply(())));
+        assert!(is_object_change(&Event::Apply(())));
+        assert!(is_object_change(&Event::Delete(())));
+        assert!(is_object_change(&Event::<()>::InitDone));
+    }
+
+    /// The relist scenario this signal exists to cover: a change that lands
+    /// during the reconnect gap arrives only as part of the replayed init
+    /// sequence, never as a standalone `Apply`. Both the first list and the
+    /// relist must report a change, once each, on their respective
+    /// `InitDone` — mirroring how `reduce` emits once per list.
+    #[test]
+    fn every_init_sequence_including_the_first_is_reported_as_one_change() {
+        let mut changes = 0;
+
+        for event in [
+            Event::<()>::Init,
+            Event::InitApply(()),
+            Event::InitDone,
+            Event::Init,
+            Event::InitApply(()),
+            Event::InitDone,
+        ] {
+            if is_object_change(&event) {
+                changes += 1;
+            }
+        }
+
+        assert_eq!(changes, 2, "expected one change per InitDone, first list and relist alike");
     }
 
     #[test]

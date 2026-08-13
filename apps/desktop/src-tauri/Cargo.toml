@@ -22,17 +22,49 @@ tauri-build = { version = "2.6.3", features = [] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
+# Headless MCP (`--mcp-http`/`--mcp-stdio`) never boots a Tauri `App`, so
+# `app.path().app_config_dir()` isn't callable there. `dirs` reproduces that
+# resolver's formula directly (see `mcp_token_path` in main.rs) so the CLI and
+# the GUI resolve to the same config dir and share one token file.
+dirs = "6"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+srelens-agent = { path = "../../../crates/agent" }
+srelens-llm = { path = "../../../crates/llm" }
 srelens-capability = { path = "../../../crates/capability" }
 srelens-mcp = { path = "../../../crates/mcp" }
 srelens-kube = { path = "../../../crates/kube" }
 srelens-streams = { path = "../../../crates/streams" }
 srelens-server = { path = "../../../crates/server" }
 srelens-registry = { path = "../../../crates/registry" }
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "macros"] }
+# MCP bearer token storage: prefer the OS keychain, falling back to the 0600
+# file (`FileTokenStore`) where none exists. Feature selection:
+#   - apple-native: macOS/iOS Keychain via `security-framework`.
+#   - windows-native: Windows Credential Manager via `windows-sys`.
+#   - sync-secret-service: Linux/BSD D-Bus Secret Service via `dbus-secret-service`,
+#     synchronous — matches `TokenStore`'s sync API without pulling in an async
+#     D-Bus runtime (the `async-secret-service` alternative needs zbus/tokio).
+#   - crypto-rust: the Secret Service session is encrypted; this backs that
+#     with a pure-Rust implementation instead of `crypto-openssl`, so we don't
+#     need a system OpenSSL dev package at build time.
+# Each backend's transitive deps are already gated to their own target by the
+# keyring crate itself, so enabling all four is safe cross-platform.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+# The secrets vault (issue #206): one XChaCha20-Poly1305-encrypted file keyed
+# by a single keychain-held master key, replacing per-secret keychain entries.
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+# Touch ID / Windows Hello gate for the vault master key (issue #208): the
+# plugin owns the SecAccessControl / Hello plumbing; get_data raises the
+# biometric prompt.
+tauri-plugin-biometry = "0.2"
+# Master-password key derivation for the vault (issue #208 follow-up).
+argon2 = "0.5"
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "macros", "process"] }
+uuid = { version = "1", features = ["v4"] }
+async-trait = "0.1"
 # Blocking HTTP for Toolbox tool downloads (run inside spawn_blocking).
 # rustls-no-provider matches tauri-plugin-updater's reqwest so no second TLS
 # crypto provider (aws-lc-rs) enters the tree — the workspace standardises on
@@ -40,6 +72,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "io-util", "ma
 # provider. default-tls here pulls rustls-platform-verifier -> aws-lc-rs,
 # giving two providers and a runtime "could not determine CryptoProvider" panic.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
+# Decodes base64 image attachments a chat turn carries (`chat_send`); also
+# used by `tests/e2e.rs` to decode a secret's value for assertions.
+base64 = "0.22"
 
 # Auto-update is desktop-only (mobile stores handle their own updates).
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
@@ -53,4 +88,3 @@ fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "process"] }
 futures = "0.3"
-base64 = "0.22"

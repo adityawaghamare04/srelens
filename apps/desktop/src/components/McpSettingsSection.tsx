@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Copy, Download, Radio } from "lucide-react";
-import { Button, TextInput } from "../ui";
+import { Copy, Download, Eye, EyeOff, Radio, RefreshCw, Trash2 } from "lucide-react";
+import { Button, ConfirmDialog, TextInput } from "../ui";
 import { notify } from "../lib/notify";
 import {
   loadMcpSettings,
@@ -15,7 +15,15 @@ import {
   srelensCliStatus,
   type CliStatus,
 } from "../lib/mcp";
+import { getMcpToken, revokeMcpToken, rotateMcpToken } from "../lib/mcpSecurity";
 import { mcpClientConfig, MCP_TOOLS, type McpTool, type McpTransport } from "../lib/mcpClients";
+import { McpAuditList } from "./McpAuditList";
+import { McpPromptIssues } from "./McpPromptIssues";
+
+/** Masked by default: only the last 4 characters are shown until revealed. */
+function maskToken(token: string): string {
+  return `••••${token.slice(-4)}`;
+}
 
 async function copy(text: string) {
   try {
@@ -39,10 +47,38 @@ export function McpSettingsSection() {
   const [cliMessage, setCliMessage] = useState("");
   const [tool, setTool] = useState<McpTool>("claude-code");
   const [transport, setTransport] = useState<McpTransport>("stdio");
+  // `token` is `null` both while it's still loading and once we know for
+  // certain there isn't one yet (e.g. the server has never been enabled, so
+  // `mcp_http_start` — the only place that mints one — hasn't run). `tokenLoading`
+  // tells those two apart so the row can show "Loading…" only for the former
+  // and a real "generate one" action for the latter, instead of getting stuck
+  // on "Loading…" forever.
+  const [token, setToken] = useState<string | null>(null);
+  const [tokenLoading, setTokenLoading] = useState(true);
+  const [tokenRevealed, setTokenRevealed] = useState(false);
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenError, setTokenError] = useState("");
+  const [tokenConfirm, setTokenConfirm] = useState<"rotate" | "revoke" | null>(null);
+  // Bumped by McpAuditList's own Refresh button so the prompt-issues panel
+  // re-reads too: a user who fixes their prompt file should see that
+  // reflected without restarting srelens, and without a second Refresh
+  // button next to the one that already exists.
+  const [promptIssuesNonce, setPromptIssuesNonce] = useState(0);
+
+  async function refreshToken() {
+    try {
+      setToken(await getMcpToken());
+    } catch {
+      setToken(null);
+    } finally {
+      setTokenLoading(false);
+    }
+  }
 
   useEffect(() => {
     void mcpHttpStatus().then(setRunningUrl).catch(() => {});
     void srelensCliStatus().then(setCli).catch(() => {});
+    void refreshToken();
   }, []);
 
   function persist(next: McpSettings) {
@@ -50,12 +86,18 @@ export function McpSettingsSection() {
     saveMcpSettings(next);
   }
 
+
   async function toggleServer(enabled: boolean) {
     setServerError("");
     persist({ ...settings, enabled });
     try {
-      if (enabled) setRunningUrl(await startMcpHttp(settings.port));
-      else {
+      if (enabled) {
+        setRunningUrl(await startMcpHttp(settings.port));
+        // Starting the server for the first time is also the first place a
+        // token can get minted (`mcp_http_start` mints one on first use), so
+        // the previously-fetched `null` may now be stale.
+        void refreshToken();
+      } else {
         await stopMcpHttp();
         setRunningUrl(null);
       }
@@ -92,8 +134,45 @@ export function McpSettingsSection() {
     }
   }
 
+  async function confirmRotate() {
+    setTokenBusy(true);
+    setTokenError("");
+    try {
+      const next = await rotateMcpToken();
+      setToken(next);
+      setTokenRevealed(false);
+      notify.success("Token rotated — the server restarted and connected clients need the new value.");
+      setTokenConfirm(null);
+    } catch (e) {
+      setTokenError(String(e));
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+
+  async function confirmRevoke() {
+    setTokenBusy(true);
+    setTokenError("");
+    try {
+      await revokeMcpToken();
+      await refreshToken();
+      setTokenRevealed(false);
+      notify.success("Token revoked. The MCP HTTP server has stopped.");
+      // The server stops as a side effect of revocation; reflect that instead
+      // of leaving the toggle showing a server that's no longer listening.
+      const status = await mcpHttpStatus().catch(() => null);
+      setRunningUrl(status);
+      if (!status) persist({ ...settings, enabled: false });
+      setTokenConfirm(null);
+    } catch (e) {
+      setTokenError(String(e));
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+
   const url = runningUrl ?? `http://127.0.0.1:${settings.port}/mcp`;
-  const config = mcpClientConfig(tool, transport, { url });
+  const config = mcpClientConfig(tool, transport, { url, token });
 
   return (
     <div className="flex flex-col gap-6">
@@ -166,6 +245,95 @@ export function McpSettingsSection() {
           </p>
         )}
         {cliMessage && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{cliMessage}</p>}
+      </section>
+
+      {/* Access token */}
+      <section className="flex flex-col gap-2">
+        <h4 className="text-sm font-medium">Access token</h4>
+        <p className="text-sm text-muted-foreground">
+          The HTTP transport requires this token — clients must send it as{" "}
+          <code className="fl-mono">Authorization: Bearer &lt;token&gt;</code>. Stdio connections (spawned
+          via the CLI) don't need it.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <code className="fl-mono rounded-md border border-border bg-muted/40 px-2 py-1 text-sm">
+            {tokenLoading ? "Loading…" : token ? (tokenRevealed ? token : maskToken(token)) : "No token yet"}
+          </code>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setTokenRevealed((r) => !r)}
+            disabled={!token}
+            aria-label={tokenRevealed ? "Hide token" : "Reveal token"}
+          >
+            {tokenRevealed ? <EyeOff data-icon="inline-start" /> : <Eye data-icon="inline-start" />}
+            {tokenRevealed ? "Hide" : "Reveal"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => token && void copy(token)}
+            disabled={!token}
+            aria-label="Copy token"
+          >
+            <Copy data-icon="inline-start" />
+            Copy
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            // Rotating an existing token restarts a running server and drops
+            // in-flight requests, so that path still confirms first. Minting
+            // the very first token has nothing to warn about — there's no
+            // previous value to invalidate — so it just runs.
+            onClick={() => (token ? setTokenConfirm("rotate") : void confirmRotate())}
+            disabled={tokenLoading || tokenBusy}
+          >
+            <RefreshCw data-icon="inline-start" />
+            {token ? "Rotate token" : "Generate token"}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => setTokenConfirm("revoke")}
+            disabled={!token || tokenBusy}
+          >
+            <Trash2 data-icon="inline-start" />
+            Revoke token
+          </Button>
+        </div>
+        {!tokenLoading && !token && (
+          <p className="text-sm text-muted-foreground">
+            No token has been generated yet. Generate one to connect over HTTP — stdio connections
+            don't need it.
+          </p>
+        )}
+        {tokenError && <p className="text-sm text-destructive">Error: {tokenError}</p>}
+      </section>
+
+      {tokenConfirm && (
+        <ConfirmDialog
+          title={tokenConfirm === "rotate" ? "Rotate access token?" : "Revoke access token?"}
+          message={
+            tokenConfirm === "rotate" ? (
+              "If the MCP HTTP server is running, rotating restarts it immediately so the new token takes effect — any in-flight agent request is dropped. Connected clients need the new value or they'll stop working."
+            ) : (
+              "Revoking also stops the MCP HTTP server: it never serves without a valid token. Any clients connected over HTTP will disconnect."
+            )
+          }
+          confirmLabel={tokenConfirm === "rotate" ? "Rotate" : "Revoke"}
+          danger={tokenConfirm === "revoke"}
+          busy={tokenBusy}
+          onConfirm={() => void (tokenConfirm === "rotate" ? confirmRotate() : confirmRevoke())}
+          onCancel={() => setTokenConfirm(null)}
+        />
+      )}
+
+      {/* Recent agent activity */}
+      <section className="flex flex-col gap-2">
+        <h4 className="text-sm font-medium">Recent agent activity</h4>
+        <McpPromptIssues nonce={promptIssuesNonce} />
+        <McpAuditList onRefresh={() => setPromptIssuesNonce((n) => n + 1)} />
       </section>
 
       {/* Per-tool config */}

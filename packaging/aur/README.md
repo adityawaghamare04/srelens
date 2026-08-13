@@ -73,6 +73,23 @@ Dev pre-releases (`srelens-v<version>-<run>`, cut from `dev`) are deliberately
 **not** published: AUR users expect stable versions, and an Arch `pkgver` cannot
 contain the `-<run>` suffix anyway.
 
+## Publishing by hand
+
+The steps live in their own reusable workflow (`.github/workflows/aur-publish.yml`),
+so the same publish can be run manually for any already-released version:
+
+**Actions → Publish AUR → Run workflow**, optionally with a version (omit it to
+use the newest stable release).
+
+This exists because AUR fell four releases behind: the publish was welded to the
+release pipeline, it failed silently on every stable release from v0.2.0 to
+v0.4.1, and the only way to retry was to cut another release.
+
+**AUR holds exactly one version.** `pkgver` is a scalar and users install
+whatever it currently points at, so there is no back-catalogue to backfill —
+publishing older tags in sequence would simply land on the newest. Only the
+latest version is ever worth pushing.
+
 ## One-time setup (needed before the first publish)
 
 The automation cannot run until a human claims the package name on the AUR:
@@ -108,6 +125,15 @@ The automation cannot run until a human claims the package name on the AUR:
    ```
    ssh-keyscan -t ed25519 aur.archlinux.org | ssh-keygen -lf -
    ```
+
+   **Keep every ssh path in that job absolute, and pass `known_hosts` to ssh
+   explicitly.** A container job runs with `HOME=/github/home` while the
+   container user is root, whose passwd entry says `/root`. The shell expands
+   `~` via `$HOME`; ssh resolves its *default* `UserKnownHostsFile` against the
+   password database. Relying on `~` therefore writes the file to one path and
+   reads it from another — which is how v0.4.1 managed to log "host key
+   verified" and then fail with "Host key verification failed" on the very next
+   line.
 
 The current stable release is **`srelens-v0.2.0`**, so the initial import can be
 done against it today (the PKGBUILD builds cleanly against its published `.deb`).

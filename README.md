@@ -128,8 +128,12 @@ MCP-capable clients without creating a separate cluster integration layer.
 
 Open **Settings → MCP** to:
 
-- run the MCP server over loopback HTTP;
-- install the `srelens` CLI for stdio connections;
+- run the MCP server over loopback HTTP, protected by a bearer token you can
+  reveal, rotate, or revoke — rotating restarts the running server so the new
+  token takes effect at once (dropping any in-flight request and invalidating
+  configs that used the old value); revoking also stops the server;
+- install the `srelens` CLI for stdio connections, which need no token — the
+  client already holds your privileges by spawning the process;
 - copy client configuration for supported MCP clients.
 
 You can also start the server directly:
@@ -139,7 +143,14 @@ srelens --mcp-stdio
 srelens --mcp-http 127.0.0.1:8765
 ```
 
-Mutating tools require an explicit `_confirm: true` argument before they run.
+Destructive tools prompt for confirmation in the app. Headless runs have no
+dialog to show, so they need `"_confirm": true` on the call *and* a
+process-level opt-in — `--mcp-allow-destructive` to change anything, or
+`--mcp-allow-sensitive-reads` to read Secrets. The two are independent, so
+reading a Secret never implies permission to drain a node, and neither flag
+alone authorizes anything without `_confirm`. There's no GUI toggle for
+stdio. See [docs/MCP.md](docs/MCP.md) for the full security model, including
+the Host-header check, audit log, and token storage.
 
 Example stdio configuration:
 
@@ -247,6 +258,7 @@ Contributions are welcome. Start with:
 
 - [Contribution guide](CONTRIBUTING.md)
 - [Developer guide](docs/DEVELOPMENT.md)
+- [MCP agent integration guide](docs/MCP.md)
 - [Open issues](https://github.com/srelens/srelens/issues)
 
 Please review the [Code of Conduct](.github/CODE_OF_CONDUCT.md) before

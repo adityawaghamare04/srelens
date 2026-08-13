@@ -45,4 +45,22 @@ describe("NamespaceMultiSelect", () => {
     fireEvent.click(await screen.findByText("All namespaces"));
     expect(onChange).toHaveBeenCalledWith([]);
   });
+
+  it("hoists selected namespaces to the top of the list, ahead of unselected ones", async () => {
+    render(
+      <NamespaceMultiSelect namespaces={namespaces} selection={["prod"]} onChange={() => {}} ariaLabel="Namespaces" />,
+    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Namespaces" }));
+    await screen.findByText("kube-system");
+    const order = screen.getAllByRole("option").map((el) => el.textContent);
+    expect(order).toEqual(["All namespaces", "prod", "default", "kube-system"]);
+  });
+
+  it("keeps a stable order when nothing is selected", async () => {
+    render(<NamespaceMultiSelect namespaces={namespaces} selection={[]} onChange={() => {}} ariaLabel="Namespaces" />);
+    fireEvent.click(screen.getByRole("combobox", { name: "Namespaces" }));
+    await screen.findByText("default");
+    const order = screen.getAllByRole("option").map((el) => el.textContent);
+    expect(order).toEqual(["All namespaces", "default", "kube-system", "prod"]);
+  });
 });
