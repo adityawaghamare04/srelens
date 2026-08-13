@@ -63,6 +63,9 @@ export async function loadPersistedOverview(
     if (!out || typeof out !== "object") return null;
     if (!isOverviewStats(out.stats)) return null;
     if (typeof out.updatedAt !== "number") return null;
+    // The backend's i64 outranges JS dates; formatUpdatedAt would throw on an
+    // unrepresentable timestamp, so it reads as a cache miss instead.
+    if (Number.isNaN(new Date(out.updatedAt).getTime())) return null;
     return out;
   } catch {
     return null;

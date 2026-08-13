@@ -53,6 +53,15 @@ describe("loadPersistedOverview", () => {
     expect(await loadPersistedOverview("kind-dev", invoke)).toBeNull();
   });
 
+  it("returns null when the timestamp can't be represented as a Date", async () => {
+    // Rust's i64 round-trips values far past JS's ±8.64e15 Date range;
+    // formatUpdatedAt would throw a RangeError on them mid-hydration.
+    for (const updatedAt of [9_000_000_000_000_000, -9_000_000_000_000_000]) {
+      const invoke = vi.fn().mockResolvedValue({ ...snapshot(), updatedAt });
+      expect(await loadPersistedOverview("kind-dev", invoke)).toBeNull();
+    }
+  });
+
   it("returns null when stats is missing nested fields (older schema)", async () => {
     // Syntactically valid but incomplete payloads must read as cache misses:
     // the overview dereferences stats.nodes.ready etc. straight in render.
