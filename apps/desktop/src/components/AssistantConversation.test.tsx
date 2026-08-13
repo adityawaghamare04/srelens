@@ -8,6 +8,7 @@ import {
 } from "./AssistantConversation";
 import * as chat from "../lib/chat";
 import * as chatHistory from "../lib/chatHistory";
+import type { StoredMessage } from "../lib/chatHistory";
 import * as prompts from "../lib/prompts";
 import * as skills from "../lib/skills";
 
@@ -411,6 +412,45 @@ describe("AssistantConversation session persistence", () => {
     fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
     await waitFor(() => expect(screen.getAllByText("Thoughts")).toHaveLength(2));
     expect(screen.getAllByText(/·\s*1s/)).toHaveLength(1);
+  });
+
+  it("thoughts round-trip through the saved session and reopen with their row intact", async () => {
+    vi.mocked(chat.sendChat).mockImplementation(async (_s, _p, _a, onEvent) => {
+      onEvent({ type: "thinking", text: "**Weighing options**\n" });
+      onEvent({ type: "textDelta", text: "answer" });
+      onEvent({ type: "turnDone" });
+      return null;
+    });
+    const ref = createRef<AssistantConversationHandle>();
+    render(<AssistantConversation ref={ref} />);
+    fireEvent.change(await screen.findByPlaceholderText(/ask/i), { target: { value: "think hard" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    // The auto-save carries the reasoning, not just text and tool calls.
+    await waitFor(() => expect(chatHistory.saveSession).toHaveBeenCalled());
+    const calls = vi.mocked(chatHistory.saveSession).mock.calls;
+    const savedMsg = (calls[calls.length - 1][0].messages as StoredMessage[]).find((m) => m.role === "assistant")!;
+    expect(savedMsg.thoughts).toBe("**Weighing options**\n");
+    expect(savedMsg.thoughtSecs).toBe(1);
+
+    // Reopening a stored session restores the collapsible Thoughts row.
+    vi.mocked(chatHistory.loadSession).mockResolvedValue({
+      id: "old",
+      title: "old",
+      createdAt: 1,
+      updatedAt: 2,
+      contexts: [],
+      skills: [],
+      cliSessionId: null,
+      messages: [
+        { id: 0, role: "user", text: "earlier question" },
+        { id: 1, role: "assistant", text: "earlier answer", thoughts: "**Recalling context**\n", thoughtSecs: 4 },
+      ],
+    });
+    await act(async () => void ref.current!.selectSession("old"));
+    expect(await screen.findByText("earlier answer")).toBeTruthy();
+    expect(screen.getByText("Thoughts")).toBeTruthy();
+    expect(screen.getByText(/·\s*4s/)).toBeTruthy();
   });
 
   it("auto-save records the attached context under `contexts`", async () => {

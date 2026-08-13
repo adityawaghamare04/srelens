@@ -178,6 +178,8 @@ function toStoredMessages(msgs: ChatMessage[], calls: Record<string, ToolCallSta
     const stored: StoredMessage = { id: m.id, role: m.role, text: m.text };
     if (m.images && m.images.length > 0) stored.images = m.images;
     if (toolCalls.length > 0) stored.toolCalls = toolCalls;
+    if (m.thoughts) stored.thoughts = m.thoughts;
+    if (m.thoughtSecs) stored.thoughtSecs = m.thoughtSecs;
     return stored;
   });
 }
@@ -192,6 +194,8 @@ function fromStoredMessages(stored: StoredMessage[]): { msgs: ChatMessage[]; cal
     const msg: ChatMessage = { id: m.id, role: m.role, text: m.text };
     if (m.images && m.images.length > 0) msg.images = m.images;
     if (toolCallIds?.length) msg.toolCallIds = toolCallIds;
+    if (m.thoughts) msg.thoughts = m.thoughts;
+    if (m.thoughtSecs) msg.thoughtSecs = m.thoughtSecs;
     return msg;
   });
   return { msgs, calls };
