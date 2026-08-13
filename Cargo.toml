@@ -4,5 +4,5 @@ members = ["crates/agent", "crates/capability", "crates/mcp", "crates/kube", "cr
 
 [workspace.package]
 edition = "2021"
-version = "0.4.1"
+version = "0.5.0"
 license = "MIT"
