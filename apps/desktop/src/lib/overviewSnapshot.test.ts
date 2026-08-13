@@ -1,10 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const platform = vi.hoisted(() => ({ isTauri: vi.fn() }));
+vi.mock("../transport/platform", () => ({ isTauri: platform.isTauri }));
+
 import {
   clearPersistedOverview,
   loadPersistedOverview,
   persistOverview,
   type OverviewSnapshot,
 } from "./overviewSnapshot";
+
+beforeEach(() => {
+  platform.isTauri.mockReturnValue(true);
+});
 
 function snapshot(): OverviewSnapshot {
   return {
@@ -78,6 +86,21 @@ describe("persistOverview", () => {
   it("swallows command failures", async () => {
     const invoke = vi.fn().mockRejectedValue(new Error("unknown command"));
     await expect(persistOverview("kind-dev", snapshot(), invoke)).resolves.toBeUndefined();
+  });
+});
+
+describe("web mode", () => {
+  // The commands only exist on desktop; in web mode each call would be a real
+  // authenticated HTTP request the server 404s after resolving the user's env.
+  it("never sends the commands when not running under Tauri", async () => {
+    platform.isTauri.mockReturnValue(false);
+    const invoke = vi.fn();
+
+    expect(await loadPersistedOverview("kind-dev", invoke)).toBeNull();
+    await persistOverview("kind-dev", snapshot(), invoke);
+    await clearPersistedOverview("kind-dev", invoke);
+
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 

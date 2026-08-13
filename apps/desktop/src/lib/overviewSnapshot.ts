@@ -3,9 +3,11 @@
 // overview so a cold start paints the last known counts instantly.
 //
 // The backend treats `stats` as opaque JSON: this module owns the shape.
-// Every wrapper degrades to a no-op on failure — in web mode the commands
-// don't exist ("unknown command"), and a broken cache must never break the
-// overview itself.
+// Every wrapper degrades to a no-op on failure or off desktop — the commands
+// only exist under Tauri, so in web mode they short-circuit client-side
+// instead of sending authenticated HTTP requests the server would 404 — and
+// a broken cache must never break the overview itself.
+import { isTauri } from "../transport/platform";
 import { invokeCommand } from "../transport/transport";
 
 /** Cluster overview counts, as shown on the dashboard tiles. */
@@ -55,6 +57,7 @@ export async function loadPersistedOverview(
   context: string,
   invoke: Invoker = invokeCommand,
 ): Promise<OverviewSnapshot | null> {
+  if (!isTauri()) return null;
   try {
     const out = await invoke<OverviewSnapshot | null>("overview_snapshot_load", { context });
     if (!out || typeof out !== "object") return null;
@@ -72,10 +75,11 @@ export async function persistOverview(
   snapshot: OverviewSnapshot,
   invoke: Invoker = invokeCommand,
 ): Promise<void> {
+  if (!isTauri()) return;
   try {
     await invoke("overview_snapshot_save", { context, snapshot });
   } catch {
-    // web mode / storage failure — the overview works without the cache
+    // storage failure — the overview works without the cache
   }
 }
 
@@ -84,9 +88,10 @@ export async function clearPersistedOverview(
   context?: string,
   invoke: Invoker = invokeCommand,
 ): Promise<void> {
+  if (!isTauri()) return;
   try {
     await invoke("overview_snapshot_clear", { context: context ?? null });
   } catch {
-    // web mode / storage failure — nothing to clear
+    // storage failure — nothing to clear
   }
 }
