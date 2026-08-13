@@ -815,6 +815,13 @@ export const AssistantConversation = forwardRef<
   // When the current turn began streaming reasoning, so the Thoughts section
   // can show how long it thought once the thinking ends.
   const thinkingStartRef = useRef<number | null>(null);
+  // The agent kind the in-flight turn runs on. Codex delivers each reasoning
+  // burst as one COMPLETED summary item — it arrives after the thinking
+  // already happened, so wall-clock timing across its events would label a
+  // tens-of-seconds burst "Thoughts · 1s". For codex the timer never starts
+  // and the label shows no duration; agents that stream true deltas
+  // (native, Cursor) keep it.
+  const turnKindRef = useRef<string | null>(null);
 
   // This component only exists while its host (the drawer or the tab) is
   // showing it, so a subscription made on mount already covers "each time
@@ -1228,7 +1235,9 @@ export const AssistantConversation = forwardRef<
     }
     switch (e.type) {
       case "thinking":
-        if (thinkingStartRef.current === null) thinkingStartRef.current = Date.now();
+        // No timer for codex — see `turnKindRef`.
+        if (turnKindRef.current !== "codex" && thinkingStartRef.current === null)
+          thinkingStartRef.current = Date.now();
         setMessagesTracked((msgs) => {
           const last = msgs[msgs.length - 1];
           if (!last || last.role !== "assistant") return msgs;
@@ -1375,6 +1384,7 @@ export const AssistantConversation = forwardRef<
         return;
       }
       saveLastAgent(usedKind); // remember what was actually used for the next fresh chat
+      turnKindRef.current = usedKind; // drives the Thoughts timing decision — see the ref
       // Resume the CLI's own session only when this turn runs on the same
       // agent the stored id came from (see `cliSessionRef`).
       const resume = cliSessionRef.current?.kind === usedKind ? cliSessionRef.current.id : null;
