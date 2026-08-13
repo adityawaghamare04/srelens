@@ -225,6 +225,15 @@ pub fn codex_command(
         format!("mcp_servers.srelens.url=\"{}\"", escape_toml_string(mcp_url)),
         "-c".to_string(),
         format!("mcp_servers.srelens.bearer_token_env_var=\"{CODEX_TOKEN_ENV}\""),
+        // Surface the model's reasoning as `reasoning` items in the JSON
+        // stream (mapped to Thinking events by `codex::parse_line`) — with
+        // `--ignore-user-config` above, the user's own config.toml can't
+        // enable this, so srelens must. "detailed" only changes what the CLI
+        // REPORTS about reasoning the model already does; it does not raise
+        // the reasoning effort. Verified live: without it exec --json emits
+        // no reasoning items at all.
+        "-c".to_string(),
+        "model_reasoning_summary=\"detailed\"".to_string(),
     ];
     for path in image_paths {
         args.push("-i".to_string());

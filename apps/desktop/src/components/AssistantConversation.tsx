@@ -305,8 +305,11 @@ function CopyButton({ text }: { text: string }) {
 /**
  * The agent's reasoning for a turn, folded into a collapsible "Thoughts · Ns"
  * row above the tools and answer. Only rendered when the agent actually
- * streamed reasoning (Cursor does; Claude/Codex headless don't), collapsed by
- * default.
+ * streamed reasoning: the native agent and Cursor stream it, Codex reports
+ * reasoning summaries when the model reasons enough to produce them (the
+ * adapter requests them via `model_reasoning_summary`), and Claude headless
+ * redacts thinking content entirely (see `claude.rs`), so Claude turns have
+ * no Thoughts row. Collapsed by default.
  */
 function ThoughtsGroup({ text, secs }: { text: string; secs?: number }) {
   const [expanded, setExpanded] = useState(false);

@@ -58,6 +58,14 @@ fn block_to_event(block: &serde_json::Value) -> Option<AgentEvent> {
         // The `thinking` field is the documented key for this block, but we
         // fall back to `text` defensively in case a future CLI version
         // shapes it like a text block instead.
+        //
+        // KNOWN LIMITATION: in headless (`-p`) mode the CLI redacts the
+        // thinking CONTENT — blocks arrive with an empty `thinking` string
+        // and only the crypto `signature` (verified live on claude CLI
+        // 2.1.228, multiple models, with and without
+        // --include-partial-messages, whose thinking_deltas are empty too).
+        // So Claude turns currently produce no visible Thoughts; the mapping
+        // stays for the day the CLI starts sharing the text.
         Some("thinking") => Some(AgentEvent::Thinking {
             text: block
                 .get("thinking")
