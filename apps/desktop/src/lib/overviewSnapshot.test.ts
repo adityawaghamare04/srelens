@@ -44,6 +44,23 @@ describe("loadPersistedOverview", () => {
     const invoke = vi.fn().mockResolvedValue({ stats: null, updatedAt: "yesterday" });
     expect(await loadPersistedOverview("kind-dev", invoke)).toBeNull();
   });
+
+  it("returns null when stats is missing nested fields (older schema)", async () => {
+    // Syntactically valid but incomplete payloads must read as cache misses:
+    // the overview dereferences stats.nodes.ready etc. straight in render.
+    const incomplete = [
+      { stats: {}, updatedAt: 123 },
+      { stats: { nodes: { total: 1, ready: 1 } }, updatedAt: 123 },
+      { ...snapshot(), stats: { ...snapshot().stats, pods: { total: 6 } } },
+      { ...snapshot(), stats: { ...snapshot().stats, events: { total: 0 } } },
+      { ...snapshot(), stats: { ...snapshot().stats, deployments: "2" } },
+      { ...snapshot(), stats: { ...snapshot().stats, events: null } },
+    ];
+    for (const payload of incomplete) {
+      const invoke = vi.fn().mockResolvedValue(payload);
+      expect(await loadPersistedOverview("kind-dev", invoke)).toBeNull();
+    }
+  });
 });
 
 describe("persistOverview", () => {

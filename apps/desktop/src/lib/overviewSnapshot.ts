@@ -27,6 +27,29 @@ export interface OverviewSnapshot {
 /** A command invoker — injectable for testing. */
 type Invoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
+function isNumbers(value: unknown, keys: string[]): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return keys.every((key) => typeof record[key] === "number");
+}
+
+/** True only for a complete `OverviewStats` — the overview dereferences every
+ * nested field straight in render, so a snapshot from an older schema (or a
+ * half-corrupted file) must read as a cache miss, not crash the dashboard. */
+function isOverviewStats(value: unknown): value is OverviewStats {
+  if (!value || typeof value !== "object") return false;
+  const stats = value as Record<string, unknown>;
+  const events = stats.events as Record<string, unknown> | null | undefined;
+  return (
+    isNumbers(stats.nodes, ["total", "ready"]) &&
+    isNumbers(stats.pods, ["total", "running", "pending", "other"]) &&
+    isNumbers(stats, ["deployments", "services", "namespaces"]) &&
+    isNumbers(events, ["total", "normal", "warnings"]) &&
+    Array.isArray(events?.recentWarnings) &&
+    events.recentWarnings.every((warning) => typeof warning === "string")
+  );
+}
+
 /** Last persisted snapshot for a context, or null if absent or unavailable. */
 export async function loadPersistedOverview(
   context: string,
@@ -35,7 +58,7 @@ export async function loadPersistedOverview(
   try {
     const out = await invoke<OverviewSnapshot | null>("overview_snapshot_load", { context });
     if (!out || typeof out !== "object") return null;
-    if (!out.stats || typeof out.stats !== "object") return null;
+    if (!isOverviewStats(out.stats)) return null;
     if (typeof out.updatedAt !== "number") return null;
     return out;
   } catch {
