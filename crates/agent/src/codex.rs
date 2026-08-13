@@ -51,6 +51,20 @@ fn item_completed(item: &serde_json::Value) -> Vec<AgentEvent> {
         Some("agent_message") => vec![AgentEvent::TextDelta {
             text: str_field(item, "text").to_string(),
         }],
+        // Reasoning summaries (markdown, one item per burst of thinking;
+        // emitted when the model actually reasons — `codex_command` requests
+        // them via `model_reasoning_summary`). The trailing newline separates
+        // consecutive items for the UI, which concatenates thinking deltas
+        // verbatim; Cursor-style true deltas must NOT get one, but each
+        // Codex item is a complete block.
+        Some("reasoning") => {
+            let text = str_field(item, "text");
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![AgentEvent::Thinking { text: format!("{text}\n") }]
+            }
+        }
         Some("mcp_tool_call") => {
             let has_error = item.get("error").map(|e| !e.is_null()).unwrap_or(false);
             let completed = item.get("status").and_then(|s| s.as_str()) == Some("completed");
@@ -97,11 +111,20 @@ mod tests {
     }
 
     #[test]
-    fn a_reasoning_item_is_ignored() {
+    fn a_reasoning_item_becomes_thinking_with_an_item_separator() {
+        // Shape verified live (codex-cli 0.144, model_reasoning_summary on):
+        // one complete markdown block per item, so the parser appends the
+        // newline that separates it from the next item's text in the UI.
         let out = parse_line(
-            r#"{"type":"item.completed","item":{"id":"item_9","type":"reasoning","text":"thinking about it"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_9","type":"reasoning","text":"**Mapping weigh outcomes**"}}"#,
         );
-        assert!(out.is_empty());
+        assert_eq!(out, vec![AgentEvent::Thinking { text: "**Mapping weigh outcomes**\n".into() }]);
+    }
+
+    #[test]
+    fn an_empty_reasoning_item_is_ignored() {
+        assert!(parse_line(r#"{"type":"item.completed","item":{"id":"item_9","type":"reasoning","text":""}}"#).is_empty());
+        assert!(parse_line(r#"{"type":"item.completed","item":{"id":"item_9","type":"reasoning"}}"#).is_empty());
     }
 
     #[test]

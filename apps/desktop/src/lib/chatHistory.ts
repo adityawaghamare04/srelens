@@ -60,6 +60,12 @@ export interface StoredMessage {
   /** Data URIs (`data:image/...;base64,...`) attached to a user message
    * (Task 18) — only ever set for `role: "user"`. */
   images?: string[];
+  /** Reasoning streamed before the answer (the collapsible "Thoughts" row) —
+   * only for `role: "assistant"`, and only when the agent surfaced any. */
+  thoughts?: string;
+  /** Seconds spent thinking, when the agent streams reasoning live (absent
+   * for Codex, whose summaries arrive already completed and untimeable). */
+  thoughtSecs?: number;
 }
 
 /** Saved sessions, newest first. */

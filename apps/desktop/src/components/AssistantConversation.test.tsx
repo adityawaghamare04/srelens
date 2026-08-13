@@ -8,6 +8,7 @@ import {
 } from "./AssistantConversation";
 import * as chat from "../lib/chat";
 import * as chatHistory from "../lib/chatHistory";
+import type { StoredMessage } from "../lib/chatHistory";
 import * as prompts from "../lib/prompts";
 import * as skills from "../lib/skills";
 
@@ -379,6 +380,77 @@ describe("AssistantConversation session persistence", () => {
     fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
     await waitFor(() => expect(chat.sendChat).toHaveBeenCalledTimes(3));
     expect(vi.mocked(chat.sendChat).mock.calls[2][7]).toBeNull();
+  });
+
+  it("codex thoughts render without a duration label; delta-streaming agents keep it", async () => {
+    // Codex reasoning arrives as an already-completed summary item, so
+    // wall-clock timing across its events would be fiction (a long burst
+    // would read "· 1s"). Agents that stream real deltas keep the label.
+    vi.mocked(chat.listAgents).mockResolvedValue([
+      { kind: "claude", label: "Claude Code", available: true, path: "/usr/bin/claude", version: null, installUrl: "", gated: false },
+      { kind: "codex", label: "Codex", available: true, path: "/usr/bin/codex", version: null, installUrl: "", gated: false },
+    ]);
+    vi.mocked(chat.sendChat).mockImplementation(async (_s, _p, _a, onEvent) => {
+      onEvent({ type: "thinking", text: "**Weighing options**\n" });
+      onEvent({ type: "textDelta", text: "answer" });
+      onEvent({ type: "turnDone" });
+      return null;
+    });
+    render(<AssistantConversation />);
+
+    // Claude-kind turn (default pick): the timer runs → "· 1s" appears.
+    fireEvent.change(await screen.findByPlaceholderText(/ask/i), { target: { value: "first" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("Thoughts");
+    expect(screen.getByText(/·\s*1s/)).toBeTruthy();
+    await screen.findByRole("button", { name: /^send$/i });
+
+    // Codex turn: same events, no duration label on its Thoughts row.
+    fireEvent.click(screen.getByRole("combobox", { name: /agent/i }));
+    fireEvent.click(await screen.findByRole("option", { name: /codex/i }));
+    fireEvent.change(screen.getByPlaceholderText(/ask/i), { target: { value: "second" } });
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(screen.getAllByText("Thoughts")).toHaveLength(2));
+    expect(screen.getAllByText(/·\s*1s/)).toHaveLength(1);
+  });
+
+  it("thoughts round-trip through the saved session and reopen with their row intact", async () => {
+    vi.mocked(chat.sendChat).mockImplementation(async (_s, _p, _a, onEvent) => {
+      onEvent({ type: "thinking", text: "**Weighing options**\n" });
+      onEvent({ type: "textDelta", text: "answer" });
+      onEvent({ type: "turnDone" });
+      return null;
+    });
+    const ref = createRef<AssistantConversationHandle>();
+    render(<AssistantConversation ref={ref} />);
+    fireEvent.change(await screen.findByPlaceholderText(/ask/i), { target: { value: "think hard" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    // The auto-save carries the reasoning, not just text and tool calls.
+    await waitFor(() => expect(chatHistory.saveSession).toHaveBeenCalled());
+    const calls = vi.mocked(chatHistory.saveSession).mock.calls;
+    const savedMsg = (calls[calls.length - 1][0].messages as StoredMessage[]).find((m) => m.role === "assistant")!;
+    expect(savedMsg.thoughts).toBe("**Weighing options**\n");
+    expect(savedMsg.thoughtSecs).toBe(1);
+
+    // Reopening a stored session restores the collapsible Thoughts row.
+    vi.mocked(chatHistory.loadSession).mockResolvedValue({
+      id: "old",
+      title: "old",
+      createdAt: 1,
+      updatedAt: 2,
+      contexts: [],
+      skills: [],
+      cliSessionId: null,
+      messages: [
+        { id: 0, role: "user", text: "earlier question" },
+        { id: 1, role: "assistant", text: "earlier answer", thoughts: "**Recalling context**\n", thoughtSecs: 4 },
+      ],
+    });
+    await act(async () => void ref.current!.selectSession("old"));
+    expect(await screen.findByText("earlier answer")).toBeTruthy();
+    expect(screen.getByText("Thoughts")).toBeTruthy();
+    expect(screen.getByText(/·\s*4s/)).toBeTruthy();
   });
 
   it("auto-save records the attached context under `contexts`", async () => {
