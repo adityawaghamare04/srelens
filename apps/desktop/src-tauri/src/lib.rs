@@ -378,6 +378,9 @@ pub fn run() {
             Ok(())
         })
         .manage(AppRegistry(registry))
+        // The cache itself, for commands that need the live kubeconfig paths
+        // (overview_snapshot resolves context → cluster identity from them).
+        .manage(cache.clone())
         .manage(WatchManager::new(cache.clone()))
         .manage(ExecManager::new(cache.clone()))
         .manage(ForwardManager::new(cache.clone()))

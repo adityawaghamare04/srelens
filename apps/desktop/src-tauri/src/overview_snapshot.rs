@@ -28,6 +28,14 @@ use tauri::{AppHandle, Manager};
 pub struct PersistedSnapshot {
     pub stats: serde_json::Value,
     pub updated_at: i64,
+    /// The cluster this snapshot came from (the context's server URL). A
+    /// context name can be deleted and reused for a different cluster; a
+    /// snapshot whose identity no longer matches must read as a cache miss,
+    /// not as the new cluster's data. Defaulted so pre-identity files parse —
+    /// and then mismatch, which retires them. Set by the save command, ignored
+    /// on the wire from the frontend.
+    #[serde(default)]
+    pub cluster: String,
 }
 
 /// Keep the file small: only the most recently refreshed contexts survive.
@@ -69,14 +77,21 @@ fn write_all(path: &Path, all: &BTreeMap<String, PersistedSnapshot>) -> Result<(
     fs::rename(&tmp, path).map_err(|e| format!("could not finalize {}: {e}", path.display()))
 }
 
-/// Last persisted snapshot for `context`, if any.
-fn load(path: &Path, context: &str) -> Option<PersistedSnapshot> {
-    read_all(path).remove(context)
+/// Last persisted snapshot for `context`, if it still belongs to `cluster` —
+/// an entry whose identity differs (or predates identities) is a miss.
+fn load(path: &Path, context: &str, cluster: &str) -> Option<PersistedSnapshot> {
+    read_all(path).remove(context).filter(|entry| entry.cluster == cluster)
 }
 
-/// Persist a snapshot for `context`, evicting the least recently updated
-/// contexts beyond the cap.
-fn save(path: &Path, context: &str, snapshot: PersistedSnapshot) -> Result<(), String> {
+/// Persist a snapshot for `context` under `cluster`'s identity, evicting the
+/// least recently updated contexts beyond the cap.
+fn save(
+    path: &Path,
+    context: &str,
+    cluster: &str,
+    mut snapshot: PersistedSnapshot,
+) -> Result<(), String> {
+    snapshot.cluster = cluster.to_owned();
     let mut all = read_all(path);
     all.insert(context.to_owned(), snapshot);
     if all.len() > MAX_CONTEXTS {
@@ -115,23 +130,42 @@ fn resolve_store_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("overview.json"))
 }
 
-/// Load the last persisted overview snapshot for a context, if any.
-#[tauri::command]
-pub fn overview_snapshot_load(
-    app: AppHandle,
-    context: String,
-) -> Result<Option<PersistedSnapshot>, String> {
-    Ok(load(&resolve_store_path(&app)?, &context))
+/// A context's stable cluster identity — its server URL from the live
+/// kubeconfig set (no connection made). `None` when the context no longer
+/// exists there.
+async fn resolve_cluster(cache: &srelens_kube::client_cache::ClientCache, context: &str) -> Option<String> {
+    let paths = cache.paths().await;
+    srelens_kube::context_resolve::resolve_context(&paths, context).map(|c| c.server)
 }
 
-/// Persist a context's overview snapshot for the next cold start.
+/// Load the last persisted overview snapshot for a context, if it still
+/// belongs to the cluster that context currently points at.
 #[tauri::command]
-pub fn overview_snapshot_save(
+pub async fn overview_snapshot_load(
     app: AppHandle,
+    cache: tauri::State<'_, std::sync::Arc<srelens_kube::client_cache::ClientCache>>,
+    context: String,
+) -> Result<Option<PersistedSnapshot>, String> {
+    let Some(cluster) = resolve_cluster(&cache, &context).await else {
+        return Ok(None);
+    };
+    Ok(load(&resolve_store_path(&app)?, &context, &cluster))
+}
+
+/// Persist a context's overview snapshot for the next cold start. A context
+/// the kubeconfigs no longer know is not persisted — there is no identity to
+/// attribute the data to.
+#[tauri::command]
+pub async fn overview_snapshot_save(
+    app: AppHandle,
+    cache: tauri::State<'_, std::sync::Arc<srelens_kube::client_cache::ClientCache>>,
     context: String,
     snapshot: PersistedSnapshot,
 ) -> Result<(), String> {
-    save(&resolve_store_path(&app)?, &context, snapshot)
+    let Some(cluster) = resolve_cluster(&cache, &context).await else {
+        return Ok(());
+    };
+    save(&resolve_store_path(&app)?, &context, &cluster, snapshot)
 }
 
 /// Drop one context's persisted snapshot, or all of them.
@@ -172,27 +206,30 @@ mod tests {
         }
     }
 
+    const CLUSTER: &str = "https://prod:6443";
+
     fn snapshot(updated_at: i64, nodes: i64) -> PersistedSnapshot {
         PersistedSnapshot {
             stats: json!({ "nodes": { "total": nodes, "ready": nodes } }),
             updated_at,
+            cluster: CLUSTER.to_owned(),
         }
     }
 
     #[test]
     fn round_trips_a_snapshot_per_context() {
         let tmp = TempDir::new("roundtrip");
-        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
-        save(&tmp.file(), "kind-b", snapshot(2000, 5)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-b", CLUSTER, snapshot(2000, 5)).unwrap();
 
-        assert_eq!(load(&tmp.file(), "kind-a"), Some(snapshot(1000, 3)));
-        assert_eq!(load(&tmp.file(), "kind-b"), Some(snapshot(2000, 5)));
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(1000, 3)));
+        assert_eq!(load(&tmp.file(), "kind-b", CLUSTER), Some(snapshot(2000, 5)));
     }
 
     #[test]
     fn missing_file_loads_nothing() {
         let tmp = TempDir::new("missing");
-        assert_eq!(load(&tmp.file(), "kind-a"), None);
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
     }
 
     #[test]
@@ -200,56 +237,77 @@ mod tests {
         let tmp = TempDir::new("corrupt");
         fs::write(tmp.file(), "{not json").unwrap();
 
-        assert_eq!(load(&tmp.file(), "kind-a"), None);
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
 
         // A save starts the cache over rather than failing on the bad file.
-        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
-        assert_eq!(load(&tmp.file(), "kind-a"), Some(snapshot(1000, 3)));
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(1000, 3)));
     }
 
     #[test]
     fn keeps_only_the_most_recently_updated_contexts() {
         let tmp = TempDir::new("cap");
         for i in 0..12 {
-            save(&tmp.file(), &format!("kind-{i}"), snapshot(i, 1)).unwrap();
+            save(&tmp.file(), &format!("kind-{i}"), CLUSTER, snapshot(i, 1)).unwrap();
         }
 
         // The two oldest fall off; the ten newest survive.
-        assert_eq!(load(&tmp.file(), "kind-0"), None);
-        assert_eq!(load(&tmp.file(), "kind-1"), None);
-        assert_eq!(load(&tmp.file(), "kind-2"), Some(snapshot(2, 1)));
-        assert_eq!(load(&tmp.file(), "kind-11"), Some(snapshot(11, 1)));
+        assert_eq!(load(&tmp.file(), "kind-0", CLUSTER), None);
+        assert_eq!(load(&tmp.file(), "kind-1", CLUSTER), None);
+        assert_eq!(load(&tmp.file(), "kind-2", CLUSTER), Some(snapshot(2, 1)));
+        assert_eq!(load(&tmp.file(), "kind-11", CLUSTER), Some(snapshot(11, 1)));
+    }
+
+    /// A context name deleted and reused for a different cluster must not
+    /// resolve the old cluster's snapshot: identity, not just name, gates a hit.
+    #[test]
+    fn context_reused_for_a_different_cluster_reads_as_a_miss() {
+        let tmp = TempDir::new("recycled");
+        save(&tmp.file(), "prod", CLUSTER, snapshot(1000, 3)).unwrap();
+
+        assert_eq!(load(&tmp.file(), "prod", "https://other:6443"), None);
+        assert_eq!(load(&tmp.file(), "prod", CLUSTER), Some(snapshot(1000, 3)));
+    }
+
+    /// Files written before the identity field existed parse (serde default)
+    /// but must retire as misses rather than pass for the current cluster.
+    #[test]
+    fn legacy_entries_without_a_cluster_identity_read_as_misses() {
+        let tmp = TempDir::new("legacy");
+        fs::write(tmp.file(), r#"{"prod":{"stats":{},"updatedAt":5}}"#).unwrap();
+
+        assert_eq!(load(&tmp.file(), "prod", CLUSTER), None);
     }
 
     #[test]
     fn resaving_a_context_replaces_its_snapshot() {
         let tmp = TempDir::new("replace");
-        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
-        save(&tmp.file(), "kind-a", snapshot(2000, 4)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(2000, 4)).unwrap();
 
-        assert_eq!(load(&tmp.file(), "kind-a"), Some(snapshot(2000, 4)));
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(2000, 4)));
     }
 
     #[test]
     fn clears_one_context_without_touching_the_others() {
         let tmp = TempDir::new("clear-one");
-        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
-        save(&tmp.file(), "kind-b", snapshot(2000, 5)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-b", CLUSTER, snapshot(2000, 5)).unwrap();
 
         clear(&tmp.file(), Some("kind-a")).unwrap();
 
-        assert_eq!(load(&tmp.file(), "kind-a"), None);
-        assert_eq!(load(&tmp.file(), "kind-b"), Some(snapshot(2000, 5)));
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
+        assert_eq!(load(&tmp.file(), "kind-b", CLUSTER), Some(snapshot(2000, 5)));
     }
 
     #[test]
     fn clears_everything_when_no_context_is_given() {
         let tmp = TempDir::new("clear-all");
-        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
 
         clear(&tmp.file(), None).unwrap();
 
-        assert_eq!(load(&tmp.file(), "kind-a"), None);
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
         assert!(!tmp.file().exists());
     }
 
@@ -262,7 +320,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let tmp = TempDir::new("perms");
-        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
 
         let mode = fs::metadata(tmp.file()).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "overview.json must be 0600, got {mode:o}");
@@ -277,13 +335,13 @@ mod tests {
         let foreign = tmp.file().with_extension("json.tmp");
         fs::write(&foreign, "other writer's half-finished payload").unwrap();
 
-        save(&tmp.file(), "kind-a", snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
 
         assert_eq!(
             fs::read_to_string(&foreign).unwrap(),
             "other writer's half-finished payload"
         );
-        assert_eq!(load(&tmp.file(), "kind-a"), Some(snapshot(1000, 3)));
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(1000, 3)));
     }
 
     #[test]
