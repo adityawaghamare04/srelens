@@ -162,6 +162,20 @@ describe("ClusterOverview persistence", () => {
     expect(snapshot.stats.nodes).toEqual({ total: 1, ready: 1 });
   });
 
+  it("a clear during an in-flight fetch stops it from repopulating the caches", async () => {
+    // The documented logout/reset flow: nothing fetched before the clear may
+    // survive it — the resolving request must not re-cache or re-persist.
+    const slowNodes = deferred<{ nodes: Array<{ status: string }> }>();
+    mocks.listNodes.mockReturnValue(slowNodes.promise);
+
+    render(<ClusterOverview context="kind-clear" />);
+    clearClusterOverviewCache();
+    slowNodes.resolve({ nodes: [{ status: "Ready" }] });
+
+    expect(await screen.findAllByText("1 / 1")).toHaveLength(2);
+    expect(mocks.persistOverview).not.toHaveBeenCalled();
+  });
+
   it("clearClusterOverviewCache also clears the persisted copy", () => {
     clearClusterOverviewCache("kind-a");
     expect(mocks.clearPersistedOverview).toHaveBeenCalledWith("kind-a");

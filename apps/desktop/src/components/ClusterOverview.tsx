@@ -28,10 +28,15 @@ import type { ResourceKind } from "./ResourceBrowser";
 const CACHE_TTL_MS = 30_000;
 const overviewCache = new Map<string, OverviewSnapshot>();
 const overviewRequests = new Map<string, Promise<OverviewSnapshot>>();
+// Bumped by every clear. A fetch captures it at start and only writes the
+// caches if no clear happened in between — deleting the pending promise can't
+// cancel its .then, and a reset must not be undone by a late resolution.
+let clearGeneration = 0;
 
 /** Clear cached overview snapshots, including the backend's persisted copies.
  * Exported for deterministic tests and future logout/reset flows. */
 export function clearClusterOverviewCache(context?: string) {
+  clearGeneration++;
   void clearPersistedOverview(context);
   if (context) {
     overviewCache.delete(context);
@@ -103,10 +108,13 @@ function requestOverview(context: string, force: boolean): Promise<OverviewSnaps
   const pending = overviewRequests.get(context);
   if (pending) return pending;
 
+  const generation = clearGeneration;
   const request = fetchOverview(context)
     .then((snapshot) => {
-      overviewCache.set(context, snapshot);
-      void persistOverview(context, snapshot);
+      if (clearGeneration === generation) {
+        overviewCache.set(context, snapshot);
+        void persistOverview(context, snapshot);
+      }
       return snapshot;
     })
     .finally(() => {
