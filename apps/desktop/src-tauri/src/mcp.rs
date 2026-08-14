@@ -93,7 +93,7 @@ impl McpHttpManager {
                 5 * 1024 * 1024,
             )))
             .with_prompts(srelens_mcp::prompts::PromptLibrary::new(Some(prompts_dir.to_path_buf())))
-            .with_resources(srelens_registry::kind_resolver())
+            .with_kind_resolver(srelens_registry::kind_resolver())
             .with_watcher(std::sync::Arc::new(crate::mcp_watch::CacheWatcher::new(self.cache.clone())))
     }
 }

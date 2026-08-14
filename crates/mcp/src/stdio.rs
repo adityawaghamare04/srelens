@@ -263,8 +263,9 @@ pub async fn handle_request(
                 .and_then(Value::as_str)
                 .unwrap_or("");
 
-            let planned = crate::resources::ResourceUri::parse(uri_str)
-                .and_then(|uri| crate::resources::plan_read(&uri, server.resources().as_ref()));
+            let planned = crate::resources::ResourceUri::parse(uri_str).and_then(|uri| {
+                crate::resources::plan_read(&uri, server.kind_resolver().as_ref())
+            });
 
             let read = match planned {
                 Ok(r) => r,
@@ -400,10 +401,10 @@ fn handle_subscription(
     // would invoke is actually registered on this server. So this guarantees
     // the URI is well-formed and addressable — not that a later read will
     // succeed; a subscription can still outlive a URI whose capability is
-    // missing or fails at call time. `server.resources()` matches the
+    // missing or fails at call time. `server.kind_resolver()` matches the
     // resolver `plan_read` and the real read path both use, so this and the
     // eventual read agree on what's addressable.
-    if let Err(message) = crate::resources::plan_read(&uri, server.resources().as_ref()) {
+    if let Err(message) = crate::resources::plan_read(&uri, server.kind_resolver().as_ref()) {
         return Some(err(id, -32602, &message));
     }
 
@@ -1246,7 +1247,9 @@ mod tests {
                 Ok(tokio::spawn(async { std::future::pending::<()>().await }).abort_handle())
             }
         }
-        server_with_ping().with_resources(Arc::new(Kinds)).with_watcher(Arc::new(StubWatcher))
+        server_with_ping()
+            .with_kind_resolver(Arc::new(Kinds))
+            .with_watcher(Arc::new(StubWatcher))
     }
 
     #[tokio::test]
@@ -1383,7 +1386,7 @@ mod tests {
             let handler = handler.clone();
             async move { handler(v) }
         }));
-        McpServer::new(Arc::new(reg)).with_resources(Arc::new(Kinds))
+        McpServer::new(Arc::new(reg)).with_kind_resolver(Arc::new(Kinds))
     }
 
     /// The vulnerability Finding 1 closes: `McpServer::call_tool` is a bare
@@ -1578,7 +1581,7 @@ mod tests {
 
         let fired = std::sync::Arc::new(tokio::sync::Notify::new());
         let server = server_with_ping()
-            .with_resources(Arc::new(Kinds))
+            .with_kind_resolver(Arc::new(Kinds))
             .with_watcher(Arc::new(FiringWatcher(fired.clone())));
 
         let (mut client_in, mut out_lines, serve_task) = spawn_serve_over_duplex(server);
@@ -1657,7 +1660,7 @@ mod tests {
         }
 
         let server = server_with_ping()
-            .with_resources(Arc::new(Kinds))
+            .with_kind_resolver(Arc::new(Kinds))
             .with_watcher(Arc::new(ImmediatelyFiringWatcher));
 
         // Subscribe, then a burst of buffered requests arriving as one
@@ -1747,7 +1750,9 @@ mod tests {
             }
         }
         let server = Arc::new(
-            server_with_ping().with_resources(Arc::new(Kinds)).with_watcher(Arc::new(DeadOnArrival)),
+            server_with_ping()
+                .with_kind_resolver(Arc::new(Kinds))
+                .with_watcher(Arc::new(DeadOnArrival)),
         );
         let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
         let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
@@ -1792,7 +1797,9 @@ mod tests {
         }
         let watcher = Arc::new(LateDeath(std::sync::Mutex::new(None)));
         let server = Arc::new(
-            server_with_ping().with_resources(Arc::new(Kinds)).with_watcher(watcher.clone()),
+            server_with_ping()
+                .with_kind_resolver(Arc::new(Kinds))
+                .with_watcher(watcher.clone()),
         );
         let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
         let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
@@ -1841,9 +1848,13 @@ mod tests {
                 (kind == "Pod").then_some(crate::resources::KindScope::Namespaced)
             }
         }
-        let server = Arc::new(server_with_ping().with_resources(Arc::new(Kinds)).with_watcher(
-            Arc::new(DiesOnSecondWatch(std::sync::atomic::AtomicUsize::new(0))),
-        ));
+        let server = Arc::new(
+            server_with_ping()
+                .with_kind_resolver(Arc::new(Kinds))
+                .with_watcher(Arc::new(DiesOnSecondWatch(
+                    std::sync::atomic::AtomicUsize::new(0),
+                ))),
+        );
         let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
         let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
         let (wake_tx, _wake_rx) = tokio::sync::mpsc::channel(1);
@@ -1897,7 +1908,9 @@ mod tests {
         }
         let watcher = Arc::new(CollectingWatcher(std::sync::Mutex::new(Vec::new())));
         let server = Arc::new(
-            server_with_ping().with_resources(Arc::new(Kinds)).with_watcher(watcher.clone()),
+            server_with_ping()
+                .with_kind_resolver(Arc::new(Kinds))
+                .with_watcher(watcher.clone()),
         );
         let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
         let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
@@ -1942,9 +1955,12 @@ mod tests {
         }
 
         let fired = std::sync::Arc::new(tokio::sync::Notify::new());
-        let server = server_with_ping().with_resources(Arc::new(Kinds)).with_watcher(Arc::new(
-            RepeatFiringWatcher { times: 5, fired: fired.clone() },
-        ));
+        let server = server_with_ping()
+            .with_kind_resolver(Arc::new(Kinds))
+            .with_watcher(Arc::new(RepeatFiringWatcher {
+                times: 5,
+                fired: fired.clone(),
+            }));
 
         let (mut client_in, mut out_lines, serve_task) = spawn_serve_over_duplex(server);
 
@@ -2017,9 +2033,12 @@ mod tests {
 
         let fired_a = std::sync::Arc::new(tokio::sync::Notify::new());
         let fired_b = std::sync::Arc::new(tokio::sync::Notify::new());
-        let server = server_with_ping().with_resources(Arc::new(Kinds)).with_watcher(Arc::new(
-            TwoUriWatcher { fired_a: fired_a.clone(), fired_b: fired_b.clone() },
-        ));
+        let server = server_with_ping()
+            .with_kind_resolver(Arc::new(Kinds))
+            .with_watcher(Arc::new(TwoUriWatcher {
+                fired_a: fired_a.clone(),
+                fired_b: fired_b.clone(),
+            }));
 
         let (mut client_in, mut out_lines, serve_task) = spawn_serve_over_duplex(server);
 
@@ -2151,7 +2170,7 @@ mod tests {
         }
         // Deliberately no `.with_watcher(...)`: this is what a host that
         // wires resources but forgets (or has no) cluster watcher looks like.
-        let server = server_with_ping().with_resources(Arc::new(Kinds));
+        let server = server_with_ping().with_kind_resolver(Arc::new(Kinds));
 
         let input = concat!(
             r#"{"jsonrpc":"2.0","id":1,"method":"resources/subscribe","params":{"uri":"k8s://c/ns/Pod/web-0"}}"#,
