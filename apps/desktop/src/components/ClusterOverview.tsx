@@ -15,29 +15,29 @@ import {
   StatusMeter,
 } from "../ui";
 import { describeError, isExecAuthError } from "../lib/errors";
+import {
+  clearPersistedOverview,
+  loadPersistedOverview,
+  persistOverview,
+  type OverviewSnapshot,
+  type OverviewStats as Stats,
+} from "../lib/overviewSnapshot";
 import { isTauri } from "../transport/platform";
 import type { ResourceKind } from "./ResourceBrowser";
-
-interface Stats {
-  nodes: { total: number; ready: number };
-  pods: { total: number; running: number; pending: number; other: number };
-  deployments: number;
-  services: number;
-  namespaces: number;
-  events: { total: number; normal: number; warnings: number; recentWarnings: string[] };
-}
-
-interface OverviewSnapshot {
-  stats: Stats;
-  updatedAt: number;
-}
 
 const CACHE_TTL_MS = 30_000;
 const overviewCache = new Map<string, OverviewSnapshot>();
 const overviewRequests = new Map<string, Promise<OverviewSnapshot>>();
+// Bumped by every clear. A fetch captures it at start and only writes the
+// caches if no clear happened in between — deleting the pending promise can't
+// cancel its .then, and a reset must not be undone by a late resolution.
+let clearGeneration = 0;
 
-/** Clear cached overview snapshots. Exported for deterministic tests and future logout/reset flows. */
+/** Clear cached overview snapshots, including the backend's persisted copies.
+ * Exported for deterministic tests and future logout/reset flows. */
 export function clearClusterOverviewCache(context?: string) {
+  clearGeneration++;
+  void clearPersistedOverview(context);
   if (context) {
     overviewCache.delete(context);
     overviewRequests.delete(context);
@@ -48,7 +48,14 @@ export function clearClusterOverviewCache(context?: string) {
 }
 
 function formatUpdatedAt(updatedAt: number) {
-  return new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(updatedAt));
+  const date = new Date(updatedAt);
+  // A restored snapshot can be days old — a bare time of day would masquerade
+  // as today's, so anything not from today carries its date.
+  const options: Intl.DateTimeFormatOptions =
+    date.toDateString() === new Date().toDateString()
+      ? { timeStyle: "medium" }
+      : { dateStyle: "medium", timeStyle: "short" };
+  return new Intl.DateTimeFormat(undefined, options).format(date);
 }
 
 async function fetchOverview(context: string): Promise<OverviewSnapshot> {
@@ -101,9 +108,13 @@ function requestOverview(context: string, force: boolean): Promise<OverviewSnaps
   const pending = overviewRequests.get(context);
   if (pending) return pending;
 
+  const generation = clearGeneration;
   const request = fetchOverview(context)
     .then((snapshot) => {
-      overviewCache.set(context, snapshot);
+      if (clearGeneration === generation) {
+        overviewCache.set(context, snapshot);
+        void persistOverview(context, snapshot);
+      }
       return snapshot;
     })
     .finally(() => {
@@ -154,6 +165,23 @@ export function ClusterOverview({
       return () => {
         active = false;
       };
+    }
+
+    // Cold start: while the fetch runs, restore the last persisted snapshot so
+    // the dashboard paints known values instead of a spinner (#148). The
+    // restored values go only into component state, never `overviewCache` —
+    // the cache means "live data from this run", and a persisted snapshot
+    // recent enough to pass the TTL check would otherwise let a remount skip
+    // joining the still-pending request and strand the screen on stale values.
+    // A snapshot that loses the race with the fetch (cache already populated)
+    // is discarded rather than clobbering fresher data — while after a failed
+    // fetch it still gives the error state stale-but-real numbers.
+    if (!cached) {
+      void loadPersistedOverview(context).then((persisted) => {
+        if (!active || !persisted || overviewCache.has(context)) return;
+        setStats(persisted.stats);
+        setLastUpdated(formatUpdatedAt(persisted.updatedAt));
+      });
     }
 
     setRefreshing(true);

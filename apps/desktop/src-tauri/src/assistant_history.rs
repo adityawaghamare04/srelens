@@ -124,8 +124,9 @@ fn upsert_index(dir: &Path, meta: &SessionMeta) -> Result<(), String> {
 /// A saved transcript can contain secrets returned by the consent-gated
 /// `k8s.getSecret` tool (plus logs/manifests), so on a shared Unix host it must
 /// not be left world-readable by the default `022`-umask `0644`. On non-Unix
-/// the default per-user permissions apply.
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+/// the default per-user permissions apply. Shared with `overview_snapshot`,
+/// whose file names contexts and carries warning-event messages.
+pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;

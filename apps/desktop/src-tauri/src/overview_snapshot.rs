@@ -1,0 +1,353 @@
+//! Disk-backed cluster-overview snapshots, so a cold start can paint the
+//! overview instantly from the last run instead of an empty loading state
+//! (issue #148).
+//!
+//! Everything lives in one small `<config>/overview.json` file: a map of
+//! context name → last snapshot, capped to the most recently refreshed
+//! contexts. The `stats` payload is opaque JSON — the frontend owns its
+//! shape (same contract as assistant session `messages`).
+//!
+//! This is a cache, not user data: a corrupt or unreadable file is treated
+//! as empty rather than surfaced as an error, so a bad write can never
+//! wedge the overview.
+//!
+//! The `#[tauri::command]` wrappers at the bottom only resolve the app
+//! config dir and delegate; the pure `fn`s above them take a `path: &Path`
+//! so tests can drive them against a throwaway temp file.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
+
+/// One persisted overview: opaque frontend stats plus when they were fetched.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedSnapshot {
+    pub stats: serde_json::Value,
+    pub updated_at: i64,
+    /// The cluster this snapshot came from (the context's server URL). A
+    /// context name can be deleted and reused for a different cluster; a
+    /// snapshot whose identity no longer matches must read as a cache miss,
+    /// not as the new cluster's data. Defaulted so pre-identity files parse —
+    /// and then mismatch, which retires them. Set by the save command, ignored
+    /// on the wire from the frontend.
+    #[serde(default)]
+    pub cluster: String,
+}
+
+/// Keep the file small: only the most recently refreshed contexts survive.
+const MAX_CONTEXTS: usize = 10;
+
+/// Read the whole snapshot map, treating a missing or corrupt file as empty.
+fn read_all(path: &Path) -> BTreeMap<String, PersistedSnapshot> {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+/// Write the whole snapshot map atomically (`.tmp` + rename) so a crash
+/// mid-write never leaves a half-written file behind. Owner-only (`0600` on
+/// Unix; `rename` preserves the mode): the map names contexts and carries
+/// warning-event messages, which mustn't be world-readable on a shared host.
+///
+/// The tmp name is writer-unique (pid + counter) so overlapping writers — a
+/// second app instance, two commands in flight — can never truncate or rename
+/// away each other's in-progress file. The map update itself stays
+/// last-writer-wins: this is a self-healing cache (a lost entry is re-persisted
+/// by the next successful fetch), so an interprocess lock isn't warranted.
+fn write_all(path: &Path, all: &BTreeMap<String, PersistedSnapshot>) -> Result<(), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    }
+    let tmp = path.with_extension(format!(
+        "json.{}-{}.tmp",
+        std::process::id(),
+        WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let raw = serde_json::to_string(all).map_err(|e| e.to_string())?;
+    crate::assistant_history::write_private(&tmp, &raw)
+        .map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|e| format!("could not finalize {}: {e}", path.display()))
+}
+
+/// Last persisted snapshot for `context`, if it still belongs to `cluster` —
+/// an entry whose identity differs (or predates identities) is a miss.
+fn load(path: &Path, context: &str, cluster: &str) -> Option<PersistedSnapshot> {
+    read_all(path).remove(context).filter(|entry| entry.cluster == cluster)
+}
+
+/// Persist a snapshot for `context` under `cluster`'s identity, evicting the
+/// least recently updated contexts beyond the cap.
+fn save(
+    path: &Path,
+    context: &str,
+    cluster: &str,
+    mut snapshot: PersistedSnapshot,
+) -> Result<(), String> {
+    snapshot.cluster = cluster.to_owned();
+    let mut all = read_all(path);
+    all.insert(context.to_owned(), snapshot);
+    if all.len() > MAX_CONTEXTS {
+        let mut by_age: Vec<_> = all.iter().map(|(c, s)| (s.updated_at, c.clone())).collect();
+        by_age.sort();
+        for (_, context) in &by_age[..all.len() - MAX_CONTEXTS] {
+            all.remove(context);
+        }
+    }
+    write_all(path, &all)
+}
+
+/// Drop one context's snapshot, or every snapshot when `context` is `None`.
+/// Clearing what isn't there is not an error — clearing is idempotent.
+fn clear(path: &Path, context: Option<&str>) -> Result<(), String> {
+    match context {
+        Some(context) => {
+            let mut all = read_all(path);
+            if all.remove(context).is_some() {
+                write_all(path, &all)?;
+            }
+            Ok(())
+        }
+        None => match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("could not delete {}: {e}", path.display())),
+        },
+    }
+}
+
+/// Resolve `<app config dir>/overview.json` — the one bit of app-specific
+/// wiring the pure helpers above don't do.
+fn resolve_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(base.join("overview.json"))
+}
+
+/// A context's stable cluster identity — its server URL from the live
+/// kubeconfig set (no connection made). `None` when the context no longer
+/// exists there.
+async fn resolve_cluster(cache: &srelens_kube::client_cache::ClientCache, context: &str) -> Option<String> {
+    let paths = cache.paths().await;
+    srelens_kube::context_resolve::resolve_context(&paths, context).map(|c| c.server)
+}
+
+/// Load the last persisted overview snapshot for a context, if it still
+/// belongs to the cluster that context currently points at.
+#[tauri::command]
+pub async fn overview_snapshot_load(
+    app: AppHandle,
+    cache: tauri::State<'_, std::sync::Arc<srelens_kube::client_cache::ClientCache>>,
+    context: String,
+) -> Result<Option<PersistedSnapshot>, String> {
+    let Some(cluster) = resolve_cluster(&cache, &context).await else {
+        return Ok(None);
+    };
+    Ok(load(&resolve_store_path(&app)?, &context, &cluster))
+}
+
+/// Persist a context's overview snapshot for the next cold start. A context
+/// the kubeconfigs no longer know is not persisted — there is no identity to
+/// attribute the data to.
+#[tauri::command]
+pub async fn overview_snapshot_save(
+    app: AppHandle,
+    cache: tauri::State<'_, std::sync::Arc<srelens_kube::client_cache::ClientCache>>,
+    context: String,
+    snapshot: PersistedSnapshot,
+) -> Result<(), String> {
+    let Some(cluster) = resolve_cluster(&cache, &context).await else {
+        return Ok(());
+    };
+    save(&resolve_store_path(&app)?, &context, &cluster, snapshot)
+}
+
+/// Drop one context's persisted snapshot, or all of them.
+#[tauri::command]
+pub fn overview_snapshot_clear(app: AppHandle, context: Option<String>) -> Result<(), String> {
+    clear(&resolve_store_path(&app)?, context.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A fresh, empty directory under the OS temp dir, unique per test so
+    /// parallel test runs never collide. Removed on drop so a test's fixture
+    /// files don't linger.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "srelens-overview-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id(),
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        fn file(&self) -> PathBuf {
+            self.0.join("overview.json")
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    const CLUSTER: &str = "https://prod:6443";
+
+    fn snapshot(updated_at: i64, nodes: i64) -> PersistedSnapshot {
+        PersistedSnapshot {
+            stats: json!({ "nodes": { "total": nodes, "ready": nodes } }),
+            updated_at,
+            cluster: CLUSTER.to_owned(),
+        }
+    }
+
+    #[test]
+    fn round_trips_a_snapshot_per_context() {
+        let tmp = TempDir::new("roundtrip");
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-b", CLUSTER, snapshot(2000, 5)).unwrap();
+
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(1000, 3)));
+        assert_eq!(load(&tmp.file(), "kind-b", CLUSTER), Some(snapshot(2000, 5)));
+    }
+
+    #[test]
+    fn missing_file_loads_nothing() {
+        let tmp = TempDir::new("missing");
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
+    }
+
+    #[test]
+    fn corrupt_file_loads_nothing_and_saves_fresh() {
+        let tmp = TempDir::new("corrupt");
+        fs::write(tmp.file(), "{not json").unwrap();
+
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
+
+        // A save starts the cache over rather than failing on the bad file.
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(1000, 3)));
+    }
+
+    #[test]
+    fn keeps_only_the_most_recently_updated_contexts() {
+        let tmp = TempDir::new("cap");
+        for i in 0..12 {
+            save(&tmp.file(), &format!("kind-{i}"), CLUSTER, snapshot(i, 1)).unwrap();
+        }
+
+        // The two oldest fall off; the ten newest survive.
+        assert_eq!(load(&tmp.file(), "kind-0", CLUSTER), None);
+        assert_eq!(load(&tmp.file(), "kind-1", CLUSTER), None);
+        assert_eq!(load(&tmp.file(), "kind-2", CLUSTER), Some(snapshot(2, 1)));
+        assert_eq!(load(&tmp.file(), "kind-11", CLUSTER), Some(snapshot(11, 1)));
+    }
+
+    /// A context name deleted and reused for a different cluster must not
+    /// resolve the old cluster's snapshot: identity, not just name, gates a hit.
+    #[test]
+    fn context_reused_for_a_different_cluster_reads_as_a_miss() {
+        let tmp = TempDir::new("recycled");
+        save(&tmp.file(), "prod", CLUSTER, snapshot(1000, 3)).unwrap();
+
+        assert_eq!(load(&tmp.file(), "prod", "https://other:6443"), None);
+        assert_eq!(load(&tmp.file(), "prod", CLUSTER), Some(snapshot(1000, 3)));
+    }
+
+    /// Files written before the identity field existed parse (serde default)
+    /// but must retire as misses rather than pass for the current cluster.
+    #[test]
+    fn legacy_entries_without_a_cluster_identity_read_as_misses() {
+        let tmp = TempDir::new("legacy");
+        fs::write(tmp.file(), r#"{"prod":{"stats":{},"updatedAt":5}}"#).unwrap();
+
+        assert_eq!(load(&tmp.file(), "prod", CLUSTER), None);
+    }
+
+    #[test]
+    fn resaving_a_context_replaces_its_snapshot() {
+        let tmp = TempDir::new("replace");
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(2000, 4)).unwrap();
+
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(2000, 4)));
+    }
+
+    #[test]
+    fn clears_one_context_without_touching_the_others() {
+        let tmp = TempDir::new("clear-one");
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+        save(&tmp.file(), "kind-b", CLUSTER, snapshot(2000, 5)).unwrap();
+
+        clear(&tmp.file(), Some("kind-a")).unwrap();
+
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
+        assert_eq!(load(&tmp.file(), "kind-b", CLUSTER), Some(snapshot(2000, 5)));
+    }
+
+    #[test]
+    fn clears_everything_when_no_context_is_given() {
+        let tmp = TempDir::new("clear-all");
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+
+        clear(&tmp.file(), None).unwrap();
+
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), None);
+        assert!(!tmp.file().exists());
+    }
+
+    /// The snapshot names contexts and carries warning-event messages, so on a
+    /// shared Unix host the file must not be world-readable (same reasoning as
+    /// the assistant-history store).
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = TempDir::new("perms");
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+
+        let mode = fs::metadata(tmp.file()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "overview.json must be 0600, got {mode:o}");
+    }
+
+    /// Concurrent writers (a second app instance, two commands in flight) must
+    /// not share a temp file: a save may never truncate or rename away another
+    /// writer's in-progress tmp.
+    #[test]
+    fn save_leaves_a_foreign_tmp_file_untouched() {
+        let tmp = TempDir::new("foreign-tmp");
+        let foreign = tmp.file().with_extension("json.tmp");
+        fs::write(&foreign, "other writer's half-finished payload").unwrap();
+
+        save(&tmp.file(), "kind-a", CLUSTER, snapshot(1000, 3)).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&foreign).unwrap(),
+            "other writer's half-finished payload"
+        );
+        assert_eq!(load(&tmp.file(), "kind-a", CLUSTER), Some(snapshot(1000, 3)));
+    }
+
+    #[test]
+    fn clearing_is_idempotent() {
+        let tmp = TempDir::new("clear-idempotent");
+        clear(&tmp.file(), Some("kind-a")).unwrap();
+        clear(&tmp.file(), None).unwrap();
+    }
+}
