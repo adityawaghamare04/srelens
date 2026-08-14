@@ -8,7 +8,26 @@ use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{McpServer, Transport};
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
+// 2025-03-26: the Streamable HTTP revision. Chosen over staying on
+// 2024-11-05 (whose HTTP transport is the legacy two-endpoint HTTP+SSE)
+// because the HTTP push channel (#193) follows the Streamable HTTP shape —
+// one /mcp endpoint, POST for requests, GET for the server->client SSE
+// stream — which is ALSO what the real clients already speak against this
+// server: the POST-only endpoint has been returning the Mcp-Session-Id
+// header specifically because Codex's streamable_http transport requires
+// it. Advertising the matching version makes the negotiated behaviour
+// truthful rather than a legacy label on a modern transport. Stdio
+// semantics are identical across the two revisions.
+const PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// Revisions this server can truthfully serve. Initialize NEGOTIATES: a
+/// client requesting one of these gets that revision echoed back (stdio
+/// semantics are identical across them, and HTTP implements the Streamable
+/// shape the newer one names); any other request — older, newer (e.g.
+/// 2025-06-18, whose extra MUSTs this server doesn't implement), or absent —
+/// gets the preferred `PROTOCOL_VERSION`, per the spec's "respond with the
+/// latest version the server supports" rule, and the client decides.
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 2] = ["2024-11-05", "2025-03-26"];
 
 /// Stable prefix on the text of a consent-denied tool result. CLI transports
 /// strip `_meta`, so this text is the only denial signal that survives the
@@ -47,26 +66,35 @@ pub async fn handle_request(
     let id = req.get("id").cloned();
 
     match method {
-        "initialize" => Some(ok(
+        "initialize" => {
+            let requested = req
+                .get("params")
+                .and_then(|p| p.get("protocolVersion"))
+                .and_then(Value::as_str);
+            let version = requested
+                .filter(|v| SUPPORTED_PROTOCOL_VERSIONS.contains(v))
+                .unwrap_or(PROTOCOL_VERSION);
+            Some(ok(
             id?,
             json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                // `subscribe` is transport-dependent: stdio can push
-                // notifications on its own stdout, the POST-only HTTP transport
-                // has no server-to-client channel at all (see issue #193).
-                // `listChanged` is false because the resource list is two fixed
-                // entries plus templates and never changes at runtime.
+                "protocolVersion": version,
+                // Both transports can push now: stdio on its own stdout, HTTP
+                // on the GET /mcp SSE stream (#193) — so `subscribe` is
+                // truthfully true everywhere. `listChanged` is false because
+                // the resource list is two fixed entries plus templates and
+                // never changes at runtime.
                 "capabilities": {
                     "tools": {},
                     "prompts": {},
                     "resources": {
-                        "subscribe": transport == Transport::Stdio,
+                        "subscribe": true,
                         "listChanged": false
                     }
                 },
                 "serverInfo": { "name": "srelens", "version": env!("CARGO_PKG_VERSION") }
             }),
-        )),
+            ))
+        }
         "ping" => Some(ok(id?, json!({}))),
         "notifications/initialized" | "initialized" => None,
         "tools/list" => {
@@ -366,7 +394,7 @@ pub async fn handle_request(
 ///
 /// Synchronous: nothing here awaits. The watch it spawns signals changes by
 /// sending the canonical URI on `tx`, which the loop selects on.
-fn handle_subscription(
+pub(crate) fn handle_subscription(
     server: &std::sync::Arc<McpServer>,
     subs: &std::sync::Arc<crate::subscriptions::SubscriptionRegistry>,
     dirty: &std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
@@ -1268,10 +1296,36 @@ mod tests {
         assert!(caps["prompts"].is_object(), "prompts must survive");
     }
 
-    /// The HTTP transport is POST-only with no server-to-client channel, so it
-    /// must not claim a capability it cannot honour.
+    /// Version negotiation: a client naming a supported revision gets THAT
+    /// revision back — an existing 2024-11-05 client must not be handed a
+    /// newer version it may reject — while unsupported or absent requests
+    /// get the server's preferred version, per spec.
     #[tokio::test]
-    async fn initialize_advertises_subscribe_false_on_http() {
+    async fn initialize_negotiates_the_protocol_version() {
+        for (requested, expect) in [
+            (Some("2024-11-05"), "2024-11-05"),
+            (Some("2025-03-26"), "2025-03-26"),
+            (Some("2025-06-18"), PROTOCOL_VERSION),
+            (Some("bogus"), PROTOCOL_VERSION),
+            (None, PROTOCOL_VERSION),
+        ] {
+            let mut req = json!({"jsonrpc":"2.0","id":1,"method":"initialize"});
+            if let Some(v) = requested {
+                req["params"] = json!({ "protocolVersion": v });
+            }
+            let resp = handle_request(&server_with_ping(), &req, Transport::Stdio).await.unwrap();
+            assert_eq!(
+                resp["result"]["protocolVersion"],
+                json!(expect),
+                "requested {requested:?}"
+            );
+        }
+    }
+
+    /// HTTP can genuinely push since #193 (the GET /mcp SSE stream), so the
+    /// capability it advertises is now truthfully `true` there too.
+    #[tokio::test]
+    async fn initialize_advertises_subscribe_true_on_http() {
         let resp = handle_request(
             &server_with_ping(),
             &json!({"jsonrpc":"2.0","id":1,"method":"initialize"}),
@@ -1279,7 +1333,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(resp["result"]["capabilities"]["resources"]["subscribe"], json!(false));
+        assert_eq!(resp["result"]["capabilities"]["resources"]["subscribe"], json!(true));
     }
 
     #[tokio::test]
@@ -1464,9 +1518,10 @@ mod tests {
         assert!(n["params"].get("text").is_none());
     }
 
-    /// The HTTP transport has no server-to-client channel, so subscribe must
-    /// never be served there — `handle_request` (which HTTP uses) must not know
-    /// the method at all.
+    /// Subscription methods are the TRANSPORT LOOP's job on both transports
+    /// (each owns its registry/dirty-set/wake trio) — `handle_request` itself
+    /// must not know the method, or a transport that forgot to intercept it
+    /// would accept subscriptions it can't deliver.
     #[tokio::test]
     async fn handle_request_does_not_serve_subscribe() {
         let resp = handle_request(
