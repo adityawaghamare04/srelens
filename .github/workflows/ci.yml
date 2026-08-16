@@ -68,46 +68,6 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
-      - name: Backend tests with coverage
-        # The Tauri runtime shell (commands, event streams, process entry) only
-        # executes inside a running app/cluster, so it is excluded from the
-        # measurement. The floor is a ratchet: currently 55%, raise it toward
-        # 85% as cluster-bound integration tests land — never lower it.
-        run: >-
-          cargo llvm-cov --workspace --summary-only --fail-under-lines 55
-          --ignore-filename-regex 'apps/desktop/src-tauri/src/(lib|main|bridge|exec|files|forward|logs|watch)\.rs'
-
-  integration:
-    name: integration (kind)
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      # Tauri v2 system libraries needed to compile the desktop crate.
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libjavascriptcoregtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libgtk-3-dev \
-            libssl-dev \
-            build-essential
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      # tauri-build validates that frontendDist exists at compile time, so the
-      # frontend must be built before the Rust workspace compiles.
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.3
@@ -115,20 +75,31 @@ jobs:
         uses: helm/kind-action@v1
         with:
           cluster_name: srelens-e2e
-      # These suites are #[ignore]d (they need a live cluster), so they must be
-      # run explicitly with --ignored. Without this job the e2e coverage
-      # assertion — "every registered capability is exercised end-to-end" —
-      # would never execute, and a new capability could land with no e2e case.
-      - name: Capability suite against the cluster
+      # ONE instrumented run covers everything (#28): the unit suites AND the
+      # #[ignore]d kind-bound suites, accumulated into one report. Running
+      # the integration suites under coverage is what took the honest number
+      # from ~80% to ~86% — the capability e2e executes exactly the closure
+      # bodies (actions, metrics, crds, helm, exec, manifest) that no mocked
+      # unit test reaches — and merging the old separate kind job in here
+      # buys that with one workspace build and one cluster instead of two.
+      # The e2e's own coverage assertion ("every registered capability is
+      # exercised") still runs, unchanged, as part of the suite itself.
+      - name: Tests with coverage — unit suites and kind-bound suites
         env:
           SRELENS_E2E_CONTEXT: kind-srelens-e2e
         run: |
-          cargo test -p srelens-desktop --test e2e -- --ignored --nocapture --test-threads=1
-      - name: Helm lifecycle against the cluster
-        env:
-          SRELENS_E2E_CONTEXT: kind-srelens-e2e
-        run: |
-          cargo test -p srelens-kube --test helm_lifecycle -- --ignored --nocapture --test-threads=1
+          cargo llvm-cov --no-report --workspace
+          cargo llvm-cov --no-report -p srelens-desktop --test e2e -- --ignored --nocapture --test-threads=1
+          cargo llvm-cov --no-report -p srelens-kube --test helm_lifecycle -- --ignored --nocapture --test-threads=1
+      - name: Enforce the coverage floor
+        # The Tauri runtime shell (bridge, event streams, process entry) only
+        # executes inside a running app, so it stays excluded. The floor is a
+        # ratchet — 55 at first green, 84 now that the kind suites count
+        # (measured 85.79) — never lower it; the final step to 85 lands with
+        # the seams for the remaining command files (#28).
+        run: >-
+          cargo llvm-cov report --summary-only --fail-under-lines 84
+          --ignore-filename-regex 'apps/desktop/src-tauri/src/(lib|main|bridge|exec|files|forward|logs|watch)\.rs'
 
   # The WebDriver smoke suite (issue #30): the REAL built app — WebView and
   # all — driven through tauri-driver against a kind cluster. This is the
