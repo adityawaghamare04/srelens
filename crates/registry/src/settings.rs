@@ -122,14 +122,14 @@ impl FileSettingsStore {
 
 fn validate_keys<'a>(keys: impl Iterator<Item = &'a str>) -> Result<(), String> {
     for key in keys {
+        if key.chars().any(char::is_control) {
+            return Err("setting key must not contain control characters".into());
+        }
         if key.trim().is_empty() {
             return Err("setting key must not be empty".into());
         }
         if key.len() > 256 {
             return Err("setting key must be at most 256 bytes".into());
-        }
-        if key.chars().any(char::is_control) {
-            return Err("setting key must not contain control characters".into());
         }
     }
     Ok(())
