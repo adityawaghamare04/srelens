@@ -15,6 +15,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "srelens"
 path = "src/main.rs"
 
+# The standard Tauri template feature: tauri-build checks THE CRATE's own
+# `custom-protocol` feature (via CARGO_FEATURE_CUSTOM_PROTOCOL in build.rs)
+# to decide embedded-dist vs devUrl — enabling `tauri/custom-protocol` on
+# the dependency alone does NOT flip that switch (learned from the smoke
+# suite's second failure screenshot: still "Could not connect to
+# localhost"). `tauri build` passes --features custom-protocol itself;
+# builds that need a standalone binary (the WebDriver smoke suite) must too.
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
@@ -88,3 +98,7 @@ fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "time", "process"] }
 futures = "0.3"
+# WebDriver client for the #[ignore]d smoke suite (tests/webdriver_smoke.rs,
+# issue #30) — drives the real built app through tauri-driver. Dev-only; the
+# shipping binary never links it.
+thirtyfour = "0.32"
