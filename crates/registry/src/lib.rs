@@ -55,11 +55,23 @@ pub fn default_kubeconfig_path() -> PathBuf {
 /// `spawn_blocking` (the install capabilities), so blocking here is fine. A
 /// non-2xx or transport error maps to the retryable `Download` variant.
 fn http_get(url: &str) -> Result<Vec<u8>, srelens_kube::toolbox_install::InstallError> {
-    use srelens_kube::toolbox_install::InstallError;
-    let resp = reqwest::blocking::Client::builder()
+    use srelens_kube::toolbox_install::{ambient_github_token, github_api_wants_auth, InstallError};
+    let client = reqwest::blocking::Client::builder()
         .user_agent(concat!("srelens/", env!("CARGO_PKG_VERSION")))
         .build()
-        .and_then(|client| client.get(url).send())
+        .map_err(|e| InstallError::Download(e.to_string()))?;
+    let mut req = client.get(url);
+    // Same rule as the desktop's progress fetch, from the same predicate:
+    // api.github.com lookups authenticate with an ambient GITHUB_TOKEN so CI
+    // (whose anonymous pool 403s intermittently) stays reliable; the token
+    // never rides to other hosts.
+    if github_api_wants_auth(url) {
+        if let Some(token) = ambient_github_token() {
+            req = req.bearer_auth(token);
+        }
+    }
+    let resp = req
+        .send()
         .map_err(|e| InstallError::Download(e.to_string()))?;
     if !resp.status().is_success() {
         return Err(InstallError::Download(format!("{} for {url}", resp.status())));

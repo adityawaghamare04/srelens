@@ -162,9 +162,39 @@ pub struct ArchiveInstall {
     pub target: PathBuf,
 }
 
+/// Whether `url` is a GitHub API endpoint an ambient `GITHUB_TOKEN` should
+/// authenticate: unauthenticated calls from CI runners share a rate-limit
+/// pool and 403 intermittently. Exact-prefix on purpose — a bearer token
+/// must never ride along to release-asset CDNs or arbitrary mirrors. Both
+/// blocking fetch paths (the registry's plain `http_get` and the desktop's
+/// progress-emitting variant) consult this ONE predicate, so the two can't
+/// drift on which hosts get the token.
+pub fn github_api_wants_auth(url: &str) -> bool {
+    url.starts_with("https://api.github.com/")
+}
+
+/// The ambient GitHub token, if one is set and non-empty (CI sets it; user
+/// machines don't).
+pub fn ambient_github_token() -> Option<String> {
+    std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty())
+}
+
 /// GitHub API endpoint for helm's latest release (helm has no `stable.txt`).
 pub const HELM_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/helm/helm/releases/latest";
+
+#[cfg(test)]
+mod github_auth_tests {
+    use super::github_api_wants_auth;
+
+    #[test]
+    fn only_the_github_api_host_gets_the_token() {
+        assert!(github_api_wants_auth("https://api.github.com/repos/helm/helm/releases/latest"));
+        assert!(!github_api_wants_auth("https://github.com/srelens/srelens/releases"));
+        assert!(!github_api_wants_auth("https://get.helm.sh/helm-v3.tar.gz"));
+        assert!(!github_api_wants_auth("https://api.github.com.evil.example/x"));
+    }
+}
 
 /// Pull the `tag_name` (e.g. `v3.16.2`) out of a GitHub "latest release" JSON body.
 pub fn parse_github_latest_tag(body: &[u8]) -> Result<String, InstallError> {
