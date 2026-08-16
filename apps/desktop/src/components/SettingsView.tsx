@@ -12,8 +12,11 @@ import {
   PanelRight,
   RotateCcw,
   Sun,
+  Minus,
+  Plus,
   Timer,
   Upload,
+  ZoomIn,
   FilePlus2,
   X,
   ArrowDown,
@@ -62,6 +65,7 @@ import {
   type WorkspaceLayoutSettings,
   orderContexts,
 } from "../lib/settings";
+import { UI_SCALE, applyUiScale, getUiScale, setUiScale, stepUiScale } from "../lib/uiScale";
 import { updateRequestTimeout } from "../lib/requestTimeout";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { McpSettingsSection } from "./McpSettingsSection";
@@ -223,6 +227,18 @@ export function SettingsView({
     // An empty or unparseable draft is an intermediate state: leave the
     // committed timeout alone until it becomes a number again.
     if (raw.trim() !== "" && Number.isFinite(Number(raw))) changeRequestTimeout(Number(raw));
+  };
+  const [uiScale, setUiScaleState] = useState(() => getUiScale());
+  // The zoom shortcuts (App.tsx) announce changes so an open slider tracks them.
+  useEffect(() => {
+    const sync = () => setUiScaleState(getUiScale());
+    window.addEventListener("srelens:uiscale", sync);
+    return () => window.removeEventListener("srelens:uiscale", sync);
+  }, []);
+  const changeUiScale = (percent: number) => {
+    const stored = setUiScale(percent);
+    setUiScaleState(stored);
+    applyUiScale(stored);
   };
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
@@ -491,6 +507,63 @@ export function SettingsView({
                   </button>
                 ))}
               </div>
+              {/* Desktop only: on the web the browser's own zoom owns this.
+                  A div, not a label: a label would forward the +/− button
+                  clicks to the slider it wraps. */}
+              {isTauri() && (
+                <div className="fl-settings-width-grid">
+                  <div className="fl-settings-width-control">
+                    <span className="fl-settings-width-control__header">
+                      <ZoomIn aria-hidden="true" />
+                      <span>
+                        <strong>Interface scale</strong>
+                        <small>
+                          Make everything larger or smaller. Also on ⌘/Ctrl with +, −, or 0
+                          anywhere in the app.
+                        </small>
+                      </span>
+                      <output>{uiScale}%</output>
+                    </span>
+                    <span className="fl-settings-zoom-row">
+                      <button
+                        type="button"
+                        className="fl-settings-zoom-step"
+                        onClick={() => changeUiScale(stepUiScale(uiScale, "out"))}
+                        disabled={uiScale <= UI_SCALE.MIN}
+                        aria-label="Decrease interface scale"
+                      >
+                        <Minus aria-hidden="true" />
+                      </button>
+                      <input
+                        type="range"
+                        min={UI_SCALE.MIN}
+                        max={UI_SCALE.MAX}
+                        step={UI_SCALE.STEP}
+                        value={uiScale}
+                        onChange={(event) => changeUiScale(Number(event.target.value))}
+                        aria-label="Interface scale in percent"
+                      />
+                      <button
+                        type="button"
+                        className="fl-settings-zoom-step"
+                        onClick={() => changeUiScale(stepUiScale(uiScale, "in"))}
+                        disabled={uiScale >= UI_SCALE.MAX}
+                        aria-label="Increase interface scale"
+                      >
+                        <Plus aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="fl-btn fl-btn--ghost fl-settings-zoom-reset"
+                        onClick={() => changeUiScale(UI_SCALE.DEFAULT)}
+                        disabled={uiScale === UI_SCALE.DEFAULT}
+                      >
+                        Reset
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              )}
               <div className="fl-settings-theme-grid" aria-label="Theme palette">
                 {THEME_OPTIONS.map((option) => (
                   <button
