@@ -178,6 +178,8 @@ function toStoredMessages(msgs: ChatMessage[], calls: Record<string, ToolCallSta
     const stored: StoredMessage = { id: m.id, role: m.role, text: m.text };
     if (m.images && m.images.length > 0) stored.images = m.images;
     if (toolCalls.length > 0) stored.toolCalls = toolCalls;
+    if (m.thoughts) stored.thoughts = m.thoughts;
+    if (m.thoughtSecs) stored.thoughtSecs = m.thoughtSecs;
     return stored;
   });
 }
@@ -192,6 +194,8 @@ function fromStoredMessages(stored: StoredMessage[]): { msgs: ChatMessage[]; cal
     const msg: ChatMessage = { id: m.id, role: m.role, text: m.text };
     if (m.images && m.images.length > 0) msg.images = m.images;
     if (toolCallIds?.length) msg.toolCallIds = toolCallIds;
+    if (m.thoughts) msg.thoughts = m.thoughts;
+    if (m.thoughtSecs) msg.thoughtSecs = m.thoughtSecs;
     return msg;
   });
   return { msgs, calls };
@@ -305,8 +309,11 @@ function CopyButton({ text }: { text: string }) {
 /**
  * The agent's reasoning for a turn, folded into a collapsible "Thoughts · Ns"
  * row above the tools and answer. Only rendered when the agent actually
- * streamed reasoning (Cursor does; Claude/Codex headless don't), collapsed by
- * default.
+ * streamed reasoning: the native agent and Cursor stream it, Codex reports
+ * reasoning summaries when the model reasons enough to produce them (the
+ * adapter requests them via `model_reasoning_summary`), and Claude headless
+ * redacts thinking content entirely (see `claude.rs`), so Claude turns have
+ * no Thoughts row. Collapsed by default.
  */
 function ThoughtsGroup({ text, secs }: { text: string; secs?: number }) {
   const [expanded, setExpanded] = useState(false);
@@ -812,6 +819,13 @@ export const AssistantConversation = forwardRef<
   // When the current turn began streaming reasoning, so the Thoughts section
   // can show how long it thought once the thinking ends.
   const thinkingStartRef = useRef<number | null>(null);
+  // The agent kind the in-flight turn runs on. Codex delivers each reasoning
+  // burst as one COMPLETED summary item — it arrives after the thinking
+  // already happened, so wall-clock timing across its events would label a
+  // tens-of-seconds burst "Thoughts · 1s". For codex the timer never starts
+  // and the label shows no duration; agents that stream true deltas
+  // (native, Cursor) keep it.
+  const turnKindRef = useRef<string | null>(null);
 
   // This component only exists while its host (the drawer or the tab) is
   // showing it, so a subscription made on mount already covers "each time
@@ -1225,7 +1239,9 @@ export const AssistantConversation = forwardRef<
     }
     switch (e.type) {
       case "thinking":
-        if (thinkingStartRef.current === null) thinkingStartRef.current = Date.now();
+        // No timer for codex — see `turnKindRef`.
+        if (turnKindRef.current !== "codex" && thinkingStartRef.current === null)
+          thinkingStartRef.current = Date.now();
         setMessagesTracked((msgs) => {
           const last = msgs[msgs.length - 1];
           if (!last || last.role !== "assistant") return msgs;
@@ -1372,6 +1388,7 @@ export const AssistantConversation = forwardRef<
         return;
       }
       saveLastAgent(usedKind); // remember what was actually used for the next fresh chat
+      turnKindRef.current = usedKind; // drives the Thoughts timing decision — see the ref
       // Resume the CLI's own session only when this turn runs on the same
       // agent the stored id came from (see `cliSessionRef`).
       const resume = cliSessionRef.current?.kind === usedKind ? cliSessionRef.current.id : null;

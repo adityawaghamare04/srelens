@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { parseClusterLoginRequired, requestClusterLogin } from "../lib/clusterLogin";
 
@@ -56,4 +57,9 @@ export async function relaunchApp(): Promise<void> {
 /** The running app's bundle version. */
 export async function appVersion(): Promise<string> {
   return getVersion();
+}
+
+/** Set the webview's native zoom level (1 = 100%) — the #237 interface scale. */
+export async function setWebviewZoom(factor: number): Promise<void> {
+  await getCurrentWebview().setZoom(factor);
 }

@@ -4,6 +4,7 @@ import { listCustomResource, type CrdRef, type CustomRow } from "../lib/crds";
 import { listNamespaces } from "../lib/workloads";
 import { YamlView } from "./YamlView";
 import { Table, filterTableData, Select, Button, ColumnPicker, useColumnVisibility, Spinner, Drawer, TextInput, type Column } from "../ui";
+import { ageSortValue } from "../lib/age";
 
 interface Selected {
   name: string;
@@ -67,7 +68,7 @@ export function CustomResourceBrowser({
           },
         ]
       : []),
-    { key: "age", header: "Age", render: (r) => <span className="text-muted-foreground">{r.age}</span> },
+    { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => <span className="text-muted-foreground">{r.age}</span> },
   ];
 
   // Show/hide columns, persisted per CRD.

@@ -49,6 +49,7 @@ import {
   loadUpdateChannel,
   loadMcpSettings,
 } from "./lib/settings";
+import { applyUiScale, getUiScale, setUiScale, stepUiScale, uiScaleShortcut } from "./lib/uiScale";
 import { loadOpenTabs, saveOpenTabs, nextTabId } from "./lib/openTabs";
 import { startMcpHttp } from "./lib/mcp";
 import { checkForUpdateAndNotify } from "./lib/updateNotifier";
@@ -256,6 +257,24 @@ export function App() {
         e.preventDefault();
         setPaletteOpen((o) => !o);
       }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Interface scale (#237): restore the persisted zoom and serve the
+  // browser-zoom shortcuts (Cmd/Ctrl +, -, 0). Desktop only — a browser
+  // already zooms on these keys, and preventDefault here would suppress it.
+  useEffect(() => {
+    if (!isTauri()) return;
+    applyUiScale(getUiScale());
+    function onKey(e: KeyboardEvent) {
+      const action = uiScaleShortcut(e);
+      if (!action) return;
+      e.preventDefault();
+      applyUiScale(setUiScale(stepUiScale(getUiScale(), action)));
+      // Keep an open Settings slider in step with the shortcut.
+      window.dispatchEvent(new Event("srelens:uiscale"));
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

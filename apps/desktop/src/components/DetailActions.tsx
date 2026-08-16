@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   ArrowLeftRight,
   Bot,
@@ -24,7 +24,10 @@ import {
 } from "../lib/actions";
 import { notify } from "../lib/notify";
 import { useAccess, rbac, kindToResource, denyReason, reportActionError, type AccessCheck } from "../lib/access";
+import { getObject } from "../lib/manifest";
 import { IconButton, ConfirmDialog, TextInput, KubectlPreview } from "../ui";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { ForwardDialog } from "./ForwardDialog";
 import { CopyAsKubectlButton } from "./CopyAsKubectlButton";
 import { toKubectl } from "../lib/kubectlMapper";
@@ -36,6 +39,31 @@ type Opener = (s: { context: string; namespace: string; pod: string; container?:
 export type AskAssistant = (s: AssistantContext) => void;
 
 const SCALABLE = ["Deployment", "StatefulSet", "ReplicaSet"];
+
+/** The desired replica count a list row implies, for seeding the scale
+ * dialog: ReplicaSet rows carry `desired`; Deployment/StatefulSet rows
+ * encode it as `ready: "ready/total"`. Undefined when the row can't say. */
+export function desiredReplicasFrom(row?: { desired?: unknown; ready?: unknown }): number | undefined {
+  if (typeof row?.desired === "number") return row.desired;
+  if (typeof row?.ready === "string") {
+    const total = /^\d+\/(\d+)$/.exec(row.ready)?.[1];
+    if (total !== undefined) return Number(total);
+  }
+  return undefined;
+}
+
+/** Desired replicas for one specific detail: the row must match name AND
+ * namespace — in an all-namespaces view two workloads can share a name, and
+ * seeding one with the other's count would mis-scale on confirm. */
+export function desiredReplicasForDetail(
+  rows: Array<{ name: string; namespace?: string; desired?: unknown; ready?: unknown }>,
+  name: string,
+  namespace: string | null,
+): number | undefined {
+  return desiredReplicasFrom(
+    rows.find((r) => r.name === name && (namespace == null || r.namespace === namespace)),
+  );
+}
 const RESTARTABLE = ["Deployment", "StatefulSet", "DaemonSet"];
 // Workloads whose pods are reachable via spec.selector.matchLabels.
 const LOGGABLE = ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"];
@@ -290,6 +318,7 @@ export function ResourceActions({
   namespace,
   name,
   cronjobSuspended,
+  currentReplicas,
   onDeleted,
   onChanged,
   onOpenLogs,
@@ -302,6 +331,9 @@ export function ResourceActions({
   name: string;
   /** For CronJob details: current suspend state, to label Suspend/Resume. */
   cronjobSuspended?: boolean;
+  /** For scalable kinds: the current desired replica count, seeding the
+   * scale dialog's slider and input. Unknown → the dialog starts empty. */
+  currentReplicas?: number;
   onDeleted: () => void;
   /** Fired after a successful non-delete write action so the detail refreshes. */
   onChanged?: () => void;
@@ -314,6 +346,16 @@ export function ResourceActions({
   const [confirmSuspend, setConfirmSuspend] = useState(false);
   const [scaling, setScaling] = useState(false);
   const [replicas, setReplicas] = useState("");
+  // Fallback seed for rows that can't say (e.g. generic ReplicaSet rows):
+  // fetched from the object's spec.replicas when the scale dialog opens.
+  const [fetchedReplicas, setFetchedReplicas] = useState<number | undefined>(undefined);
+  const scaleOpenSeq = useRef(0);
+  // Whether the user has touched the replica control since the dialog opened.
+  // The late-fetch seed keys off THIS, not off the input being empty: a user
+  // who cleared the field to type a fresh value has edited it, and restoring
+  // the fetched count into that window would make their next digit append
+  // (clearing 4 to type 0 must not become 40).
+  const scaleEdited = useRef(false);
   const [triggering, setTriggering] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -427,6 +469,15 @@ export function ResourceActions({
   const replicasN = Number(replicas);
   const validReplicas = replicas.trim() !== "" && Number.isInteger(replicasN) && replicasN >= 0;
 
+  // Slider range: 0 to 100 as the everyday ceiling (a tighter max(current*2)
+  // bound proved too limiting in practice), stretched further for workloads
+  // already above 50 replicas so the slider can always reach and double the
+  // current count. The input stays free-form past the ceiling; the slider
+  // then just pins.
+  const knownReplicas = currentReplicas ?? fetchedReplicas;
+  const sliderMax = Math.max((knownReplicas ?? 0) * 2, 100);
+  const sliderValue = validReplicas ? Math.min(replicasN, sliderMax) : 0;
+
   const restartCmd = toKubectl({ action: "rollout-restart", kind, namespace: namespace ?? "", name, context });
   const suspendCmd = toKubectl({
     action: cronjobSuspended ? "cronjob-resume" : "cronjob-suspend",
@@ -466,7 +517,32 @@ export function ResourceActions({
           label="Scale"
           disabled={scaleCheck ? !access.allowed(scaleCheck) : false}
           title={scaleCheck ? denyReason(access, scaleCheck) : undefined}
-          onClick={() => setScaling(true)}
+          onClick={() => {
+            // Start from the live count so the slider and input show where
+            // the workload is today, not whatever a previous dialog left.
+            setReplicas(currentReplicas !== undefined ? String(currentReplicas) : "");
+            setFetchedReplicas(undefined);
+            scaleEdited.current = false;
+            // Bump on EVERY open, not only when a fetch is needed: this same
+            // component instance survives the detail switching to a different
+            // resource, and a still-pending fetch from the previous resource
+            // must find its token stale even when THIS open needs no fetch —
+            // otherwise it would overwrite this resource's seeded count.
+            const seq = ++scaleOpenSeq.current;
+            setScaling(true);
+            if (currentReplicas === undefined) {
+              // The list row couldn't say (generic rows carry no counts) —
+              // read spec.replicas off the object. The sequence token drops
+              // a fetch that resolves after any later dialog opening, and
+              // typing always wins over the seed.
+              void getObject(context, kind, namespace, name).then((r) => {
+                const spec = (r.object as { spec?: { replicas?: unknown } } | undefined)?.spec;
+                if (seq !== scaleOpenSeq.current || typeof spec?.replicas !== "number") return;
+                setFetchedReplicas(spec.replicas);
+                if (!scaleEdited.current) setReplicas(String(spec.replicas));
+              });
+            }
+          }}
         />
       )}
       {RESTARTABLE.includes(kind) && (
@@ -601,14 +677,42 @@ export function ResourceActions({
               <p style={{ marginTop: 0 }}>
                 Set the replica count for <code>{name}</code>.
               </p>
-              <div style={{ width: 120 }}>
-                <TextInput
-                  value={replicas}
-                  onValueChange={setReplicas}
-                  placeholder="replicas"
-                  aria-label="Replicas"
+              <div className="flex items-center gap-3">
+                <Slider
+                  value={[sliderValue]}
+                  min={0}
+                  max={sliderMax}
+                  step={1}
+                  onValueChange={([v]) => {
+                    scaleEdited.current = true;
+                    setReplicas(String(v));
+                  }}
+                  aria-label="Replica count slider"
+                  className="flex-1"
                 />
+                <div style={{ width: 80 }}>
+                  {/* A number input, not TextInput: the native spinner and
+                      arrow-key stepping give single-replica increments
+                      without touching the slider. */}
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={replicas}
+                    onChange={(e) => {
+                      scaleEdited.current = true;
+                      setReplicas(e.target.value);
+                    }}
+                    placeholder="replicas"
+                    aria-label="Replicas"
+                  />
+                </div>
               </div>
+              {knownReplicas !== undefined && (
+                <p className="text-xs text-muted-foreground">
+                  current {knownReplicas} → target {validReplicas ? replicasN : "—"}
+                </p>
+              )}
               {scaleCmd && (
                 <KubectlPreview command={scaleCmd} onCopy={() => void copyKubectlCommand(scaleCmd)} />
               )}

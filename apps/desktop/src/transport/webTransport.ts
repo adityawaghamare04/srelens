@@ -79,3 +79,10 @@ export async function subscribe(channel: string, handler: (payload: unknown) => 
   // the producer without losing the first frame (watch/logs/terminal/helm).
   return wsClient.subscribeChannel(channel, handler, { awaitAck: true });
 }
+
+/**
+ * No-op on the web: the browser's own Cmd/Ctrl +/- zoom already scales the
+ * page, and no API may set it programmatically. The settings control and the
+ * key handler are both gated to the desktop for this reason.
+ */
+export async function setWebviewZoom(_factor: number): Promise<void> {}

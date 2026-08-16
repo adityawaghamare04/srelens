@@ -22,10 +22,17 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/srelens/srelens/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/srelens/srelens?logo=github&color=eab308"></a>
+  <a href="https://www.reddit.com/r/srelens/"><img alt="Reddit: r/srelens" src="https://img.shields.io/reddit/subreddit-subscribers/srelens?label=r%2Fsrelens&logo=reddit&logoColor=white&color=FF4500"></a>
+  <a href="https://deepwiki.com/srelens/srelens"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/srelens/srelens/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/srelens/srelens?display_name=release&label=release&color=22c55e"></a>
   <a href="https://github.com/srelens/srelens/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/srelens/srelens/total?label=downloads&color=3b82f6"></a>
+  <a href="https://aur.archlinux.org/packages/srelens-bin"><img alt="AUR version" src="https://img.shields.io/aur/version/srelens-bin?label=aur&logo=archlinux&logoColor=white&color=1793d1"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/srelens/srelens?color=675e80"></a>
-  <a href="https://www.reddit.com/r/srelens/"><img alt="Reddit: r/srelens" src="https://img.shields.io/badge/reddit-r%2Fsrelens-FF4500?logo=reddit&logoColor=white"></a>
+  <a href="https://github.com/srelens/srelens/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/srelens/srelens/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
 </p>
 
 <p align="center">
@@ -58,6 +65,12 @@ one local-first desktop workspace.
 srelens uses the operating system WebView through Tauri v2 and a Rust backend built
 with `kube-rs` and `tokio`. It is independently developed and is not affiliated with
 Mirantis Lens or the Freelens project.
+
+That architecture is why the download is small: srelens `v0.5.0` ships a **17.1 MiB**
+macOS installer and a **19.8 MiB** Linux `.deb`, against 190.2 MiB and 146.8 MiB for
+Freelens `v1.10.3` — roughly **11× and 7× smaller**. Those are published release-asset
+sizes, and the [performance baselines](docs/PERFORMANCE.md) explain how to reproduce
+them (including where the gap is narrower, such as the self-contained AppImage).
 
 See the [user guide](docs/USAGE.md) for how to use each of these.
 

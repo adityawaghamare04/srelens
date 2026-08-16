@@ -54,7 +54,7 @@ import {
   rowInSelection,
 } from "../lib/namespaces";
 import { NamespaceMultiSelect } from "../ui/NamespaceMultiSelect";
-import { PodActions, ResourceActions, ServiceForwardAction } from "./DetailActions";
+import { PodActions, ResourceActions, ServiceForwardAction, desiredReplicasForDetail } from "./DetailActions";
 import { BulkActionBar } from "./BulkActionBar";
 import { NodeCordonAction } from "./NodeCordonAction";
 import { ResourceDetail } from "./ResourceDetail";
@@ -62,6 +62,7 @@ import { AssistantDrawer, type AssistantContext } from "./AssistantDrawer";
 import { isTauri } from "../transport/platform";
 import type { OpenResource } from "../lib/resourceNavigation";
 import { describeError } from "../lib/errors";
+import { ageSortValue } from "../lib/age";
 import {
   Table,
   filterTableData,
@@ -292,7 +293,7 @@ const podColumns: Column<PodRow>[] = [
   { key: "phase", header: "Phase", render: (p) => <StatusPill status={p.phase} kind={phaseKind(p.phase)} /> },
   { key: "restarts", header: "Restarts" },
   { key: "node", header: "Node", render: (p) => <Muted>{p.node}</Muted> },
-  { key: "age", header: "Age", render: (p) => <Muted>{p.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (p) => <Muted>{p.age}</Muted> },
 ];
 
 const deploymentColumns: Column<DeploymentSummary>[] = [
@@ -301,7 +302,7 @@ const deploymentColumns: Column<DeploymentSummary>[] = [
   { key: "ready", header: "Ready" },
   { key: "upToDate", header: "Up-to-date" },
   { key: "available", header: "Available" },
-  { key: "age", header: "Age", render: (d) => <Muted>{d.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (d) => <Muted>{d.age}</Muted> },
 ];
 
 const statefulSetColumns: Column<StatefulSetSummary>[] = [
@@ -310,7 +311,7 @@ const statefulSetColumns: Column<StatefulSetSummary>[] = [
   { key: "ready", header: "Ready" },
   { key: "updated", header: "Updated" },
   { key: "service", header: "Service", render: (s) => <Muted>{s.service || "—"}</Muted> },
-  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (s) => <Muted>{s.age}</Muted> },
 ];
 
 const daemonSetColumns: Column<DaemonSetSummary>[] = [
@@ -321,7 +322,7 @@ const daemonSetColumns: Column<DaemonSetSummary>[] = [
   { key: "ready", header: "Ready" },
   { key: "upToDate", header: "Up-to-date" },
   { key: "available", header: "Available" },
-  { key: "age", header: "Age", render: (d) => <Muted>{d.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (d) => <Muted>{d.age}</Muted> },
 ];
 
 const jobColumns: Column<JobSummary>[] = [
@@ -339,7 +340,7 @@ const jobColumns: Column<JobSummary>[] = [
   },
   { key: "duration", header: "Duration", render: (j) => <Muted>{j.duration || "—"}</Muted> },
   { key: "owner", header: "Owner", render: (j) => <Muted>{j.owner || "—"}</Muted> },
-  { key: "age", header: "Age", render: (j) => <Muted>{j.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (j) => <Muted>{j.age}</Muted> },
 ];
 
 const cronJobColumns: Column<CronJobSummary>[] = [
@@ -354,14 +355,14 @@ const cronJobColumns: Column<CronJobSummary>[] = [
   },
   { key: "active", header: "Active" },
   { key: "lastSchedule", header: "Last run", render: (c) => <Muted>{c.lastSchedule || "—"}</Muted> },
-  { key: "age", header: "Age", render: (c) => <Muted>{c.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (c) => <Muted>{c.age}</Muted> },
 ];
 
 const configMapColumns: Column<ConfigMapSummary>[] = [
   { key: "name", header: "ConfigMap", render: (c) => <strong>{c.name}</strong> },
   { key: "namespace", header: "Namespace", render: (c) => <span className="fl-link">{c.namespace}</span> },
   { key: "keys", header: "Keys" },
-  { key: "age", header: "Age", render: (c) => <Muted>{c.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (c) => <Muted>{c.age}</Muted> },
 ];
 
 const secretColumns: Column<SecretSummary>[] = [
@@ -369,21 +370,21 @@ const secretColumns: Column<SecretSummary>[] = [
   { key: "namespace", header: "Namespace", render: (s) => <span className="fl-link">{s.namespace}</span> },
   { key: "type", header: "Type", render: (s) => <Muted>{s.type}</Muted> },
   { key: "keys", header: "Keys" },
-  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (s) => <Muted>{s.age}</Muted> },
 ];
 
 const resourceQuotaColumns: Column<ResourceQuotaSummary>[] = [
   { key: "name", header: "Resource Quota", render: (q) => <strong>{q.name}</strong> },
   { key: "namespace", header: "Namespace", render: (q) => <span className="fl-link">{q.namespace}</span> },
   { key: "resources", header: "Resources" },
-  { key: "age", header: "Age", render: (q) => <Muted>{q.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (q) => <Muted>{q.age}</Muted> },
 ];
 
 const limitRangeColumns: Column<LimitRangeSummary>[] = [
   { key: "name", header: "Limit Range", render: (l) => <strong>{l.name}</strong> },
   { key: "namespace", header: "Namespace", render: (l) => <span className="fl-link">{l.namespace}</span> },
   { key: "limits", header: "Limits" },
-  { key: "age", header: "Age", render: (l) => <Muted>{l.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (l) => <Muted>{l.age}</Muted> },
 ];
 
 const serviceColumns: Column<ServiceSummary>[] = [
@@ -392,7 +393,7 @@ const serviceColumns: Column<ServiceSummary>[] = [
   { key: "type", header: "Type" },
   { key: "clusterIP", header: "Cluster IP", render: (s) => <Muted>{s.clusterIP}</Muted> },
   { key: "ports", header: "Ports" },
-  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (s) => <Muted>{s.age}</Muted> },
 ];
 
 const ingressColumns: Column<IngressSummary>[] = [
@@ -402,7 +403,7 @@ const ingressColumns: Column<IngressSummary>[] = [
   { key: "hosts", header: "Hosts", render: (i) => <Muted>{i.hosts || "*"}</Muted> },
   { key: "address", header: "Address", render: (i) => <Muted>{i.address || "—"}</Muted> },
   { key: "ports", header: "Ports", render: (i) => <Muted>{i.ports}</Muted> },
-  { key: "age", header: "Age", render: (i) => <Muted>{i.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (i) => <Muted>{i.age}</Muted> },
 ];
 
 const endpointSliceColumns: Column<EndpointSliceSummary>[] = [
@@ -412,7 +413,7 @@ const endpointSliceColumns: Column<EndpointSliceSummary>[] = [
   { key: "endpoints", header: "Endpoints", render: (e) => <Muted>{e.endpoints}</Muted> },
   { key: "ports", header: "Ports", render: (e) => <Muted>{e.ports || "—"}</Muted> },
   { key: "service", header: "Service", render: (e) => <span className="fl-link">{e.service || "—"}</span> },
-  { key: "age", header: "Age", render: (e) => <Muted>{e.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (e) => <Muted>{e.age}</Muted> },
 ];
 
 const networkPolicyColumns: Column<NetworkPolicySummary>[] = [
@@ -422,7 +423,7 @@ const networkPolicyColumns: Column<NetworkPolicySummary>[] = [
   { key: "ingress", header: "Ingress" },
   { key: "egress", header: "Egress" },
   { key: "policyTypes", header: "Policy Types", render: (n) => <Muted>{n.policyTypes || "—"}</Muted> },
-  { key: "age", header: "Age", render: (n) => <Muted>{n.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (n) => <Muted>{n.age}</Muted> },
 ];
 
 const pvcColumns: Column<PvcSummary>[] = [
@@ -433,7 +434,7 @@ const pvcColumns: Column<PvcSummary>[] = [
   { key: "accessModes", header: "Access Modes", render: (p) => <Muted>{p.accessModes || "—"}</Muted> },
   { key: "storageClass", header: "Storage Class", render: (p) => <span className="fl-link">{p.storageClass || "—"}</span> },
   { key: "volume", header: "Volume", render: (p) => <span className="fl-link">{p.volume || "—"}</span> },
-  { key: "age", header: "Age", render: (p) => <Muted>{p.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (p) => <Muted>{p.age}</Muted> },
 ];
 
 const pvColumns: Column<PvSummary>[] = [
@@ -444,7 +445,7 @@ const pvColumns: Column<PvSummary>[] = [
   { key: "status", header: "Status", render: (p) => <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" || p.status === "Available" ? "Ready" : p.status)} /> },
   { key: "claim", header: "Claim", render: (p) => <span className="fl-link">{p.claim || "—"}</span> },
   { key: "storageClass", header: "Storage Class", render: (p) => <span className="fl-link">{p.storageClass || "—"}</span> },
-  { key: "age", header: "Age", render: (p) => <Muted>{p.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (p) => <Muted>{p.age}</Muted> },
 ];
 
 const storageClassColumns: Column<StorageClassSummary>[] = [
@@ -453,27 +454,27 @@ const storageClassColumns: Column<StorageClassSummary>[] = [
   { key: "reclaimPolicy", header: "Reclaim", render: (s) => <Muted>{s.reclaimPolicy || "—"}</Muted> },
   { key: "volumeBindingMode", header: "Binding Mode", render: (s) => <Muted>{s.volumeBindingMode || "—"}</Muted> },
   { key: "default", header: "Default", render: (s) => (s.default ? <StatusPill status="Default" kind="success" /> : <Muted>—</Muted>) },
-  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (s) => <Muted>{s.age}</Muted> },
 ];
 
 const serviceAccountColumns: Column<ServiceAccountSummary>[] = [
   { key: "name", header: "Service Account", render: (s) => <strong>{s.name}</strong> },
   { key: "namespace", header: "Namespace", render: (s) => <span className="fl-link">{s.namespace}</span> },
   { key: "secrets", header: "Secrets" },
-  { key: "age", header: "Age", render: (s) => <Muted>{s.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (s) => <Muted>{s.age}</Muted> },
 ];
 
 const roleColumns: Column<RoleSummary>[] = [
   { key: "name", header: "Role", render: (r) => <strong>{r.name}</strong> },
   { key: "namespace", header: "Namespace", render: (r) => <span className="fl-link">{r.namespace}</span> },
   { key: "rules", header: "Rules" },
-  { key: "age", header: "Age", render: (r) => <Muted>{r.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => <Muted>{r.age}</Muted> },
 ];
 
 const clusterRoleColumns: Column<ClusterRoleSummary>[] = [
   { key: "name", header: "Cluster Role", render: (r) => <strong>{r.name}</strong> },
   { key: "rules", header: "Rules" },
-  { key: "age", header: "Age", render: (r) => <Muted>{r.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => <Muted>{r.age}</Muted> },
 ];
 
 const roleBindingColumns: Column<RoleBindingSummary>[] = [
@@ -481,14 +482,14 @@ const roleBindingColumns: Column<RoleBindingSummary>[] = [
   { key: "namespace", header: "Namespace", render: (b) => <span className="fl-link">{b.namespace}</span> },
   { key: "role", header: "Role", render: (b) => <span className="fl-link">{b.role}</span> },
   { key: "subjects", header: "Subjects" },
-  { key: "age", header: "Age", render: (b) => <Muted>{b.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (b) => <Muted>{b.age}</Muted> },
 ];
 
 const clusterRoleBindingColumns: Column<ClusterRoleBindingSummary>[] = [
   { key: "name", header: "Cluster Role Binding", render: (b) => <strong>{b.name}</strong> },
   { key: "role", header: "Role", render: (b) => <span className="fl-link">{b.role}</span> },
   { key: "subjects", header: "Subjects" },
-  { key: "age", header: "Age", render: (b) => <Muted>{b.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (b) => <Muted>{b.age}</Muted> },
 ];
 
 const nodeColumns: Column<NodeRow>[] = [
@@ -510,13 +511,13 @@ const nodeColumns: Column<NodeRow>[] = [
   { key: "cpu", header: "CPU", render: (n) => <Muted>{n.cpu != null ? `${n.cpu}m` : "—"}</Muted> },
   { key: "memory", header: "Memory", render: (n) => <Muted>{n.memory != null ? `${n.memory}Mi` : "—"}</Muted> },
   { key: "version", header: "Version", render: (n) => <Muted>{n.version}</Muted> },
-  { key: "age", header: "Age", render: (n) => <Muted>{n.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (n) => <Muted>{n.age}</Muted> },
 ];
 
 const genericColumns: Column<ResourceRow>[] = [
   { key: "name", header: "Name", render: (r) => <strong>{r.name}</strong> },
   { key: "namespace", header: "Namespace", render: (r) => <span className="fl-link">{r.namespace}</span> },
-  { key: "age", header: "Age", render: (r) => <Muted>{r.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => <Muted>{r.age}</Muted> },
 ];
 
 const eventColumns: Column<EventSummary & { name: string }>[] = [
@@ -528,7 +529,7 @@ const eventColumns: Column<EventSummary & { name: string }>[] = [
   { key: "reason", header: "Reason", render: (e) => <strong>{e.reason}</strong> },
   { key: "object", header: "Object", render: (e) => <span className="fl-link">{e.object}</span> },
   { key: "message", header: "Message" },
-  { key: "age", header: "Age", render: (e) => <Muted>{e.age}</Muted> },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (e) => <Muted>{e.age}</Muted> },
 ];
 
 interface ResourceState {
@@ -953,9 +954,16 @@ export function ResourceBrowser({
         name={otherDetail.name}
         cronjobSuspended={
           otherDetail.kind === "CronJob"
-            ? (res.rows as CronJobSummary[]).find((r) => r.name === otherDetail.name)?.suspended
+            ? (res.rows as CronJobSummary[]).find(
+                (r) => r.name === otherDetail.name && r.namespace === otherDetail.namespace,
+              )?.suspended
             : undefined
         }
+        currentReplicas={desiredReplicasForDetail(
+          res.rows as Array<{ name: string; namespace?: string; desired?: number; ready?: string | number }>,
+          otherDetail.name,
+          otherDetail.namespace,
+        )}
         onDeleted={closeDetail}
         onChanged={() => setDetailReload((k) => k + 1)}
         onOpenLogs={onOpenWorkloadLogs}

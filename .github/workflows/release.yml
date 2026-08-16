@@ -126,8 +126,12 @@ jobs:
             const fs=require("fs");const v=process.argv[1];
             const sub=(p,re,to)=>{const s=fs.readFileSync(p,"utf8");const n=s.replace(re,to);if(n===s)throw new Error("no version match in "+p);fs.writeFileSync(p,n)};
             sub("apps/desktop/src-tauri/tauri.conf.json",/("version":\s*)"[^"]+"/,`$1"${v}"`);
-            sub("apps/desktop/src-tauri/Cargo.toml",/^version = "[^"]+"/m,`version = "${v}"`);
-            sub("Cargo.lock",/(name = "srelens-desktop"\r?\nversion = ")[^"]+(")/,`$1${v}$2`);
+            // Every crate inherits [workspace.package].version from the root
+            // Cargo.toml (src-tauri included), so ONE Cargo bump versions the
+            // whole workspace — the server binary, the MCP serverInfo, all of
+            // it — and the lock updates every srelens-* member to match.
+            sub("Cargo.toml",/^version = "[^"]+"/m,`version = "${v}"`);
+            sub("Cargo.lock",/(name = "srelens-[a-z-]+"\r?\nversion = ")[^"]+(")/g,`$1${v}$2`);
           ' "$NEW"
           # Grouped changelog for the release body. The Conventional Commit type
           # is dropped (the section heading already says Features / Fixes) but
@@ -175,6 +179,75 @@ jobs:
   #
   # Each leg pushes by DIGEST only (no tag): two jobs pushing the same tag would
   # race, with the loser's architecture silently dropped from the result.
+
+  # Full-tier WebDriver smoke (issue #30): the fast subset gates every PR in
+  # ci.yml; stable releases additionally run the full path — exec into the
+  # fixture pod and a real port-forward round-trip — against the built app.
+  # Runs only for main (stable) releases; dev pre-releases rely on the PR
+  # gate. A failure fails the workflow run loudly; the desktop build matrix
+  # is deliberately not serialized behind this (~15 min) job, so it is the
+  # red X on the release run, not a publish blocker.
+  smoke-full:
+    name: smoke (webdriver, full)
+    needs: version
+    if: needs.version.outputs.release == 'true' && github.ref_name == 'main'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libssl-dev \
+            build-essential \
+            webkit2gtk-driver \
+            xvfb
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+      # custom-protocol makes the debug binary serve the EMBEDDED frontend
+      # dist; without it the WebView tries the Vite dev server and the whole
+      # window is just "Could not connect to localhost" (first live run's
+      # failure screenshot).
+      - name: Build the app binary
+        run: cargo build -p srelens-desktop --features custom-protocol --profile ci-smoke
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: srelens-e2e
+      - name: Full smoke suite through the real app
+        env:
+          SRELENS_E2E_CONTEXT: kind-srelens-e2e
+          SRELENS_SMOKE_FULL: "1"
+          SRELENS_SMOKE_APP: ${{ github.workspace }}/target/ci-smoke/srelens
+          SRELENS_SMOKE_ARTIFACTS: ${{ runner.temp }}/smoke-artifacts
+        run: |
+          xvfb-run --auto-servernum \
+            cargo test -p srelens-desktop --features custom-protocol --profile ci-smoke --test webdriver_smoke -- --ignored --nocapture
+      - name: Upload failure artifacts (screenshot + app logs)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-full-failure-artifacts
+          path: ${{ runner.temp }}/smoke-artifacts
+          if-no-files-found: ignore
+
   docker:
     name: docker image (${{ matrix.arch }})
     needs: version
@@ -195,6 +268,23 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # Stamp the release version into the workspace before the image builds:
+      # every crate inherits [workspace.package].version, and without this the
+      # server binary in the image reports the committed placeholder instead
+      # of the released version — on main this job checks out the pre-bump
+      # push sha (the version job's bump commit lands after), and on dev the
+      # pre-release version is never committed at all.
+      - name: Set build version
+        shell: bash
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          node -e '
+            const fs=require("fs");const v=process.argv[1];
+            const sub=(p,re,to)=>{const s=fs.readFileSync(p,"utf8");if(!re.test(s))throw new Error("no version field in "+p);fs.writeFileSync(p,s.replace(re,to))};
+            sub("Cargo.toml",/^version = "[^"]+"/m,`version = "${v}"`);
+            sub("Cargo.lock",/(name = "srelens-[a-z-]+"\r?\nversion = ")[^"]+(")/g,`$1${v}$2`);
+          ' "$V"
+          echo "Docker build version: $V"
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -407,8 +497,8 @@ jobs:
             const fs=require("fs");const v=process.argv[1];
             const sub=(p,re,to)=>{const s=fs.readFileSync(p,"utf8");if(!re.test(s))throw new Error("no version field in "+p);fs.writeFileSync(p,s.replace(re,to))};
             sub("apps/desktop/src-tauri/tauri.conf.json",/("version":\s*)"[^"]+"/,`$1"${v}"`);
-            sub("apps/desktop/src-tauri/Cargo.toml",/^version = "[^"]+"/m,`version = "${v}"`);
-            sub("Cargo.lock",/(name = "srelens-desktop"\r?\nversion = ")[^"]+(")/,`$1${v}$2`);
+            sub("Cargo.toml",/^version = "[^"]+"/m,`version = "${v}"`);
+            sub("Cargo.lock",/(name = "srelens-[a-z-]+"\r?\nversion = ")[^"]+(")/g,`$1${v}$2`);
           ' "$V"
           echo "Built version: $V"
 
@@ -588,6 +678,52 @@ jobs:
             gh release upload dev-channel latest.json --repo "$REPO" --clobber
           fi
 
+  # Download-size baseline (issue #31). Runs after the artifacts are published
+  # so it measures exactly what users download, and flags a release whose
+  # installers grew more than 15% over the previous stable one — the size
+  # advantage over an Electron client is a stated reason for the Tauri port,
+  # so a silent regression should not reach a release unnoticed.
+  size-baseline:
+    needs: [version, build]
+    if: ${{ always() && needs.build.result == 'success' && github.ref_name == 'main' && needs.version.outputs.release == 'true' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Compare installer sizes against the previous release
+        env:
+          # Authenticates the Releases API reads (the anonymous rate limit is
+          # low enough for a runner pool to hit it).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Capture the verdict rather than piping it: a `| tee` would mask the
+          # check's exit code and a regression would pass silently. The
+          # comparison table is still published either way.
+          # --tag pins the comparison to the release just built. On main that
+          # release is still a DRAFT until publish-release flips it, and drafts
+          # are excluded from the stable list — without this the check would
+          # compare the two PREVIOUS published releases and never see these
+          # artifacts at all.
+          status=0
+          node scripts/perf/size-baseline.mjs --check-regression --max-growth 15 \
+            --tag "srelens-v${{ needs.version.outputs.version }}" > check.txt || status=$?
+          {
+            echo '### Installer sizes'
+            echo
+            echo '```'
+            cat check.txt
+            echo '```'
+            echo
+            # --tag here too: without it the table would describe the
+            # previous PUBLISHED release, not the draft just built.
+            node scripts/perf/size-baseline.mjs \
+              --tag "srelens-v${{ needs.version.outputs.version }}" || true
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat check.txt
+          exit "$status"
+
   # Attach detached GPG signatures (.asc) to every release asset so users can
   # verify authenticity (`gpg --verify file.asc file`). Activates automatically
   # once the GPG_PRIVATE_KEY secret is set; otherwise it's a no-op.
@@ -631,8 +767,11 @@ jobs:
   # run leaves an invisible draft to delete instead of a public, `latest`-
   # resolving release with no manifest behind it.
   publish-release:
-    needs: [version, build, updater-manifest, sign-artifacts]
-    if: ${{ always() && github.ref_name == 'main' && needs.build.result == 'success' && needs.updater-manifest.result == 'success' && needs.sign-artifacts.result == 'success' && needs.version.outputs.release == 'true' }}
+    # size-baseline included so an over-budget installer never goes public: a
+    # failed check leaves the release as an invisible draft to inspect, exactly
+    # like a failed build or a missing updater manifest.
+    needs: [version, build, updater-manifest, sign-artifacts, size-baseline]
+    if: ${{ always() && github.ref_name == 'main' && needs.build.result == 'success' && needs.updater-manifest.result == 'success' && needs.sign-artifacts.result == 'success' && needs.size-baseline.result == 'success' && needs.version.outputs.release == 'true' }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write

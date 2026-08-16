@@ -2816,6 +2816,60 @@ body {
   accent-color: var(--fl-color-accent);
   cursor: pointer;
 }
+/* Interface scale (#237): −/+ steppers flanking the slider, then Reset.
+   Request timeout (#238): slider plus an exact number box, since the range
+   now runs to two minutes and dragging alone can't land a precise value.
+   Both are the same row shape. */
+.fl-settings-zoom-row,
+.fl-settings-timeout-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.fl-settings-timeout-number {
+  width: 64px;
+  flex-shrink: 0;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-md);
+  background: var(--fl-color-surface);
+  padding: 4px 6px;
+  color: var(--fl-color-text);
+  font-family: inherit;
+  font-size: 13px;
+}
+.fl-settings-timeout-unit {
+  flex-shrink: 0;
+  color: var(--fl-color-text-muted);
+  font-size: 13px;
+}
+.fl-settings-zoom-step {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-md);
+  background: var(--fl-color-surface);
+  color: var(--fl-color-text);
+  cursor: pointer;
+}
+.fl-settings-zoom-step:hover:not(:disabled) {
+  background: var(--fl-color-surface-alt);
+}
+.fl-settings-zoom-step:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.fl-settings-zoom-step > svg {
+  width: 14px;
+  height: 14px;
+}
+.fl-settings-zoom-reset {
+  flex-shrink: 0;
+}
 .fl-settings-context-state {
   margin: 0;
   color: var(--fl-color-text-muted);

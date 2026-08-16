@@ -357,6 +357,9 @@ function ConditionsTable({ conditions, now }: { conditions: Condition[]; now: nu
     {
       key: "age",
       header: "Last transition",
+      // Negated timestamp so ascending = most recent first (smallest age),
+      // matching the age columns; unset timestamps (NaN → 0 here) group last.
+      getSortValue: (c) => -(Date.parse(c.lastTransitionTime ?? "") || 0),
       render: (c) => ageFromTimestamp(c.lastTransitionTime, now),
     },
   ];

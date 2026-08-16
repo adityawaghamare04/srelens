@@ -33,10 +33,12 @@ describe("request timeout setting", () => {
   });
 
   it("clamps values to the supported range", () => {
-    expect(clampTimeoutSecs(100)).toBe(REQUEST_TIMEOUT.MAX);
+    expect(clampTimeoutSecs(REQUEST_TIMEOUT.MAX + 1)).toBe(REQUEST_TIMEOUT.MAX);
     expect(clampTimeoutSecs(0)).toBe(REQUEST_TIMEOUT.MIN);
     expect(clampTimeoutSecs(-5)).toBe(REQUEST_TIMEOUT.MIN);
     expect(clampTimeoutSecs(15)).toBe(15);
+    // A large-cluster budget is now inside the range, not clamped away (#238).
+    expect(clampTimeoutSecs(90)).toBe(90);
     expect(clampTimeoutSecs("nonsense")).toBe(REQUEST_TIMEOUT.DEFAULT);
   });
 

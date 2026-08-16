@@ -33,6 +33,11 @@ jobs:
       - name: Unit tests with coverage
         # Vitest enforces the 85% line-coverage floor (vitest.config.ts).
         run: pnpm -r test
+      - name: Performance-baseline script tests
+        # The size classifier decides which artifacts are compared against
+        # which (#31) — a wrong bucket silently publishes a bogus comparison.
+        # Pure unit tests: no network, so they run on every PR.
+        run: node --test scripts/perf/size-baseline.test.mjs
 
   backend:
     name: backend
@@ -68,21 +73,58 @@ jobs:
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
-      - name: Backend tests with coverage
-        # The Tauri runtime shell (commands, event streams, process entry) only
-        # executes inside a running app/cluster, so it is excluded from the
-        # measurement. The floor is a ratchet: currently 55%, raise it toward
-        # 85% as cluster-bound integration tests land — never lower it.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: srelens-e2e
+      # ONE instrumented run covers everything (#28): the unit suites AND the
+      # #[ignore]d kind-bound suites, accumulated into one report. Running
+      # the integration suites under coverage is what took the honest number
+      # from ~80% to ~86% — the capability e2e executes exactly the closure
+      # bodies (actions, metrics, crds, helm, exec, manifest) that no mocked
+      # unit test reaches — and merging the old separate kind job in here
+      # buys that with one workspace build and one cluster instead of two.
+      # The e2e's own coverage assertion ("every registered capability is
+      # exercised") still runs, unchanged, as part of the suite itself.
+      - name: Tests with coverage — unit suites and kind-bound suites
+        env:
+          SRELENS_E2E_CONTEXT: kind-srelens-e2e
+          # Authenticates the toolbox suite's api.github.com lookups — the
+          # anonymous runner pool 403s intermittently (krew/helm "latest").
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cargo llvm-cov --no-report --workspace
+          cargo llvm-cov --no-report -p srelens-desktop --test e2e -- --ignored --nocapture --test-threads=1
+          cargo llvm-cov --no-report -p srelens-kube --test helm_lifecycle -- --ignored --nocapture --test-threads=1
+      - name: Enforce the coverage floor
+        # Only the process entries stay excluded (lib.rs/main.rs and the
+        # server's bin — they execute solely inside a running app/server).
+        # The command shims that used to sit here are unit-tested through
+        # tauri::test's MockRuntime and count like everything else. The floor
+        # is a ratchet — 55 at first green, 84 when the kind suites started
+        # counting, 85 with the vault-password seams (measured 86.16, issue
+        # #28's acceptance number) — never lower it.
         run: >-
-          cargo llvm-cov --workspace --summary-only --fail-under-lines 55
-          --ignore-filename-regex 'apps/desktop/src-tauri/src/(lib|main|bridge|exec|files|forward|logs|watch)\.rs'
+          cargo llvm-cov report --summary-only --fail-under-lines 85
+          --ignore-filename-regex 'apps/desktop/src-tauri/src/(lib|main)\.rs|crates/server/src/bin/'
 
-  integration:
-    name: integration (kind)
+  # The WebDriver smoke suite (issue #30): the REAL built app — WebView and
+  # all — driven through tauri-driver against a kind cluster. This is the
+  # only job that crosses the WebView↔Rust bridge itself, so a regression in
+  # the transport shim or command registration fails HERE even when every
+  # other suite stays green. Fast subset on PRs; the release workflow runs
+  # the full tier (exec + port-forward) with SRELENS_SMOKE_FULL=1.
+  smoke:
+    name: smoke (webdriver)
+    # PRs only: the push rerun after a merge would duplicate the exact gate
+    # the PR already passed, at ~8 minutes a pop.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      # Tauri v2 system libraries needed to compile the desktop crate.
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -94,7 +136,9 @@ jobs:
             patchelf \
             libgtk-3-dev \
             libssl-dev \
-            build-essential
+            build-essential \
+            webkit2gtk-driver \
+            xvfb
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -102,30 +146,34 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      # tauri-build validates that frontendDist exists at compile time, so the
-      # frontend must be built before the Rust workspace compiles.
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: azure/setup-helm@v4
-        with:
-          version: v3.16.3
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+      # custom-protocol makes the debug binary serve the EMBEDDED frontend
+      # dist; without it the WebView tries the Vite dev server and the whole
+      # window is just "Could not connect to localhost" (first live run's
+      # failure screenshot).
+      - name: Build the app binary
+        run: cargo build -p srelens-desktop --features custom-protocol --profile ci-smoke
       - name: Create kind cluster
         uses: helm/kind-action@v1
         with:
           cluster_name: srelens-e2e
-      # These suites are #[ignore]d (they need a live cluster), so they must be
-      # run explicitly with --ignored. Without this job the e2e coverage
-      # assertion — "every registered capability is exercised end-to-end" —
-      # would never execute, and a new capability could land with no e2e case.
-      - name: Capability suite against the cluster
+      - name: Smoke suite through the real app
         env:
           SRELENS_E2E_CONTEXT: kind-srelens-e2e
+          SRELENS_SMOKE_APP: ${{ github.workspace }}/target/ci-smoke/srelens
+          SRELENS_SMOKE_ARTIFACTS: ${{ runner.temp }}/smoke-artifacts
         run: |
-          cargo test -p srelens-desktop --test e2e -- --ignored --nocapture --test-threads=1
-      - name: Helm lifecycle against the cluster
-        env:
-          SRELENS_E2E_CONTEXT: kind-srelens-e2e
-        run: |
-          cargo test -p srelens-kube --test helm_lifecycle -- --ignored --nocapture --test-threads=1
+          xvfb-run --auto-servernum \
+            cargo test -p srelens-desktop --features custom-protocol --profile ci-smoke --test webdriver_smoke -- --ignored --nocapture
+      - name: Upload failure artifacts (screenshot + app logs)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failure-artifacts
+          path: ${{ runner.temp }}/smoke-artifacts
+          if-no-files-found: ignore

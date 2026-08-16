@@ -12,8 +12,11 @@ import {
   PanelRight,
   RotateCcw,
   Sun,
+  Minus,
+  Plus,
   Timer,
   Upload,
+  ZoomIn,
   FilePlus2,
   X,
   ArrowDown,
@@ -52,6 +55,7 @@ import {
   DEFAULT_WORKSPACE_LAYOUT,
   REQUEST_TIMEOUT,
   contextDisplayName,
+  clampTimeoutSecs,
   getRequestTimeoutSecs,
   loadUpdateChannel,
   saveUpdateChannel,
@@ -61,6 +65,7 @@ import {
   type WorkspaceLayoutSettings,
   orderContexts,
 } from "../lib/settings";
+import { UI_SCALE, applyUiScale, getUiScale, setUiScale, stepUiScale } from "../lib/uiScale";
 import { updateRequestTimeout } from "../lib/requestTimeout";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { McpSettingsSection } from "./McpSettingsSection";
@@ -206,6 +211,35 @@ export function SettingsView({
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
   const [currentVersion, setCurrentVersion] = useState("");
   const [requestTimeout, setRequestTimeout] = useState(() => getRequestTimeoutSecs());
+  // While the exact box is being edited it holds a raw string, so clearing it
+  // to retype is possible: `Number("")` is 0, which would otherwise clamp to
+  // the 1s minimum and push that to the backend on the first keystroke of a
+  // clear-and-retype. null means "not editing — show the committed value".
+  const [timeoutDraft, setTimeoutDraft] = useState<string | null>(null);
+  const changeRequestTimeout = (secs: number) => {
+    if (!Number.isFinite(secs)) return;
+    const clamped = clampTimeoutSecs(secs);
+    setRequestTimeout(clamped);
+    void updateRequestTimeout(clamped);
+  };
+  const editRequestTimeout = (raw: string) => {
+    setTimeoutDraft(raw);
+    // An empty or unparseable draft is an intermediate state: leave the
+    // committed timeout alone until it becomes a number again.
+    if (raw.trim() !== "" && Number.isFinite(Number(raw))) changeRequestTimeout(Number(raw));
+  };
+  const [uiScale, setUiScaleState] = useState(() => getUiScale());
+  // The zoom shortcuts (App.tsx) announce changes so an open slider tracks them.
+  useEffect(() => {
+    const sync = () => setUiScaleState(getUiScale());
+    window.addEventListener("srelens:uiscale", sync);
+    return () => window.removeEventListener("srelens:uiscale", sync);
+  }, []);
+  const changeUiScale = (percent: number) => {
+    const stored = setUiScale(percent);
+    setUiScaleState(stored);
+    applyUiScale(stored);
+  };
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
 
@@ -473,6 +507,63 @@ export function SettingsView({
                   </button>
                 ))}
               </div>
+              {/* Desktop only: on the web the browser's own zoom owns this.
+                  A div, not a label: a label would forward the +/− button
+                  clicks to the slider it wraps. */}
+              {isTauri() && (
+                <div className="fl-settings-width-grid">
+                  <div className="fl-settings-width-control">
+                    <span className="fl-settings-width-control__header">
+                      <ZoomIn aria-hidden="true" />
+                      <span>
+                        <strong>Interface scale</strong>
+                        <small>
+                          Make everything larger or smaller. Also on ⌘/Ctrl with +, −, or 0
+                          anywhere in the app.
+                        </small>
+                      </span>
+                      <output>{uiScale}%</output>
+                    </span>
+                    <span className="fl-settings-zoom-row">
+                      <button
+                        type="button"
+                        className="fl-settings-zoom-step"
+                        onClick={() => changeUiScale(stepUiScale(uiScale, "out"))}
+                        disabled={uiScale <= UI_SCALE.MIN}
+                        aria-label="Decrease interface scale"
+                      >
+                        <Minus aria-hidden="true" />
+                      </button>
+                      <input
+                        type="range"
+                        min={UI_SCALE.MIN}
+                        max={UI_SCALE.MAX}
+                        step={UI_SCALE.STEP}
+                        value={uiScale}
+                        onChange={(event) => changeUiScale(Number(event.target.value))}
+                        aria-label="Interface scale in percent"
+                      />
+                      <button
+                        type="button"
+                        className="fl-settings-zoom-step"
+                        onClick={() => changeUiScale(stepUiScale(uiScale, "in"))}
+                        disabled={uiScale >= UI_SCALE.MAX}
+                        aria-label="Increase interface scale"
+                      >
+                        <Plus aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="fl-btn fl-btn--ghost fl-settings-zoom-reset"
+                        onClick={() => changeUiScale(UI_SCALE.DEFAULT)}
+                        disabled={uiScale === UI_SCALE.DEFAULT}
+                      >
+                        Reset
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              )}
               <div className="fl-settings-theme-grid" aria-label="Theme palette">
                 {THEME_OPTIONS.map((option) => (
                   <button
@@ -555,31 +646,49 @@ export function SettingsView({
                 />
               </label>
 
+              {/* A div, not a label: the number box beside the slider would
+                  otherwise inherit the label and fight it for focus. */}
               {isTauri() && (
                 <div className="fl-settings-width-grid">
-                  <label className="fl-settings-width-control">
+                  <div className="fl-settings-width-control">
                     <span className="fl-settings-width-control__header">
                       <Timer aria-hidden="true" />
                       <span>
                         <strong>Request timeout</strong>
-                        <small>How long to wait for a cluster response. Raise it for large clusters.</small>
+                        <small>
+                          How long to wait for a cluster response. Raise it for large clusters —
+                          a few hundred nodes can need well over the {REQUEST_TIMEOUT.DEFAULT}s
+                          default.
+                        </small>
                       </span>
-                      <output>{requestTimeout}s</output>
                     </span>
-                    <input
-                      type="range"
-                      min={REQUEST_TIMEOUT.MIN}
-                      max={REQUEST_TIMEOUT.MAX}
-                      step="1"
-                      value={requestTimeout}
-                      onChange={(event) => {
-                        const secs = Number(event.target.value);
-                        setRequestTimeout(secs);
-                        void updateRequestTimeout(secs);
-                      }}
-                      aria-label="Cluster request timeout in seconds"
-                    />
-                  </label>
+                    <span className="fl-settings-timeout-row">
+                      <input
+                        type="range"
+                        min={REQUEST_TIMEOUT.MIN}
+                        max={REQUEST_TIMEOUT.MAX}
+                        step="1"
+                        value={requestTimeout}
+                        onChange={(event) => changeRequestTimeout(Number(event.target.value))}
+                        aria-label="Cluster request timeout in seconds"
+                      />
+                      <input
+                        type="number"
+                        className="fl-settings-timeout-number"
+                        min={REQUEST_TIMEOUT.MIN}
+                        max={REQUEST_TIMEOUT.MAX}
+                        step={1}
+                        value={timeoutDraft ?? String(requestTimeout)}
+                        onChange={(event) => editRequestTimeout(event.target.value)}
+                        // Leaving the field settles it back to what was
+                        // actually stored (clamped, or unchanged if abandoned
+                        // empty), so the box never lies about the live value.
+                        onBlur={() => setTimeoutDraft(null)}
+                        aria-label="Cluster request timeout in seconds (exact)"
+                      />
+                      <span className="fl-settings-timeout-unit">s</span>
+                    </span>
+                  </div>
                 </div>
               )}
             </SectionPanel>

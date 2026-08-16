@@ -10,7 +10,7 @@ const REQUEST_TIMEOUT_KEY = "srelens.requestTimeoutSecs";
 const LEGACY_PREFIX = "free" + "lens";
 
 /** Per-request timeout budget (connect + list/get/apply), in seconds. */
-export const REQUEST_TIMEOUT = { MIN: 1, MAX: 30, DEFAULT: 8 } as const;
+export const REQUEST_TIMEOUT = { MIN: 1, MAX: 120, DEFAULT: 8 } as const;
 
 /** Clamp any value to the supported timeout range; fall back to the default. */
 export function clampTimeoutSecs(value: unknown): number {
