@@ -87,6 +87,9 @@ jobs:
       - name: Tests with coverage — unit suites and kind-bound suites
         env:
           SRELENS_E2E_CONTEXT: kind-srelens-e2e
+          # Authenticates the toolbox suite's api.github.com lookups — the
+          # anonymous runner pool 403s intermittently (krew/helm "latest").
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cargo llvm-cov --no-report --workspace
           cargo llvm-cov --no-report -p srelens-desktop --test e2e -- --ignored --nocapture --test-threads=1

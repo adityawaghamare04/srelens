@@ -32,8 +32,20 @@ fn fetch_with_progress(url: &str, app: &AppHandle, tool: &str) -> Result<Vec<u8>
         .user_agent(concat!("srelens/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| InstallError::Download(e.to_string()))?;
-    let mut resp = client
-        .get(url)
+    let mut req = client.get(url);
+    // GitHub API lookups (helm/krew "latest release") from CI runners share
+    // the anonymous rate-limit pool and 403 intermittently; an ambient
+    // GITHUB_TOKEN — set by CI, absent on user machines — authenticates
+    // them. Restricted to api.github.com so the token can never leak to an
+    // arbitrary download host.
+    if github_api_wants_auth(url) {
+        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+            if !token.is_empty() {
+                req = req.bearer_auth(token);
+            }
+        }
+    }
+    let mut resp = req
         .send()
         .map_err(|e| InstallError::Download(e.to_string()))?;
     if !resp.status().is_success() {
@@ -80,4 +92,24 @@ pub async fn start_tool_install(app: AppHandle, tool: String) -> Result<InstallT
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Whether `url` is a GitHub API endpoint an ambient `GITHUB_TOKEN` should
+/// authenticate. Exact-host match on purpose: a bearer token must never ride
+/// along to release-asset CDNs or arbitrary mirrors.
+fn github_api_wants_auth(url: &str) -> bool {
+    url.starts_with("https://api.github.com/")
+}
+
+#[cfg(test)]
+mod github_auth_tests {
+    use super::github_api_wants_auth;
+
+    #[test]
+    fn only_the_github_api_host_gets_the_token() {
+        assert!(github_api_wants_auth("https://api.github.com/repos/helm/helm/releases/latest"));
+        assert!(!github_api_wants_auth("https://github.com/srelens/srelens/releases"));
+        assert!(!github_api_wants_auth("https://get.helm.sh/helm-v3.tar.gz"));
+        assert!(!github_api_wants_auth("https://api.github.com.evil.example/x"));
+    }
 }
