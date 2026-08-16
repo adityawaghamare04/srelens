@@ -38,11 +38,9 @@ fn fetch_with_progress(url: &str, app: &AppHandle, tool: &str) -> Result<Vec<u8>
     // GITHUB_TOKEN — set by CI, absent on user machines — authenticates
     // them. Restricted to api.github.com so the token can never leak to an
     // arbitrary download host.
-    if github_api_wants_auth(url) {
-        if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-            if !token.is_empty() {
-                req = req.bearer_auth(token);
-            }
+    if srelens_kube::toolbox_install::github_api_wants_auth(url) {
+        if let Some(token) = srelens_kube::toolbox_install::ambient_github_token() {
+            req = req.bearer_auth(token);
         }
     }
     let mut resp = req
@@ -94,22 +92,3 @@ pub async fn start_tool_install(app: AppHandle, tool: String) -> Result<InstallT
     .map_err(|e| e.to_string())?
 }
 
-/// Whether `url` is a GitHub API endpoint an ambient `GITHUB_TOKEN` should
-/// authenticate. Exact-host match on purpose: a bearer token must never ride
-/// along to release-asset CDNs or arbitrary mirrors.
-fn github_api_wants_auth(url: &str) -> bool {
-    url.starts_with("https://api.github.com/")
-}
-
-#[cfg(test)]
-mod github_auth_tests {
-    use super::github_api_wants_auth;
-
-    #[test]
-    fn only_the_github_api_host_gets_the_token() {
-        assert!(github_api_wants_auth("https://api.github.com/repos/helm/helm/releases/latest"));
-        assert!(!github_api_wants_auth("https://github.com/srelens/srelens/releases"));
-        assert!(!github_api_wants_auth("https://get.helm.sh/helm-v3.tar.gz"));
-        assert!(!github_api_wants_auth("https://api.github.com.evil.example/x"));
-    }
-}
