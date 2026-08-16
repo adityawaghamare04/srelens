@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { listEvents, type EventSummary } from "../lib/manifest";
 import { Spinner, StatusPill, Table, type Column } from "../ui";
+import { ageSortValue } from "../lib/age";
 
 /**
  * Events involving a single object, shown in its detail drawer. Fetches the
@@ -60,7 +61,7 @@ export function ResourceEvents({
     },
     { key: "reason", header: "Reason", render: (e) => e.reason },
     { key: "message", header: "Message", render: (e) => e.message },
-    { key: "age", header: "Age", render: (e) => e.age },
+    { key: "age", header: "Age", getSortValue: ageSortValue, render: (e) => e.age },
   ];
 
   return (

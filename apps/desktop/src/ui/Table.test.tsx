@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
 import { Table, filterTableData, computeVisibleRange, type Column } from "./Table";
+import { ageSeconds } from "../lib/age";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -125,6 +126,32 @@ describe("Table", () => {
     expect(screen.getAllByRole("row")[1].textContent).toContain("web-2");
     fireEvent.click(sort);
     expect(screen.getAllByRole("row")[1].textContent).toContain("web-2");
+  });
+
+  it("sorts by getSortValue while filtering stays on the visible text (#236)", () => {
+    const rows = [
+      { name: "old", age: "1y" },
+      { name: "older", age: "2y" },
+      { name: "recent", age: "300d" },
+    ];
+    const ageColumns = [
+      { key: "name", header: "Name" },
+      {
+        key: "age",
+        header: "Age",
+        getSortValue: (r: (typeof rows)[number]) => ageSeconds(r.age),
+      },
+    ];
+    render(<Table columns={ageColumns} data={rows} getRowKey={(r) => r.name} />);
+
+    // Ascending: 300d < 1y < 2y — numeric collation on the strings would
+    // have put both years first (1 < 2 < 300).
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Age" }));
+    const names = screen.getAllByRole("row").slice(1).map((r) => r.textContent);
+    expect(names).toEqual(["recent300d", "old1y", "older2y"]);
+
+    // The filter still matches the display text, not the sort key.
+    expect(filterTableData(rows, ageColumns, "1y", null)).toEqual([{ name: "old", age: "1y" }]);
   });
 
   it("selects a column for the toolbar search", () => {
