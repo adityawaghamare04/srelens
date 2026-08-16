@@ -55,6 +55,7 @@ import {
   DEFAULT_WORKSPACE_LAYOUT,
   REQUEST_TIMEOUT,
   contextDisplayName,
+  clampTimeoutSecs,
   getRequestTimeoutSecs,
   loadUpdateChannel,
   saveUpdateChannel,
@@ -210,6 +211,23 @@ export function SettingsView({
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
   const [currentVersion, setCurrentVersion] = useState("");
   const [requestTimeout, setRequestTimeout] = useState(() => getRequestTimeoutSecs());
+  // While the exact box is being edited it holds a raw string, so clearing it
+  // to retype is possible: `Number("")` is 0, which would otherwise clamp to
+  // the 1s minimum and push that to the backend on the first keystroke of a
+  // clear-and-retype. null means "not editing — show the committed value".
+  const [timeoutDraft, setTimeoutDraft] = useState<string | null>(null);
+  const changeRequestTimeout = (secs: number) => {
+    if (!Number.isFinite(secs)) return;
+    const clamped = clampTimeoutSecs(secs);
+    setRequestTimeout(clamped);
+    void updateRequestTimeout(clamped);
+  };
+  const editRequestTimeout = (raw: string) => {
+    setTimeoutDraft(raw);
+    // An empty or unparseable draft is an intermediate state: leave the
+    // committed timeout alone until it becomes a number again.
+    if (raw.trim() !== "" && Number.isFinite(Number(raw))) changeRequestTimeout(Number(raw));
+  };
   const [uiScale, setUiScaleState] = useState(() => getUiScale());
   // The zoom shortcuts (App.tsx) announce changes so an open slider tracks them.
   useEffect(() => {
@@ -628,31 +646,49 @@ export function SettingsView({
                 />
               </label>
 
+              {/* A div, not a label: the number box beside the slider would
+                  otherwise inherit the label and fight it for focus. */}
               {isTauri() && (
                 <div className="fl-settings-width-grid">
-                  <label className="fl-settings-width-control">
+                  <div className="fl-settings-width-control">
                     <span className="fl-settings-width-control__header">
                       <Timer aria-hidden="true" />
                       <span>
                         <strong>Request timeout</strong>
-                        <small>How long to wait for a cluster response. Raise it for large clusters.</small>
+                        <small>
+                          How long to wait for a cluster response. Raise it for large clusters —
+                          a few hundred nodes can need well over the {REQUEST_TIMEOUT.DEFAULT}s
+                          default.
+                        </small>
                       </span>
-                      <output>{requestTimeout}s</output>
                     </span>
-                    <input
-                      type="range"
-                      min={REQUEST_TIMEOUT.MIN}
-                      max={REQUEST_TIMEOUT.MAX}
-                      step="1"
-                      value={requestTimeout}
-                      onChange={(event) => {
-                        const secs = Number(event.target.value);
-                        setRequestTimeout(secs);
-                        void updateRequestTimeout(secs);
-                      }}
-                      aria-label="Cluster request timeout in seconds"
-                    />
-                  </label>
+                    <span className="fl-settings-timeout-row">
+                      <input
+                        type="range"
+                        min={REQUEST_TIMEOUT.MIN}
+                        max={REQUEST_TIMEOUT.MAX}
+                        step="1"
+                        value={requestTimeout}
+                        onChange={(event) => changeRequestTimeout(Number(event.target.value))}
+                        aria-label="Cluster request timeout in seconds"
+                      />
+                      <input
+                        type="number"
+                        className="fl-settings-timeout-number"
+                        min={REQUEST_TIMEOUT.MIN}
+                        max={REQUEST_TIMEOUT.MAX}
+                        step={1}
+                        value={timeoutDraft ?? String(requestTimeout)}
+                        onChange={(event) => editRequestTimeout(event.target.value)}
+                        // Leaving the field settles it back to what was
+                        // actually stored (clamped, or unchanged if abandoned
+                        // empty), so the box never lies about the live value.
+                        onBlur={() => setTimeoutDraft(null)}
+                        aria-label="Cluster request timeout in seconds (exact)"
+                      />
+                      <span className="fl-settings-timeout-unit">s</span>
+                    </span>
+                  </div>
                 </div>
               )}
             </SectionPanel>

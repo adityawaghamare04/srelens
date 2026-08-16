@@ -952,8 +952,8 @@ describe("ResourceBrowser", () => {
     );
     render(<ResourceBrowser context="kind-dev" kind="deployments" />);
 
-    // The real error's title surfaces (timeout → "Can't reach the cluster").
-    expect(await screen.findByText(/Can't reach the cluster/)).toBeDefined();
+    // The real error's title surfaces (timeout → "Request timed out").
+    expect(await screen.findByText(/Request timed out/)).toBeDefined();
     // Not the permission wording, and not auto-scoped to the declared namespace.
     expect(screen.queryByText(/don.t have permission/)).toBeNull();
     expect(screen.queryByText(/Scoped to namespace/)).toBeNull();
@@ -1006,7 +1006,7 @@ describe("ResourceBrowser", () => {
     listNamespacesMock.mockResolvedValue({ namespaces: ["default"] });
     listNodesMock.mockResolvedValue({ error: "list nodes timed out" });
     render(<ResourceBrowser context="kind-dev" kind="nodes" />);
-    await waitFor(() => expect(screen.getByText("Can't reach the cluster")).toBeDefined());
+    await waitFor(() => expect(screen.getByText("Request timed out")).toBeDefined());
     expect(screen.queryByText(/list nodes timed out/)).toBeNull();
   });
 });

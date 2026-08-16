@@ -2816,12 +2816,32 @@ body {
   accent-color: var(--fl-color-accent);
   cursor: pointer;
 }
-/* Interface scale (#237): −/+ steppers flanking the slider, then Reset. */
-.fl-settings-zoom-row {
+/* Interface scale (#237): −/+ steppers flanking the slider, then Reset.
+   Request timeout (#238): slider plus an exact number box, since the range
+   now runs to two minutes and dragging alone can't land a precise value.
+   Both are the same row shape. */
+.fl-settings-zoom-row,
+.fl-settings-timeout-row {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 10px;
+}
+.fl-settings-timeout-number {
+  width: 64px;
+  flex-shrink: 0;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-md);
+  background: var(--fl-color-surface);
+  padding: 4px 6px;
+  color: var(--fl-color-text);
+  font-family: inherit;
+  font-size: 13px;
+}
+.fl-settings-timeout-unit {
+  flex-shrink: 0;
+  color: var(--fl-color-text-muted);
+  font-size: 13px;
 }
 .fl-settings-zoom-step {
   display: inline-flex;

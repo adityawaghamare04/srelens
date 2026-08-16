@@ -255,6 +255,49 @@ describe("SettingsView", () => {
     expect(await screen.findByRole("button", { name: "Check for updates" })).toBeDefined();
   });
 
+  it("sets an exact large-cluster request timeout from the number box (#238)", async () => {
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Kubernetes/ }));
+
+    const exact = screen.getByRole("spinbutton", { name: "Cluster request timeout in seconds (exact)" });
+    const slider = screen.getByRole("slider", { name: "Cluster request timeout in seconds" });
+    // 90s was above the old 30s ceiling — the whole point of #238.
+    fireEvent.change(exact, { target: { value: "90" } });
+    expect((slider as HTMLInputElement).value).toBe("90");
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("90");
+
+    // Out-of-range typing clamps what's stored; the box settles on blur.
+    fireEvent.change(exact, { target: { value: "9999" } });
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("120");
+    fireEvent.blur(exact);
+    expect((exact as HTMLInputElement).value).toBe("120");
+
+    // Clearing to retype is an intermediate state, not a 1s timeout: the
+    // committed value must survive the empty box untouched.
+    fireEvent.change(exact, { target: { value: "" } });
+    expect((exact as HTMLInputElement).value).toBe("");
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("120");
+    fireEvent.change(exact, { target: { value: "45" } });
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("45");
+    expect((slider as HTMLInputElement).value).toBe("45");
+  });
+
   it("scales the interface from the Appearance slider and persists it (#237)", () => {
     render(
       <SettingsView
