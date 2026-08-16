@@ -9,6 +9,7 @@ import {
 import { listJobs, type JobSummary } from "../lib/controllers";
 import { Spinner, StatusPill, Table, type StatusKind, type Column } from "../ui";
 import type { OpenResource } from "../lib/resourceNavigation";
+import { ageSortValue } from "../lib/age";
 
 function phaseKind(phase: string): StatusKind {
   if (phase === "Running" || phase === "Succeeded") return "success";
@@ -73,7 +74,7 @@ export function DeployRevisions({
     },
     { key: "name", header: "Name", render: (r) => <span className="fl-mono">{r.name}</span> },
     { key: "pods", header: "Pods", render: (r) => `${r.ready}/${r.desired}` },
-    { key: "age", header: "Age", render: (r) => r.age },
+    { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => r.age },
   ];
 
   return (
@@ -145,7 +146,7 @@ export function CronJobJobs({
       },
     },
     { key: "duration", header: "Duration", render: (j) => j.duration || "—" },
-    { key: "age", header: "Age", render: (j) => j.age },
+    { key: "age", header: "Age", getSortValue: ageSortValue, render: (j) => j.age },
   ];
 
   return (

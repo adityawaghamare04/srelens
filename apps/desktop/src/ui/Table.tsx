@@ -18,6 +18,11 @@ export interface Column<T> {
   render?: (row: T) => React.ReactNode;
   /** Value used for sorting and filtering when it differs from `row[key]`. */
   getValue?: (row: T) => unknown;
+  /** Sort-only value, overriding `getValue`/`row[key]` for the comparator —
+   *  for columns whose display text doesn't order correctly (e.g. compact
+   *  ages, where "1y" must outrank "300d") while filtering stays on the
+   *  visible text. */
+  getSortValue?: (row: T) => unknown;
   sortable?: boolean;
   filterable?: boolean;
   minWidth?: number;
@@ -127,8 +132,8 @@ export function Table<T>({
     return data
       .map((row, index) => ({ row, index }))
       .sort((a, b) => {
-        const left = getColumnValue(a.row, column);
-        const right = getColumnValue(b.row, column);
+        const left = column.getSortValue ? column.getSortValue(a.row) : getColumnValue(a.row, column);
+        const right = column.getSortValue ? column.getSortValue(b.row) : getColumnValue(b.row, column);
         let result: number;
         if (typeof left === "number" && typeof right === "number") result = left - right;
         else result = collator.compare(String(left ?? ""), String(right ?? ""));
