@@ -365,6 +365,16 @@
     "destructive": false
   },
   {
+    "id": "settings.get",
+    "readOnly": true,
+    "destructive": false
+  },
+  {
+    "id": "settings.set",
+    "readOnly": false,
+    "destructive": false
+  },
+  {
     "id": "toolbox.diagnoseContext",
     "readOnly": true,
     "destructive": false

@@ -396,6 +396,13 @@ bearer token good for this loopback MCP server and nothing else.
 7. **Updates** — version, release channel, and the in-app updater
    ([below](#updating)).
 
+Desktop preferences are stored in a schema-versioned `settings.json` under the
+OS application-config directory (`app.srelens.desktop`). That location is tied
+to the application identifier rather than the executable name, so preferences
+survive dev/installed builds and binary renames. The first launch after an
+upgrade imports the previous WebView `localStorage` values automatically. Web
+mode continues to keep each user's settings in the server database.
+
 ## Updating
 
 Open **Settings → Updates** to check for and install new versions. Choose the

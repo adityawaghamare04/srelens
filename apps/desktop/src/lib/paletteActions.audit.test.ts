@@ -21,6 +21,7 @@ const EXCLUDED: Record<string, string> = {
   "toolbox.installPlugin": "toolbox installs live in the Toolbox view",
   "toolbox.upgradePlugin": "toolbox installs live in the Toolbox view",
   "toolbox.removePlugin": "toolbox installs live in the Toolbox view",
+  "settings.set": "settings writes are performed by controls in Settings and other stateful views",
 };
 
 describe("command palette action coverage", () => {

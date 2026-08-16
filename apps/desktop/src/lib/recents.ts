@@ -1,4 +1,5 @@
 import type { CrdRef } from "./crds";
+import { settingsStorage } from "./settingsStorage";
 
 /** A recently-opened palette target, persisted across sessions. */
 export type RecentItem =
@@ -19,7 +20,7 @@ export function recentId(r: RecentItem): string {
 
 export function getRecents(): RecentItem[] {
   try {
-    const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY);
+    const raw = settingsStorage.getItem(KEY) ?? settingsStorage.getItem(LEGACY_KEY);
     return raw ? (JSON.parse(raw) as RecentItem[]) : [];
   } catch {
     return [];
@@ -31,7 +32,7 @@ export function pushRecent(item: RecentItem): void {
   const id = recentId(item);
   const next = [item, ...getRecents().filter((r) => recentId(r) !== id)].slice(0, MAX);
   try {
-    localStorage.setItem(KEY, JSON.stringify(next));
+    settingsStorage.setItem(KEY, JSON.stringify(next));
   } catch {
     // ignore quota / unavailable storage
   }

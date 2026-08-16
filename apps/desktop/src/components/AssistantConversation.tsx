@@ -18,6 +18,7 @@ import {
   type StoredToolCall,
 } from "../lib/chatHistory";
 import { relativeTime } from "../lib/relativeTime";
+import { settingsStorage } from "../lib/settingsStorage";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 
 export type AssistantContext = { context: string; namespace?: string; kind?: string; name?: string };
@@ -104,19 +105,19 @@ export function stripDataUri(uri: string): string {
 /** Persist the agent the user last actually used so a fresh chat defaults back
  * to it instead of always falling to the first-available (Claude). Stored
  * globally (not per-session — that's `Session.agentKind`); guarded so a missing
- * `localStorage` (or a private-mode throw) degrades to the first-available
+ * persistent storage (or a private-mode throw) degrades to the first-available
  * default rather than erroring. */
 const LAST_AGENT_KEY = "srelens.assistant.lastAgent";
 function loadLastAgent(): string | null {
   try {
-    return localStorage.getItem(LAST_AGENT_KEY);
+    return settingsStorage.getItem(LAST_AGENT_KEY);
   } catch {
     return null;
   }
 }
 function saveLastAgent(kind: string) {
   try {
-    if (kind) localStorage.setItem(LAST_AGENT_KEY, kind);
+    if (kind) settingsStorage.setItem(LAST_AGENT_KEY, kind);
   } catch {
     /* ignore — persistence is a convenience, not required */
   }
