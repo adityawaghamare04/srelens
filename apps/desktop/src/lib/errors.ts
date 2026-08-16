@@ -94,10 +94,15 @@ export function describeError(input: unknown): FriendlyError {
   }
 
   if (/timed out|timeout|deadline exceeded/.test(lower)) {
+    // The remedy is platform-specific: the Settings slider only exists on the
+    // desktop, so pointing a web user at it would be an impossible
+    // instruction. The server honours SRELENS_TIMEOUT_SECS instead.
+    const raiseIt = isTauri()
+      ? "raise Request timeout in Settings → Kubernetes"
+      : "ask whoever runs this srelens server to raise its SRELENS_TIMEOUT_SECS setting";
     return {
       title: "Request timed out",
-      detail:
-        "The Kubernetes API server didn't respond in time. Large clusters can need longer than the default — raise Request timeout in Settings → Kubernetes. If it still times out, check that the cluster is reachable: for a remote cluster confirm your VPN or network connection and that the current context points at the right server.",
+      detail: `The Kubernetes API server didn't respond in time. Large clusters can need longer than the default — ${raiseIt}. If it still times out, check that the cluster is reachable: for a remote cluster confirm your VPN or network connection and that the current context points at the right server.`,
       raw,
     };
   }

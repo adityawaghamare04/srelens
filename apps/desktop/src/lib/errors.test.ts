@@ -55,10 +55,20 @@ describe("describeError", () => {
     const result = describeError("handler error: list namespaces timed out");
     expect(result.title).toBe("Request timed out");
     expect(result.detail).toMatch(/didn't respond in time/);
-    // Points at the setting that fixes it on a large cluster (#238).
-    expect(result.detail).toMatch(/Request timeout in Settings/);
     expect(result.detail).not.toMatch(/handler error/);
     expect(result.raw).toBe("list namespaces timed out");
+  });
+
+  it("points each platform at the timeout it can actually change (#238)", () => {
+    // Web (jsdom default): the Settings slider doesn't exist there, so the
+    // server-side env var is the only real remedy.
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+    expect(describeError("list pods timed out").detail).toMatch(/SRELENS_TIMEOUT_SECS/);
+    expect(describeError("list pods timed out").detail).not.toMatch(/Settings → Kubernetes/);
+
+    (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
+    expect(describeError("list pods timed out").detail).toMatch(/Request timeout in Settings/);
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
   });
 
   it("classifies a refused connection", () => {

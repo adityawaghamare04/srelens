@@ -281,9 +281,20 @@ describe("SettingsView", () => {
     expect((slider as HTMLInputElement).value).toBe("90");
     expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("90");
 
-    // Out-of-range typing clamps rather than reaching the backend as junk.
+    // Out-of-range typing clamps what's stored; the box settles on blur.
     fireEvent.change(exact, { target: { value: "9999" } });
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("120");
+    fireEvent.blur(exact);
     expect((exact as HTMLInputElement).value).toBe("120");
+
+    // Clearing to retype is an intermediate state, not a 1s timeout: the
+    // committed value must survive the empty box untouched.
+    fireEvent.change(exact, { target: { value: "" } });
+    expect((exact as HTMLInputElement).value).toBe("");
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("120");
+    fireEvent.change(exact, { target: { value: "45" } });
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("45");
+    expect((slider as HTMLInputElement).value).toBe("45");
   });
 
   it("checks the dev channel when selected and persists the choice", async () => {

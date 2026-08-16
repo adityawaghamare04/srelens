@@ -207,13 +207,22 @@ export function SettingsView({
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
   const [currentVersion, setCurrentVersion] = useState("");
   const [requestTimeout, setRequestTimeout] = useState(() => getRequestTimeoutSecs());
-  // An empty or half-typed number box must not push a junk timeout to the
-  // backend; clamp first and keep the last good value on screen.
+  // While the exact box is being edited it holds a raw string, so clearing it
+  // to retype is possible: `Number("")` is 0, which would otherwise clamp to
+  // the 1s minimum and push that to the backend on the first keystroke of a
+  // clear-and-retype. null means "not editing — show the committed value".
+  const [timeoutDraft, setTimeoutDraft] = useState<string | null>(null);
   const changeRequestTimeout = (secs: number) => {
     if (!Number.isFinite(secs)) return;
     const clamped = clampTimeoutSecs(secs);
     setRequestTimeout(clamped);
     void updateRequestTimeout(clamped);
+  };
+  const editRequestTimeout = (raw: string) => {
+    setTimeoutDraft(raw);
+    // An empty or unparseable draft is an intermediate state: leave the
+    // committed timeout alone until it becomes a number again.
+    if (raw.trim() !== "" && Number.isFinite(Number(raw))) changeRequestTimeout(Number(raw));
   };
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
@@ -596,8 +605,12 @@ export function SettingsView({
                         min={REQUEST_TIMEOUT.MIN}
                         max={REQUEST_TIMEOUT.MAX}
                         step={1}
-                        value={requestTimeout}
-                        onChange={(event) => changeRequestTimeout(Number(event.target.value))}
+                        value={timeoutDraft ?? String(requestTimeout)}
+                        onChange={(event) => editRequestTimeout(event.target.value)}
+                        // Leaving the field settles it back to what was
+                        // actually stored (clamped, or unchanged if abandoned
+                        // empty), so the box never lies about the live value.
+                        onBlur={() => setTimeoutDraft(null)}
                         aria-label="Cluster request timeout in seconds (exact)"
                       />
                       <span className="fl-settings-timeout-unit">s</span>
