@@ -95,15 +95,16 @@ jobs:
           cargo llvm-cov --no-report -p srelens-desktop --test e2e -- --ignored --nocapture --test-threads=1
           cargo llvm-cov --no-report -p srelens-kube --test helm_lifecycle -- --ignored --nocapture --test-threads=1
       - name: Enforce the coverage floor
-        # The Tauri runtime shell (bridge, event streams, process entry) and
-        # the server's process-entry binary only execute inside a running
-        # app/server, so they stay excluded. The floor is a ratchet — 55 at
-        # first green, 84 when the kind suites started counting, 85 with the
-        # vault-password seams (measured 86.16, issue #28's acceptance
-        # number) — never lower it.
+        # Only the process entries stay excluded (lib.rs/main.rs and the
+        # server's bin — they execute solely inside a running app/server).
+        # The command shims that used to sit here are unit-tested through
+        # tauri::test's MockRuntime and count like everything else. The floor
+        # is a ratchet — 55 at first green, 84 when the kind suites started
+        # counting, 85 with the vault-password seams (measured 86.16, issue
+        # #28's acceptance number) — never lower it.
         run: >-
           cargo llvm-cov report --summary-only --fail-under-lines 85
-          --ignore-filename-regex 'apps/desktop/src-tauri/src/(lib|main|bridge|exec|files|forward|logs|watch)\.rs|crates/server/src/bin/'
+          --ignore-filename-regex 'apps/desktop/src-tauri/src/(lib|main)\.rs|crates/server/src/bin/'
 
   # The WebDriver smoke suite (issue #30): the REAL built app — WebView and
   # all — driven through tauri-driver against a kind cluster. This is the
