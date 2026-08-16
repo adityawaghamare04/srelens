@@ -53,8 +53,10 @@ describe("cleanErrorMessage", () => {
 describe("describeError", () => {
   it("classifies a connection timeout and never leaks the handler prefix", () => {
     const result = describeError("handler error: list namespaces timed out");
-    expect(result.title).toBe("Can't reach the cluster");
+    expect(result.title).toBe("Request timed out");
     expect(result.detail).toMatch(/didn't respond in time/);
+    // Points at the setting that fixes it on a large cluster (#238).
+    expect(result.detail).toMatch(/Request timeout in Settings/);
     expect(result.detail).not.toMatch(/handler error/);
     expect(result.raw).toBe("list namespaces timed out");
   });

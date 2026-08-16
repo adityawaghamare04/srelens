@@ -21,8 +21,11 @@ use crate::context_resolve::resolve_context;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 8;
 /// Smallest timeout a user may configure, in seconds.
 pub const MIN_TIMEOUT_SECS: u64 = 1;
-/// Largest timeout a user may configure, in seconds.
-pub const MAX_TIMEOUT_SECS: u64 = 30;
+/// Largest timeout a user may configure, in seconds. Raised from 30 for
+/// issue #238: on large clusters (100+ nodes) a single all-namespace list can
+/// legitimately outrun half a minute, and the old ceiling left those users no
+/// setting that would let the call finish.
+pub const MAX_TIMEOUT_SECS: u64 = 120;
 
 /// Environment variable that overrides the default timeout at startup — lets
 /// headless/MCP runs (which have no Settings UI) raise it for large clusters.
@@ -460,7 +463,7 @@ mod tests {
     #[test]
     fn timeout_setter_clamps_to_supported_range() {
         // Above the max is clamped down.
-        assert_eq!(set_request_timeout_secs(120), MAX_TIMEOUT_SECS);
+        assert_eq!(set_request_timeout_secs(MAX_TIMEOUT_SECS + 1), MAX_TIMEOUT_SECS);
         assert_eq!(request_timeout(), Duration::from_secs(MAX_TIMEOUT_SECS));
         // Zero is clamped up to the minimum.
         assert_eq!(set_request_timeout_secs(0), MIN_TIMEOUT_SECS);

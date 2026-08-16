@@ -52,6 +52,7 @@ import {
   DEFAULT_WORKSPACE_LAYOUT,
   REQUEST_TIMEOUT,
   contextDisplayName,
+  clampTimeoutSecs,
   getRequestTimeoutSecs,
   loadUpdateChannel,
   saveUpdateChannel,
@@ -206,6 +207,14 @@ export function SettingsView({
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel>(() => loadUpdateChannel());
   const [currentVersion, setCurrentVersion] = useState("");
   const [requestTimeout, setRequestTimeout] = useState(() => getRequestTimeoutSecs());
+  // An empty or half-typed number box must not push a junk timeout to the
+  // backend; clamp first and keep the last good value on screen.
+  const changeRequestTimeout = (secs: number) => {
+    if (!Number.isFinite(secs)) return;
+    const clamped = clampTimeoutSecs(secs);
+    setRequestTimeout(clamped);
+    void updateRequestTimeout(clamped);
+  };
   const draggedContextRef = useRef<string | null>(null);
   const dropTargetRef = useRef<string | null>(null);
 
@@ -555,31 +564,45 @@ export function SettingsView({
                 />
               </label>
 
+              {/* A div, not a label: the number box beside the slider would
+                  otherwise inherit the label and fight it for focus. */}
               {isTauri() && (
                 <div className="fl-settings-width-grid">
-                  <label className="fl-settings-width-control">
+                  <div className="fl-settings-width-control">
                     <span className="fl-settings-width-control__header">
                       <Timer aria-hidden="true" />
                       <span>
                         <strong>Request timeout</strong>
-                        <small>How long to wait for a cluster response. Raise it for large clusters.</small>
+                        <small>
+                          How long to wait for a cluster response. Raise it for large clusters —
+                          a few hundred nodes can need well over the {REQUEST_TIMEOUT.DEFAULT}s
+                          default.
+                        </small>
                       </span>
-                      <output>{requestTimeout}s</output>
                     </span>
-                    <input
-                      type="range"
-                      min={REQUEST_TIMEOUT.MIN}
-                      max={REQUEST_TIMEOUT.MAX}
-                      step="1"
-                      value={requestTimeout}
-                      onChange={(event) => {
-                        const secs = Number(event.target.value);
-                        setRequestTimeout(secs);
-                        void updateRequestTimeout(secs);
-                      }}
-                      aria-label="Cluster request timeout in seconds"
-                    />
-                  </label>
+                    <span className="fl-settings-timeout-row">
+                      <input
+                        type="range"
+                        min={REQUEST_TIMEOUT.MIN}
+                        max={REQUEST_TIMEOUT.MAX}
+                        step="1"
+                        value={requestTimeout}
+                        onChange={(event) => changeRequestTimeout(Number(event.target.value))}
+                        aria-label="Cluster request timeout in seconds"
+                      />
+                      <input
+                        type="number"
+                        className="fl-settings-timeout-number"
+                        min={REQUEST_TIMEOUT.MIN}
+                        max={REQUEST_TIMEOUT.MAX}
+                        step={1}
+                        value={requestTimeout}
+                        onChange={(event) => changeRequestTimeout(Number(event.target.value))}
+                        aria-label="Cluster request timeout in seconds (exact)"
+                      />
+                      <span className="fl-settings-timeout-unit">s</span>
+                    </span>
+                  </div>
                 </div>
               )}
             </SectionPanel>

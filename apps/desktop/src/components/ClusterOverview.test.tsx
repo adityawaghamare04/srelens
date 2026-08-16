@@ -192,7 +192,7 @@ describe("ClusterOverview error handling", () => {
     render(<ClusterOverview context="kind-unreachable" />);
 
     // Friendly title, not the raw backend string.
-    expect(await screen.findByText("Can't reach the cluster")).toBeDefined();
+    expect(await screen.findByText("Request timed out")).toBeDefined();
     expect(screen.getByText(/didn't respond in time/)).toBeDefined();
     expect(screen.queryByText(/handler error/)).toBeNull();
   });

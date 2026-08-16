@@ -254,6 +254,38 @@ describe("SettingsView", () => {
     expect(await screen.findByRole("button", { name: "Check for updates" })).toBeDefined();
   });
 
+  it("sets an exact large-cluster request timeout from the number box (#238)", async () => {
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Kubernetes/ }));
+
+    const exact = screen.getByRole("spinbutton", { name: "Cluster request timeout in seconds (exact)" });
+    const slider = screen.getByRole("slider", { name: "Cluster request timeout in seconds" });
+    // 90s was above the old 30s ceiling — the whole point of #238.
+    fireEvent.change(exact, { target: { value: "90" } });
+    expect((slider as HTMLInputElement).value).toBe("90");
+    expect(localStorage.getItem("srelens.requestTimeoutSecs")).toBe("90");
+
+    // Out-of-range typing clamps rather than reaching the backend as junk.
+    fireEvent.change(exact, { target: { value: "9999" } });
+    expect((exact as HTMLInputElement).value).toBe("120");
+  });
+
   it("checks the dev channel when selected and persists the choice", async () => {
     updaterMocks.checkForUpdate.mockResolvedValue(null);
     render(

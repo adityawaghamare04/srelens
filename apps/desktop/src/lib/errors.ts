@@ -95,9 +95,9 @@ export function describeError(input: unknown): FriendlyError {
 
   if (/timed out|timeout|deadline exceeded/.test(lower)) {
     return {
-      title: "Can't reach the cluster",
+      title: "Request timed out",
       detail:
-        "The Kubernetes API server didn't respond in time. Check that the cluster is running and reachable — if it's remote, confirm your VPN or network connection and that the current context points at the right server.",
+        "The Kubernetes API server didn't respond in time. Large clusters can need longer than the default — raise Request timeout in Settings → Kubernetes. If it still times out, check that the cluster is reachable: for a remote cluster confirm your VPN or network connection and that the current context points at the right server.",
       raw,
     };
   }
