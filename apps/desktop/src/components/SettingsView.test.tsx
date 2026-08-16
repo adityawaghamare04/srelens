@@ -31,6 +31,7 @@ vi.mock("../lib/updater", () => updaterMocks);
 const transportMocks = vi.hoisted(() => ({
   appVersion: vi.fn(async () => "0.1.0"),
   relaunchApp: vi.fn(async () => {}),
+  setWebviewZoom: vi.fn(async () => {}),
 }));
 vi.mock("../transport/transport", () => transportMocks);
 
@@ -252,6 +253,48 @@ describe("SettingsView", () => {
     );
     // The Updates pane is shown without clicking the nav first.
     expect(await screen.findByRole("button", { name: "Check for updates" })).toBeDefined();
+  });
+
+  it("scales the interface from the Appearance slider and persists it (#237)", () => {
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+
+    const slider = screen.getByRole("slider", { name: "Interface scale in percent" });
+    fireEvent.change(slider, { target: { value: "120" } });
+    // Native webview zoom, not a CSS knob — the stylesheet is px-based.
+    expect(transportMocks.setWebviewZoom).toHaveBeenCalledWith(1.2);
+    expect(localStorage.getItem("srelens.uiScale")).toBe("120");
+
+    // The steppers move one step and stay in sync with the slider.
+    fireEvent.click(screen.getByRole("button", { name: "Increase interface scale" }));
+    expect((slider as HTMLInputElement).value).toBe("130");
+    expect(transportMocks.setWebviewZoom).toHaveBeenLastCalledWith(1.3);
+    fireEvent.click(screen.getByRole("button", { name: "Decrease interface scale" }));
+    expect((slider as HTMLInputElement).value).toBe("120");
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect((slider as HTMLInputElement).value).toBe("100");
+    expect(transportMocks.setWebviewZoom).toHaveBeenLastCalledWith(1);
+
+    // The zoom shortcuts announce their changes; the open slider follows.
+    localStorage.setItem("srelens.uiScale", "130");
+    fireEvent(window, new Event("srelens:uiscale"));
+    expect((slider as HTMLInputElement).value).toBe("130");
   });
 
   it("checks the dev channel when selected and persists the choice", async () => {

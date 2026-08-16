@@ -13,3 +13,4 @@ export const on = impl.on;
 export const subscribe = impl.subscribe;
 export const relaunchApp = impl.relaunchApp;
 export const appVersion = impl.appVersion;
+export const setWebviewZoom = impl.setWebviewZoom;

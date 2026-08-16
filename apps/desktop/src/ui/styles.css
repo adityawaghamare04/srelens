@@ -2816,6 +2816,40 @@ body {
   accent-color: var(--fl-color-accent);
   cursor: pointer;
 }
+/* Interface scale (#237): −/+ steppers flanking the slider, then Reset. */
+.fl-settings-zoom-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.fl-settings-zoom-step {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--fl-color-border);
+  border-radius: var(--fl-radius-md);
+  background: var(--fl-color-surface);
+  color: var(--fl-color-text);
+  cursor: pointer;
+}
+.fl-settings-zoom-step:hover:not(:disabled) {
+  background: var(--fl-color-surface-alt);
+}
+.fl-settings-zoom-step:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.fl-settings-zoom-step > svg {
+  width: 14px;
+  height: 14px;
+}
+.fl-settings-zoom-reset {
+  flex-shrink: 0;
+}
 .fl-settings-context-state {
   margin: 0;
   color: var(--fl-color-text-muted);
