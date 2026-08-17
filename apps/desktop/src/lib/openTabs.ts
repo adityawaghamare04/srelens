@@ -1,10 +1,14 @@
-// Web-mode persistence of the open workspace tabs. In the desktop shell the
-// window stays open, so tab state lives only in memory; in a browser a reload
-// wipes React state and would dump the user back on the landing page. To avoid
-// that, web mode serializes the open tabs + active tab to localStorage and
-// rehydrates them on load. Desktop is a no-op (isTauri guard).
+// Session restore: the open workspace tabs + active tab survive a restart.
+//
+// This began as web-only (a browser reload wipes React state and dumps the
+// user on the landing page). Issue #159 extends it to the desktop, which used
+// to start blank every launch. Both now go through `settingsStorage`, so the
+// desktop writes into the durable settings file (#34) while web keeps using
+// localStorage — one code path, no platform branch.
 
-import { isTauri } from "../transport/platform";
+import { loadRestoreSession } from "./settings";
+import { settingsStorage } from "./settingsStorage";
+import type { CrdRef } from "./crds";
 import type { ViewTab } from "../App";
 
 const KEY = "srelens.openTabs";
@@ -28,9 +32,12 @@ function isRestorable(t: ViewTab): boolean {
  * to the landing page.
  */
 export function loadOpenTabs(): PersistedWorkspace | null {
-  if (isTauri()) return null;
+  // Opting out starts fresh but deliberately leaves the stored snapshot
+  // alone, so turning the setting back on restores the last real session
+  // instead of nothing.
+  if (!loadRestoreSession()) return null;
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = settingsStorage.getItem(KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedWorkspace;
     if (!parsed || !Array.isArray(parsed.tabs)) return null;
@@ -61,18 +68,78 @@ export function nextTabId(tabs: ViewTab[]): number {
 
 /** Persist the open tabs + active tab (web-only, best-effort). */
 export function saveOpenTabs(tabs: ViewTab[], activeTabId: number | null): void {
-  if (isTauri()) return;
+  if (!loadRestoreSession()) return;
   try {
     const persist = tabs.filter(isRestorable);
     if (persist.length === 0) {
-      localStorage.removeItem(KEY);
+      settingsStorage.removeItem(KEY);
       return;
     }
     const active = persist.some((t) => t.id === activeTabId)
       ? activeTabId
       : persist[0].id;
-    localStorage.setItem(KEY, JSON.stringify({ tabs: persist, activeTabId: active }));
+    settingsStorage.setItem(KEY, JSON.stringify({ tabs: persist, activeTabId: active }));
   } catch {
-    // localStorage full or disabled — best-effort, ignore.
+    // Storage full, disabled, or the settings write failed — best-effort.
   }
+}
+
+/**
+ * Drop restored tabs whose cluster is no longer among the discovered
+ * contexts, returning the survivors and how many were dropped. Cluster-less
+ * tabs (Settings, Toolbox, the landing view) are always kept — they do not
+ * depend on a context existing.
+ */
+/**
+ * The active tab id after a prune: keep it when it survived, otherwise fall
+ * back to the first remaining tab, or null when nothing is left. A stale id
+ * would leave the workspace blank behind a populated tab strip, and would
+ * also stop the native close command taking its no-tabs path.
+ */
+export function reconcileActiveTab(tabs: ViewTab[], activeTabId: number | null): number | null {
+  if (tabs.length === 0) return null;
+  return tabs.some((t) => t.id === activeTabId) ? activeTabId : tabs[0].id;
+}
+
+/**
+ * Reconcile restored CRD tabs for one context against the CRDs actually
+ * discovered there. A CRD that is gone drops its tab; a CRD that still exists
+ * under a different served version (or plural) has its stale `CrdRef` replaced
+ * with the current one, so the tab keeps working instead of querying a version
+ * the cluster no longer serves.
+ *
+ * Only ever called with a SUCCESSFUL discovery result: an unreachable cluster
+ * must not be read as "this CRD is gone" and silently delete the workspace.
+ */
+export function reconcileCrdTabs(
+  tabs: ViewTab[],
+  context: string,
+  crds: readonly CrdRef[],
+): { tabs: ViewTab[]; dropped: number } {
+  const current = new Map(crds.map((c) => [`${c.group}/${c.kind}`, c]));
+  let dropped = 0;
+  const kept: ViewTab[] = [];
+  for (const t of tabs) {
+    if (t.cluster !== context || !t.crd) {
+      kept.push(t);
+      continue;
+    }
+    const live = current.get(`${t.crd.group}/${t.crd.kind}`);
+    if (!live) {
+      dropped += 1;
+      continue;
+    }
+    const stale = live.version !== t.crd.version || live.plural !== t.crd.plural;
+    kept.push(stale ? { ...t, crd: live } : t);
+  }
+  return { tabs: kept, dropped };
+}
+
+export function pruneMissingContexts(
+  tabs: ViewTab[],
+  contexts: readonly string[],
+): { tabs: ViewTab[]; dropped: number } {
+  const available = new Set(contexts);
+  const kept = tabs.filter((t) => !t.cluster || available.has(t.cluster));
+  return { tabs: kept, dropped: tabs.length - kept.length };
 }
