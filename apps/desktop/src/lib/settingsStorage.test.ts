@@ -139,6 +139,15 @@ describe("desktop settings storage", () => {
 
     // Served from the file mirror, not from the throwing localStorage.
     expect(settingsStorage.getItem("srelens.uiScale")).toBe("130");
+
+    // Crucially, migration must NOT be marked done: the scan never ran, so
+    // committing the flag would retire the one-time import and strand the
+    // legacy preferences forever once storage came back.
+    expect(invokeCapability).not.toHaveBeenCalledWith(
+      "settings.set",
+      expect.objectContaining({ localStorageMigrated: true }),
+    );
+
     // And writes still reach the file store.
     settingsStorage.setItem("srelens.defaultNamespace", '"kube-system"');
     await flushSettingsWrites();
@@ -147,6 +156,41 @@ describe("desktop settings storage", () => {
     });
 
     getItem.mockRestore();
+    warn.mockRestore();
+  });
+
+  it("retries migration on a later launch after a transient storage failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage temporarily disabled");
+    });
+    invokeCapability.mockResolvedValueOnce({
+      schemaVersion: 1,
+      localStorageMigrated: false,
+      values: {},
+    });
+
+    const first = await import("./settingsStorage");
+    await first.initializeSettingsStorage();
+    getItem.mockRestore();
+
+    // Second launch: storage is back and the flag was never set, so the real
+    // values are imported instead of being lost.
+    vi.resetModules();
+    invokeCapability.mockReset();
+    localStorage.setItem("srelens.uiScale", "140");
+    invokeCapability
+      .mockResolvedValueOnce({ schemaVersion: 1, localStorageMigrated: false, values: {} })
+      .mockResolvedValue(undefined);
+
+    const second = await import("./settingsStorage");
+    await second.initializeSettingsStorage();
+
+    expect(invokeCapability).toHaveBeenCalledWith("settings.set", {
+      values: { "srelens.uiScale": 140 },
+      localStorageMigrated: true,
+    });
+    expect(second.settingsStorage.getItem("srelens.uiScale")).toBe("140");
     warn.mockRestore();
   });
 

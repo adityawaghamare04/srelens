@@ -90,7 +90,7 @@ export async function initializeSettingsStorage(): Promise<void> {
       // disabled throws from getItem, and letting that escape would abandon
       // the file backend we just loaded successfully — falling back to the
       // very storage that is unavailable, so nothing could persist at all.
-      // There is simply nothing to import in that case.
+      let scanned = true;
       try {
         for (const key of MIGRATION_KEYS) {
           if (values.has(key)) continue;
@@ -107,23 +107,34 @@ export async function initializeSettingsStorage(): Promise<void> {
           }
         }
       } catch (error) {
-        console.warn("localStorage unavailable; nothing to migrate", error);
+        // The scan is all-or-nothing on purpose. Committing the migrated flag
+        // after a partial read would retire the one-time import for good, so a
+        // transient storage failure would strand the legacy preferences
+        // permanently. Leave the flag unset and retry on the next launch.
+        scanned = false;
+        console.warn("localStorage unreadable; deferring migration to a later launch", error);
       }
-      await invokeCapability("settings.set", {
-        values: migrated,
-        localStorageMigrated: true,
-      } satisfies SettingsSetInput);
-      Object.entries(migrated).forEach(([key, value]) => values.set(key, value));
 
-      // A failed migration never reaches this point, so its localStorage data
-      // remains available for a retry on the next launch.
-      try {
-        for (const key of MIGRATION_KEYS) {
-          localStorage.removeItem(key);
-          for (const alias of aliasesFor(key)) localStorage.removeItem(alias);
+      if (scanned) {
+        await invokeCapability("settings.set", {
+          values: migrated,
+          localStorageMigrated: true,
+        } satisfies SettingsSetInput);
+        Object.entries(migrated).forEach(([key, value]) => values.set(key, value));
+
+        // Only reached once the import is committed, so a failed or deferred
+        // migration always leaves its localStorage data intact for the retry.
+        try {
+          for (const key of MIGRATION_KEYS) {
+            localStorage.removeItem(key);
+            for (const alias of aliasesFor(key)) localStorage.removeItem(alias);
+          }
+        } catch (error) {
+          console.warn(
+            "durable settings migrated but old localStorage could not be cleared",
+            error,
+          );
         }
-      } catch (error) {
-        console.warn("durable settings migrated but old localStorage could not be cleared", error);
       }
     }
     fileBacked = true;
