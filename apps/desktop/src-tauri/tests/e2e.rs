@@ -3,7 +3,7 @@
 //! Drives the app's REAL capability registry — the exact same
 //! `(cap.handler)(json_value).await` path the Tauri bridge and the MCP server
 //! use — against a live kind cluster, and ENFORCES COVERAGE: every capability
-//! registered in `srelens_desktop_lib::capabilities::build_registry_with` must
+//! registered in the desktop capability registry must
 //! be exercised by this suite, or explicitly listed in `EXCLUDED` with a
 //! written reason. A capability added later with no e2e case fails this test.
 //! Mirrors the philosophy of `every_capability_is_mcp_exposed` in
@@ -35,7 +35,9 @@ use base64::Engine;
 use futures::FutureExt;
 use serde_json::{json, Value};
 use srelens_capability::Registry;
-use srelens_desktop_lib::capabilities::build_registry_with;
+use srelens_desktop_lib::capabilities::{
+    build_registry_with, build_registry_with_paths_and_settings,
+};
 use srelens_kube::client_cache::ClientCache;
 
 const NS: &str = "srelens-e2e";
@@ -80,6 +82,25 @@ fn kubeconfig_paths() -> Vec<PathBuf> {
 
 fn cache() -> Arc<ClientCache> {
     ClientCache::new_many(kubeconfig_paths())
+}
+
+/// Keeps the settings capability e2e isolated from a developer's real app
+/// preferences, including when the suite unwinds after a failed assertion.
+struct TempSettings(PathBuf);
+
+impl TempSettings {
+    fn new() -> Self {
+        Self(std::env::temp_dir().join(format!(
+            "srelens-e2e-settings-{}.json",
+            uuid::Uuid::new_v4()
+        )))
+    }
+}
+
+impl Drop for TempSettings {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Drives the real capability registry and tracks which capability ids have
@@ -513,8 +534,39 @@ async fn full_capability_suite() {
 
 async fn run_suite() {
     let ctx = context();
-    let reg = build_registry_with(cache());
+    let settings = TempSettings::new();
+    let reg = build_registry_with_paths_and_settings(
+        cache(),
+        kubeconfig_paths(),
+        Some(settings.0.clone()),
+    );
     let mut h = Harness::new(reg);
+
+    // === Durable settings: real file round-trip, isolated from app data ===
+    println!("=== settings ===");
+    let saved = h
+        .ok(
+            "settings.set",
+            json!({
+                "values": { "e2e.roundTrip": { "theme": "dark", "scale": 120 } },
+                "localStorageMigrated": true
+            }),
+        )
+        .await;
+    assert_eq!(saved["saved"], true);
+    let loaded = h
+        .ok("settings.get", json!({ "key": "e2e.roundTrip" }))
+        .await;
+    assert_eq!(
+        loaded["values"]["e2e.roundTrip"],
+        json!({ "theme": "dark", "scale": 120 })
+    );
+    assert_eq!(loaded["localStorageMigrated"], true);
+    h.ok(
+        "settings.set",
+        json!({ "remove": ["e2e.roundTrip"] }),
+    )
+    .await;
 
     // === Fixtures: dogfood k8s.applyManifest to seed the namespace =========
     println!("=== fixtures ===");

@@ -3,9 +3,10 @@
 // Persisted per kube-context. Web mode stores rows server-side, one row per
 // context, via the per-user settings API (`GET`/`PUT /api/settings/:key`,
 // see crates/server/src/api_settings.rs); desktop persists the equivalent
-// state in localStorage, following loadClusterNamespaces/saveClusterNamespaces.
+// state through the durable settings mirror.
 import { isWeb } from "../transport/platform";
 import { csrfHeader } from "../transport/webTransport";
+import { settingsStorage } from "./settingsStorage";
 
 export interface SavedForward {
   id: string;
@@ -50,7 +51,7 @@ async function webPutAll(context: string, list: SavedForward[]): Promise<void> {
 
 function loadAll(): Record<string, SavedForward[]> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = settingsStorage.getItem(STORAGE_KEY);
     return raw ? (JSON.parse(raw) as Record<string, SavedForward[]>) : {};
   } catch {
     return {};
@@ -59,7 +60,7 @@ function loadAll(): Record<string, SavedForward[]> {
 
 function saveAll(map: Record<string, SavedForward[]>): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    settingsStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }

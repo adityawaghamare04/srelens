@@ -1,6 +1,9 @@
 //! Per-user settings API: `GET`/`PUT`/`DELETE /api/settings/:key`. Backs
 //! saved port-forwards (and future per-user preferences) on the web; the
-//! desktop app persists the equivalent state in `localStorage` instead.
+//! desktop app persists the equivalent state in its durable settings file
+//! (`crates/registry/src/settings.rs`) instead. Web preferences OTHER than
+//! these rows stay in the browser's `localStorage`, so they are scoped to a
+//! browser profile rather than to an account.
 //!
 //! Values are opaque JSON, stored and returned verbatim in `value_json` —
 //! this route never inspects the shape, it just round-trips whatever the
