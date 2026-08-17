@@ -39,7 +39,7 @@
   <img alt="Rust core" src="https://img.shields.io/badge/core-Rust-8b5cf6">
   <img alt="Tauri v2" src="https://img.shields.io/badge/desktop-Tauri_v2-e457c2">
   <img alt="MCP server" src="https://img.shields.io/badge/agents-MCP-fb923c">
-  <img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-f59e0b">
+  <img alt="Project status: stable" src="https://img.shields.io/badge/status-stable-22c55e">
 </p>
 
 ---
@@ -109,7 +109,7 @@ See the [user guide](docs/USAGE.md) for how to use each of these.
 
 ## Install
 
-Download the latest beta for your platform from
+Download the latest release for your platform from
 [GitHub Releases](https://github.com/srelens/srelens/releases/latest).
 
 | Platform | Packages | Notes |
@@ -247,12 +247,13 @@ docs/                    Installation, usage, development, and project documenta
 
 ## Project status
 
-srelens is currently in **beta**. It is ready for evaluation and everyday testing,
-but users should review release notes and take extra care when using it with
-critical clusters.
+srelens is **stable and in active development**, with regular releases for macOS,
+Linux, and Windows. macOS builds are Developer ID signed and notarized, and
+supported packages update in place through the in-app updater.
 
-Breaking changes may still occur before a stable release. Feedback, bug reports,
-and reproducible troubleshooting details are welcome.
+New capabilities land continuously, so the release notes are worth a glance when
+you upgrade. Feedback, bug reports, and reproducible troubleshooting details are
+always welcome.
 
 - [Latest release](https://github.com/srelens/srelens/releases/latest)
 - [All releases](https://github.com/srelens/srelens/releases)
