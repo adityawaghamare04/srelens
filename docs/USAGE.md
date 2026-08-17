@@ -400,8 +400,14 @@ Desktop preferences are stored in a schema-versioned `settings.json` under the
 OS application-config directory (`app.srelens.desktop`). That location is tied
 to the application identifier rather than the executable name, so preferences
 survive dev/installed builds and binary renames. The first launch after an
-upgrade imports the previous WebView `localStorage` values automatically. Web
-mode continues to keep each user's settings in the server database.
+upgrade imports the previous WebView `localStorage` values automatically.
+
+Web mode is different. Most preferences — theme, layout, namespace selections,
+request timeout, interface scale — stay in the browser's own `localStorage`, so
+they belong to that **browser profile rather than to your account**: they do not
+follow you to another browser or machine, and anyone sharing the profile shares
+them. Saved port-forwards are the exception, stored per user in the server
+database through the settings API.
 
 ## Updating
 
