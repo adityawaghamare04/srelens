@@ -293,6 +293,45 @@ Press **Cmd/Ctrl-K** to open the command palette. It offers your **recent** pick
 (pods, deployments, services, config, and more, indexed when you open the
 palette). Selecting a view opens its tab; selecting a resource opens its detail.
 
+## Deep links
+
+srelens registers the `srelens://` URL scheme, so a link in a browser, chat
+message, runbook, or alert can open the exact thing it refers to. Clicking one
+reuses the running app — a second copy is never started — and brings its window
+to the front.
+
+| Link | Opens |
+| --- | --- |
+| `srelens://cluster/<context>` | That context's cluster overview |
+| `srelens://resource/<context>/<namespace>/<kind>/<name>` | That resource's detail view |
+
+`<kind>` is the Kubernetes kind (`Pod`, `Deployment`, `Service`, …). Use `-` in
+place of the namespace for a **cluster-scoped** resource such as a Node; a
+namespaced kind must name its namespace, since searching every namespace could
+otherwise open the wrong object when the name is not unique:
+
+```
+srelens://resource/prod-eu/kube-system/Pod/coredns-7db6d8ff4d-abcde
+srelens://resource/prod-eu/-/Node/worker-1
+```
+
+Percent-encode any segment containing a `/` or `:` — OpenShift context names
+usually need this:
+
+```
+srelens://cluster/default%2Fapi-example-com%3A6443%2Fdev
+```
+
+A link is reported and otherwise ignored when it names a context you don't
+have, a kind with no detail view (Events, for instance, are list-only), or a
+namespaced kind without a namespace.
+
+## Window and session state
+
+The window's size, position, and maximized state are remembered across
+restarts, as are your open tabs and the active one — see
+[Reopen tabs on launch](#settings-reference) to turn the tab part off.
+
 ## Application logs
 
 srelens keeps its own rotating log file so you can diagnose problems after they

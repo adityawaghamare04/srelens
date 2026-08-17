@@ -28,7 +28,12 @@ import { StatusBar } from "./components/StatusBar";
 import { LandingPage } from "./components/LandingPage";
 import { getInitialTheme, applyTheme, type Theme, type ThemeMode, type ThemeName } from "./ui";
 import { listCrds, type CrdRef } from "./lib/crds";
-import type { ResourceTarget } from "./lib/resourceNavigation";
+import {
+  isClusterScopedKind,
+  isNavigableResourceKind,
+  targetNamespace,
+  type ResourceTarget,
+} from "./lib/resourceNavigation";
 import {
   loadClusterNamespaces,
   saveClusterNamespaces,
@@ -50,6 +55,8 @@ import {
   loadMcpSettings,
 } from "./lib/settings";
 import { applyUiScale, getUiScale, setUiScale, stepUiScale, uiScaleShortcut } from "./lib/uiScale";
+import { dedupeDeepLinkTargets, parseDeepLink, type DeepLinkTarget } from "./lib/deepLink";
+import { invokeCommand } from "./transport/transport";
 import {
   loadOpenTabs,
   saveOpenTabs,
@@ -168,6 +175,104 @@ export function App() {
   useEffect(() => {
     refreshContexts();
   }, [kubeconfigFiles]);
+
+  // Deep links (#36). The backend stashes the URL and only nudges us, so a
+  // link that launched the app cold is not lost while the WebView boots; both
+  // paths DRAIN the same slot, so a link is acted on exactly once.
+  const [pendingLinks, setPendingLinks] = useState<string[]>([]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    const drain = () => {
+      void invokeCommand<string[]>("take_pending_deep_links")
+        .then((urls) => {
+          if (urls.length > 0) setPendingLinks((queued) => [...queued, ...urls]);
+        })
+        .catch(() => {});
+    };
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    // Subscribe BEFORE the first drain. Draining first leaves a window
+    // between taking the queue and the listener being attached, and a link
+    // landing in it would be stored, nudged into the void, and never drained
+    // again until some later link happened to fire another event.
+    void listen("deep-link-pending", drain)
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+        drain();
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Routed only once the contexts are known: a link that arrives during a cold
+  // start would otherwise be judged against an empty context list and
+  // rejected as pointing at a cluster that "doesn't exist".
+  useEffect(() => {
+    if (pendingLinks.length === 0 || !contexts) return;
+    // Drain the whole queue: several links can arrive while the contexts are
+    // still loading, and routing only the newest would silently swallow the
+    // rest. They open in order, so the last one ends up in front.
+    const queued = pendingLinks;
+    setPendingLinks([]);
+
+    // Validate first, then route: a batch is applied against ONE render's
+    // `tabs`, so links sharing a view have to be collapsed before any of them
+    // appends a tab (see dedupeDeepLinkTargets).
+    const valid: DeepLinkTarget[] = [];
+    for (const url of queued) {
+      const target = parseDeepLink(url);
+      if (!target) {
+        notify.error("Couldn't open that link", "It isn't a link srelens understands.");
+        continue;
+      }
+      if (!contexts.some((c) => c.name === target.context)) {
+        notify.error("Couldn't open that link", `No kube context named "${target.context}".`);
+        continue;
+      }
+      if (target.route === "resource") {
+        // K8S_KIND alone is too permissive: Events have a list view but no
+        // detail, so such a link would quietly land on the list instead of
+        // the object it named.
+        if (!isNavigableResourceKind(target.kind)) {
+          notify.error("Couldn't open that link", `srelens can't open a ${target.kind} directly.`);
+          continue;
+        }
+        // "-" means cluster-scoped. Allowing it for a namespaced kind would
+        // search every namespace and focus whichever matching name came back
+        // first — a link that silently opens the wrong object.
+        if (!isClusterScopedKind(target.kind) && target.namespace === null) {
+          notify.error(
+            "Couldn't open that link",
+            `${target.kind} is namespaced, so the link needs a namespace.`,
+          );
+          continue;
+        }
+      }
+      valid.push(target);
+    }
+
+    for (const target of dedupeDeepLinkTargets(valid)) {
+      if (target.route === "cluster") {
+        openView(target.context, "overview");
+        continue;
+      }
+      const entry = Object.entries(K8S_KIND).find(([, k8sKind]) => k8sKind === target.kind);
+      if (!entry) continue;
+      openResourceIn(
+        target.context,
+        entry[0] as ResourceKind,
+        targetNamespace(target.kind, target.namespace),
+        target.name,
+      );
+    }
+  }, [pendingLinks, contexts]);
 
   // Restored CRD tabs carry a CrdRef captured in a previous session (#159).
   // The CRD may since have been deleted, or may now serve a different version,
@@ -515,23 +620,35 @@ export function App() {
     if (mcp.enabled) void startMcpHttp(mcp.port).catch(() => {});
   }, [vaultReady]);
 
-  /** Open a resource's kind view and deep-link to its detail (from search). */
-  function openResource(kind: ResourceKind, namespace: string | null, name: string) {
-    if (!activeCluster) return;
+  /** Open a resource's kind view in a NAMED cluster and focus its detail.
+   *  Takes the cluster explicitly because a deep link can target a context
+   *  other than the one currently in front (#36). */
+  function openResourceIn(
+    cluster: string,
+    kind: ResourceKind,
+    namespace: string | null,
+    name: string,
+  ) {
     const focus = { name, namespace, nonce: ++focusNonce.current };
     // Filter the list to the resource's namespace so its row is present to focus.
     const ns = namespace ?? "";
-    const existing = tabs.find((t) => t.cluster === activeCluster && t.kind === kind && !t.crd);
+    const existing = tabs.find((t) => t.cluster === cluster && t.kind === kind && !t.crd);
     if (existing) {
       setTabs((ts) => ts.map((t) => (t.id === existing.id ? { ...t, focus, namespace: ns } : t)));
       setActiveTabId(existing.id);
     } else {
       const id = tabIdRef.current++;
-      setTabs((ts) => [...ts, { id, cluster: activeCluster, kind, focus, namespace: ns }]);
+      setTabs((ts) => [...ts, { id, cluster, kind, focus, namespace: ns }]);
       setActiveTabId(id);
     }
-    setClusterNs((m) => ({ ...m, [activeCluster]: ns }));
+    setClusterNs((m) => ({ ...m, [cluster]: ns }));
     setQuery("");
+  }
+
+  /** Open a resource's kind view and deep-link to its detail (from search). */
+  function openResource(kind: ResourceKind, namespace: string | null, name: string) {
+    if (!activeCluster) return;
+    openResourceIn(activeCluster, kind, namespace, name);
   }
 
   /** Resolve a canonical Kubernetes kind from a detail link to its product view. */
