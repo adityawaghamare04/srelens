@@ -116,6 +116,40 @@ describe("desktop settings storage", () => {
     error.mockRestore();
   });
 
+  it("keeps the file backend when localStorage itself is unavailable", async () => {
+    // A WebView with localStorage disabled throws from getItem. That must not
+    // discard the file document we just loaded — falling back to the very
+    // storage that is unavailable would leave nothing able to persist.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("localStorage is disabled");
+    });
+    invokeCapability
+      .mockResolvedValueOnce({
+        schemaVersion: 1,
+        localStorageMigrated: false,
+        values: { "srelens.uiScale": 130 },
+      })
+      .mockResolvedValue(undefined);
+
+    const { initializeSettingsStorage, settingsStorage, flushSettingsWrites } = await import(
+      "./settingsStorage"
+    );
+    await initializeSettingsStorage();
+
+    // Served from the file mirror, not from the throwing localStorage.
+    expect(settingsStorage.getItem("srelens.uiScale")).toBe("130");
+    // And writes still reach the file store.
+    settingsStorage.setItem("srelens.defaultNamespace", '"kube-system"');
+    await flushSettingsWrites();
+    expect(invokeCapability).toHaveBeenCalledWith("settings.set", {
+      values: { "srelens.defaultNamespace": "kube-system" },
+    });
+
+    getItem.mockRestore();
+    warn.mockRestore();
+  });
+
   it("keeps the storage-shaped localStorage fallback in web mode", async () => {
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
     vi.resetModules();

@@ -13,10 +13,13 @@ import { initializeSettingsStorage } from "./lib/settingsStorage";
 const container = document.getElementById("root");
 if (!container) throw new Error("Root element #root not found");
 
-async function bootstrap(): Promise<void> {
+// The container is passed in rather than captured: `bootstrap` is a hoisted
+// function declaration, so TypeScript cannot rely on the null check above
+// having run before a call and keeps the type as HTMLElement | null inside.
+async function bootstrap(root: HTMLElement): Promise<void> {
   await initializeSettingsStorage();
   if (isTauri()) void applyPersistedTimeout();
-  createRoot(container).render(<AppGate />);
+  createRoot(root).render(<AppGate />);
 }
 
-void bootstrap();
+void bootstrap(container);

@@ -18,6 +18,8 @@ use srelens_capability::{Annotations, Capability, CapabilityError};
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
+/// The trailing newline `write_document` appends, counted against the limit.
+const NEWLINE_BYTES: usize = 1;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -105,6 +107,12 @@ impl FileSettingsStore {
         validate_keys(input.values.keys().map(String::as_str))?;
         validate_keys(input.remove.iter().map(String::as_str))?;
 
+        // Held across the WHOLE read-modify-rename. The process-local mutex
+        // only serializes registries inside one process; the GUI and a
+        // separately launched `--mcp-stdio` / `--mcp-http` process each have
+        // their own, so without this both could read the same document and
+        // the later rename would silently drop the other's unrelated keys.
+        let _guard = write_lock(&self.path)?;
         let mut next = self.document()?;
         for (key, value) in input.values {
             next.values.insert(key, value);
@@ -118,6 +126,24 @@ impl FileSettingsStore {
         write_document(&self.path, &next)?;
         Ok(())
     }
+}
+
+/// An exclusive advisory lock on a sibling `.lock` file, serializing the
+/// read-modify-write across processes. Mirrors `vault::transition_lock`. The
+/// lock lives beside the document rather than on it, so the atomic rename
+/// never swaps the file the lock is held on.
+fn write_lock(path: &Path) -> Result<fs::File, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("settings.json");
+    let lock_path = parent.join(format!("{file_name}.lock"));
+    let lock = fs::File::create(&lock_path)
+        .map_err(|error| format!("create {}: {error}", lock_path.display()))?;
+    lock.lock()
+        .map_err(|error| format!("lock {}: {error}", lock_path.display()))?;
+    Ok(lock)
 }
 
 fn validate_keys<'a>(keys: impl Iterator<Item = &'a str>) -> Result<(), String> {
@@ -168,7 +194,12 @@ fn write_document(path: &Path, document: &SettingsDocument) -> Result<(), String
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("settings.json");
     let temp = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
     let raw = serde_json::to_vec_pretty(document).map_err(|error| error.to_string())?;
-    if raw.len() > MAX_DOCUMENT_BYTES {
+    // The write below appends a trailing newline, so the on-disk file is one
+    // byte longer than `raw`. Checking `raw` alone would accept a document of
+    // exactly the limit, write limit+1 bytes, and leave a file that
+    // `read_document` then rejects forever — settings unreachable until
+    // someone deletes the file by hand.
+    if raw.len() + NEWLINE_BYTES > MAX_DOCUMENT_BYTES {
         return Err("settings document exceeds the 1 MB limit".into());
     }
 
@@ -200,11 +231,19 @@ fn write_document(path: &Path, document: &SettingsDocument) -> Result<(), String
 
 /// The stable settings path shared by GUI and headless MCP launches. It is
 /// derived from the Tauri bundle identifier, so binary renames do not move it.
-pub fn default_settings_path() -> PathBuf {
-    dirs::config_dir()
-        .expect("could not resolve the platform config directory")
-        .join("app.srelens.desktop")
-        .join("settings.json")
+///
+/// `None` when the platform config directory cannot be resolved (on Linux,
+/// both `XDG_CONFIG_HOME` and `HOME` unset). This is deliberately not a panic:
+/// the GUI builds its registry BEFORE Tauri starts, so panicking here stopped
+/// the application from opening at all instead of reaching the frontend's
+/// localStorage fallback. `None` simply leaves the settings capabilities
+/// unregistered, which is the case that fallback already handles.
+pub fn default_settings_path() -> Option<PathBuf> {
+    Some(
+        dirs::config_dir()?
+            .join("app.srelens.desktop")
+            .join("settings.json"),
+    )
 }
 
 /// Register `settings.get` and `settings.set` backed by `path`.
@@ -393,7 +432,71 @@ mod tests {
 
     #[test]
     fn default_path_is_bound_to_the_application_identifier() {
-        let path = default_settings_path();
+        // Some() on any machine with a resolvable config dir; the None arm is
+        // the unresolvable-config-dir case, which must not panic the GUI.
+        let path = default_settings_path().expect("config dir resolvable in the test environment");
         assert!(path.ends_with(Path::new("app.srelens.desktop").join("settings.json")));
+    }
+
+    #[test]
+    fn a_document_at_the_limit_is_refused_rather_than_written_unreadable() {
+        // The trailing newline is what makes this subtle: a payload that
+        // serializes to exactly the limit used to pass the pre-write check,
+        // land as limit+1 bytes, and then be rejected by every later read —
+        // settings permanently unreachable. Refusing up front is the fix, so
+        // whatever IS accepted must still be readable afterwards.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        let mut filler = MAX_DOCUMENT_BYTES;
+        let document = loop {
+            let candidate = SettingsDocument {
+                values: BTreeMap::from([("k".into(), json!("x".repeat(filler)))]),
+                ..Default::default()
+            };
+            let len = serde_json::to_vec_pretty(&candidate).unwrap().len();
+            if len + NEWLINE_BYTES <= MAX_DOCUMENT_BYTES {
+                break candidate;
+            }
+            // Step down until the serialized form plus its newline just fits.
+            filler -= (len + NEWLINE_BYTES - MAX_DOCUMENT_BYTES).max(1);
+        };
+
+        write_document(&path, &document).expect("a document that fits must be written");
+        let on_disk = fs::metadata(&path).unwrap().len() as usize;
+        assert!(on_disk <= MAX_DOCUMENT_BYTES, "wrote {on_disk} bytes, over the limit");
+        read_document(&path).expect("anything written must be readable back");
+    }
+
+    #[test]
+    fn the_write_lock_excludes_other_processes() {
+        // The process-local mutex cannot serialize a separately launched
+        // --mcp-stdio process, so the read-modify-rename takes a file lock.
+        // Proven by mutual exclusion rather than by racing threads, which
+        // could pass by luck.
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let held = write_lock(&path).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let other = path.clone();
+        let handle = std::thread::spawn(move || {
+            let _guard = write_lock(&other).unwrap();
+            tx.send(()).unwrap();
+        });
+
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "a second holder acquired the lock while it was held"
+        );
+        drop(held);
+        assert!(
+            rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the lock was never released to the waiter"
+        );
+        handle.join().unwrap();
     }
 }

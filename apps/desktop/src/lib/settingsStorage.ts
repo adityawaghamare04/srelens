@@ -86,17 +86,28 @@ export async function initializeSettingsStorage(): Promise<void> {
 
     if (!loaded.localStorageMigrated) {
       const migrated: Record<string, unknown> = {};
-      for (const key of MIGRATION_KEYS) {
-        if (values.has(key)) continue;
-        for (const candidate of [key, ...aliasesFor(key)]) {
-          const raw = localStorage.getItem(candidate);
-          if (raw === null) continue;
-          migrated[key] =
-            key === "fl-theme-v2" && candidate === "fl-theme" && (raw === "light" || raw === "dark")
-              ? { name: "slate", mode: raw }
-              : decode(raw);
-          break;
+      // Reading the OLD store is optional work: a WebView with localStorage
+      // disabled throws from getItem, and letting that escape would abandon
+      // the file backend we just loaded successfully — falling back to the
+      // very storage that is unavailable, so nothing could persist at all.
+      // There is simply nothing to import in that case.
+      try {
+        for (const key of MIGRATION_KEYS) {
+          if (values.has(key)) continue;
+          for (const candidate of [key, ...aliasesFor(key)]) {
+            const raw = localStorage.getItem(candidate);
+            if (raw === null) continue;
+            migrated[key] =
+              key === "fl-theme-v2" &&
+              candidate === "fl-theme" &&
+              (raw === "light" || raw === "dark")
+                ? { name: "slate", mode: raw }
+                : decode(raw);
+            break;
+          }
         }
+      } catch (error) {
+        console.warn("localStorage unavailable; nothing to migrate", error);
       }
       await invokeCapability("settings.set", {
         values: migrated,

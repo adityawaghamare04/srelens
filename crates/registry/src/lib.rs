@@ -375,7 +375,7 @@ pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
     build_registry_with_paths_and_settings(
         cache,
         default_kubeconfig_paths(),
-        Some(default_settings_path()),
+        default_settings_path(),
     )
 }
 
@@ -448,7 +448,7 @@ mod tests {
         let reg = build_registry_with_paths_and_settings(
             cache,
             vec![std::path::PathBuf::from("/nonexistent")],
-            Some(default_settings_path()),
+            default_settings_path(),
         );
         let mut ids = reg.ids();
         ids.sort();

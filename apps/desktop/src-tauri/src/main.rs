@@ -230,7 +230,7 @@ fn run_mcp_http(
         let registry = srelens_desktop_lib::build_registry_with_paths_and_settings(
             cache.clone(),
             srelens_registry::default_kubeconfig_paths(),
-            Some(srelens_desktop_lib::default_settings_path()),
+            srelens_desktop_lib::default_settings_path(),
         );
         let server = srelens_mcp::McpServer::new(Arc::new(registry))
             .with_policy(policy)
@@ -295,7 +295,7 @@ fn run_mcp_stdio(allow_destructive: bool, allow_sensitive_reads: bool) {
         let registry = srelens_desktop_lib::build_registry_with_paths_and_settings(
             cache.clone(),
             srelens_registry::default_kubeconfig_paths(),
-            Some(srelens_desktop_lib::default_settings_path()),
+            srelens_desktop_lib::default_settings_path(),
         );
         let server = srelens_mcp::McpServer::new(Arc::new(registry))
             .with_policy(policy)
