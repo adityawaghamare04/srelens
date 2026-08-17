@@ -28,6 +28,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Nothing else in CI typechecks (#249): `vite build` strips types with
+      # esbuild and Vitest transpiles per file, so a real type error passed
+      # every check until it was caught by hand (PR #248, main.tsx). Runs
+      # before the build — it is the fastest step and the most likely to fail.
+      - name: Typecheck
+        run: pnpm typecheck
       - name: Build
         run: pnpm build
       - name: Unit tests with coverage
