@@ -57,17 +57,27 @@ describe("sessionEarnedRetryReset", () => {
     expect(sessionEarnedRetryReset(HEALTHY_SESSION_MS - 1)).toBe(false);
   });
 
+  it("does not reward a session that never produced output, however slowly it failed", () => {
+    // A refusal can take longer than the healthy threshold to come back — a
+    // stalled API server, a slow authorization webhook. The caller passes 0 for
+    // a session that never emitted a byte, so the wait for that failure can't
+    // masquerade as uptime and hand back the budget.
+    expect(sessionEarnedRetryReset(0)).toBe(false);
+  });
+
   it("rewards a session the user actually had", () => {
     expect(sessionEarnedRetryReset(HEALTHY_SESSION_MS)).toBe(true);
     expect(sessionEarnedRetryReset(60_000)).toBe(true);
   });
 
-  it("exhausts the schedule when every attempt dies immediately", () => {
-    // Walk the real policy: without a reset, attempts climb and stop.
+  it("exhausts the schedule when a shell can never start, even on slow failures", () => {
+    // Walk the real policy for a shell that is always refused: the pane passes
+    // 0 because nothing ever came back on the wire, however long each refusal
+    // took, so attempts climb and the terminal stops.
     let attempt = 0;
     const statuses: string[] = [];
     for (let i = 0; i < RECONNECT_DELAYS_MS.length + 1; i++) {
-      if (sessionEarnedRetryReset(50)) attempt = 0;
+      if (sessionEarnedRetryReset(0)) attempt = 0;
       const next = nextStatusOnExit({ kind: "error", message: "boom" }, true, attempt);
       statuses.push(next.kind);
       if (next.kind === "reconnecting") attempt = next.attempt;

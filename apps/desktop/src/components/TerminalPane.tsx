@@ -40,8 +40,11 @@ export function TerminalPane({ driver, banner }: { driver: TerminalDriver; banne
     let term: any = null;
     let conn: TerminalConnection | null = null;
     let attempt = 0;
-    /** When the current session went live, for judging whether it worked. */
-    let liveSince: number | null = null;
+    /**
+     * When the current session first produced output — the earliest proof a
+     * shell was really there. Null until it does (and for one that never does).
+     */
+    let usableSince: number | null = null;
     let reconnectTimer: number | undefined;
     let cleanupExtra: (() => void) | undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,12 +55,12 @@ export function TerminalPane({ driver, banner }: { driver: TerminalDriver; banne
     const handleExit = (reason: ExitReason) => {
       if (disposed || !term) return;
       conn = null;
-      // A session that stayed up and then dropped gets its full retry budget
-      // back; one that died on arrival keeps counting, so a shell that can
-      // never start stops retrying and shows why (#263).
-      const lived = liveSince === null ? 0 : Date.now() - liveSince;
-      liveSince = null;
-      if (sessionEarnedRetryReset(lived)) attempt = 0;
+      // A shell that ran and then dropped gets its full retry budget back; one
+      // that never became usable keeps counting, so a shell that can never
+      // start stops retrying and shows why (#263).
+      const usable = usableSince === null ? 0 : Date.now() - usableSince;
+      usableSince = null;
+      if (sessionEarnedRetryReset(usable)) attempt = 0;
       const next = nextStatusOnExit(reason, driver.reconnectable, attempt);
       setStatus(next);
       if (next.kind === "reconnecting") {
@@ -81,9 +84,17 @@ export function TerminalPane({ driver, banner }: { driver: TerminalDriver; banne
       if (disposed || !term) return;
       setStatus(isReconnect ? { kind: "reconnecting", attempt: Math.max(attempt, 1) } : { kind: "connecting" });
       let opened: TerminalConnection;
+      usableSince = null;
       try {
         opened = await driver.connect({
-          onData: (chunk) => term?.write(chunk),
+          onData: (chunk) => {
+            // First byte back is when the session became a shell. The connect
+            // call resolving is not: the backend spawns the attach and reports
+            // its failure later, so timing from there would count the wait for
+            // a refusal as uptime.
+            usableSince ??= Date.now();
+            term?.write(chunk);
+          },
           onExit: handleExit,
           initialSize: { cols: term.cols, rows: term.rows },
         });
@@ -98,9 +109,8 @@ export function TerminalPane({ driver, banner }: { driver: TerminalDriver; banne
       conn = opened;
       if (isReconnect) term.write(divider("reconnected (new shell)"));
       // NOT a retry-budget reset: connecting only means the session was
-      // spawned. Whether it works is decided by how long it survives, which
-      // handleExit judges.
-      liveSince = Date.now();
+      // spawned. Whether it worked is decided by what comes back on the wire,
+      // which onData records and handleExit judges.
       setStatus({ kind: "live" });
     };
 

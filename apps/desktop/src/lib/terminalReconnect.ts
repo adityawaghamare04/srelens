@@ -22,7 +22,8 @@ export type TermStatus =
 export const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 
 /**
- * How long a session must stay up to count as having worked.
+ * How long a session must keep running *after its first output* to count as
+ * having worked.
  *
  * Opening an exec session and *keeping* one are different things: the backend
  * returns a session id as soon as the task is spawned, so a shell that is
@@ -36,11 +37,20 @@ export const HEALTHY_SESSION_MS = 5000;
 /**
  * Whether a session that has just ended earned a fresh retry budget.
  *
- * A shell the user actually used and lost deserves the full backoff schedule
- * again; one that died on arrival does not, or the schedule never runs out.
+ * `usableMs` is time since the session's first byte of output — the earliest
+ * proof that a shell was actually there. Measuring from the connect call
+ * instead would count the wait for a *failed* attach, so a refusal that takes
+ * more than {@link HEALTHY_SESSION_MS} to come back (an unresponsive API
+ * server, a slow authorization webhook) would keep clearing the budget and the
+ * terminal would still retry forever.
+ *
+ * Both halves are needed: a session that never emitted anything was never
+ * usable, and one that printed an error and died immediately hasn't earned
+ * another full schedule either. A shell the user really had and lost gets the
+ * budget back.
  */
-export function sessionEarnedRetryReset(livedMs: number): boolean {
-  return livedMs >= HEALTHY_SESSION_MS;
+export function sessionEarnedRetryReset(usableMs: number): boolean {
+  return usableMs > 0 && usableMs >= HEALTHY_SESSION_MS;
 }
 
 /** Delay before reconnect attempt `attempt` (1-based), or null when exhausted. */
