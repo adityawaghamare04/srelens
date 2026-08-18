@@ -232,8 +232,12 @@ not start until the package manager finishes the job:
 ```bash
 sudo dpkg --configure -a        # Debian/Ubuntu: finish a half-configured install
 sudo apt --fix-broken install   # …and pull in whatever it was missing
-sudo dnf reinstall srelens      # Fedora/RHEL
+sudo dnf reinstall ./srelens-*.rpm   # Fedora/RHEL, from the downloaded file
 ```
+
+srelens is distributed as a downloaded package rather than from a repository,
+so the `dnf` line needs the `.rpm` file itself — plain `dnf reinstall srelens`
+has nowhere to fetch it from and fails.
 
 The error `dpkg` or `rpm` printed names the actual cause; fix that first, since
 the commands above will otherwise stop at the same point.
