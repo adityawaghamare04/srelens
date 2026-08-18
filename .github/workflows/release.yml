@@ -46,10 +46,10 @@ jobs:
       release: ${{ steps.compute.outputs.release }}
       notes: ${{ steps.compute.outputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Compute + commit next version
@@ -193,7 +193,7 @@ jobs:
     if: needs.version.outputs.release == 'true' && github.ref_name == 'main'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -208,17 +208,19 @@ jobs:
             build-essential \
             webkit2gtk-driver \
             xvfb
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
       # custom-protocol makes the debug binary serve the EMBEDDED frontend
@@ -228,7 +230,7 @@ jobs:
       - name: Build the app binary
         run: cargo build -p srelens-desktop --features custom-protocol --profile ci-smoke
       - name: Create kind cluster
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: srelens-e2e
       - name: Full smoke suite through the real app
@@ -242,7 +244,7 @@ jobs:
             cargo test -p srelens-desktop --features custom-protocol --profile ci-smoke --test webdriver_smoke -- --ignored --nocapture
       - name: Upload failure artifacts (screenshot + app logs)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: smoke-full-failure-artifacts
           path: ${{ runner.temp }}/smoke-artifacts
@@ -267,7 +269,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # Stamp the release version into the workspace before the image builds:
       # every crate inherits [workspace.package].version, and without this the
       # server binary in the image reports the committed placeholder instead
@@ -286,16 +288,16 @@ jobs:
           ' "$V"
           echo "Docker build version: $V"
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -316,7 +318,7 @@ jobs:
           fi
           touch "/tmp/digests/${digest#sha256:}"
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docker-digest-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -336,15 +338,15 @@ jobs:
       packages: write
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: /tmp/digests
           pattern: docker-digest-*
           merge-multiple: true
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -417,7 +419,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # On main, the version job already pushed the bump commit — build it.
           ref: ${{ github.ref_name == 'main' && 'main' || github.sha }}
@@ -469,20 +471,21 @@ jobs:
           echo "${LINUXDEPLOY_SHA256}  $HOME/.cache/tauri/linuxdeploy-x86_64.AppImage" | sha256sum -c -
           chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: pnpm install --frozen-lockfile
 
@@ -530,7 +533,7 @@ jobs:
           echo "REL_NAME=srelens v${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
 
       - name: Build app & publish release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signing — produces the .sig files latest.json needs so the
@@ -601,7 +604,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: Compose and publish release notes
@@ -647,7 +650,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.ref_name == 'main' && 'main' || github.sha }}
       - name: Compose and publish updater manifest
@@ -688,8 +691,8 @@ jobs:
     if: ${{ always() && needs.build.result == 'success' && github.ref_name == 'main' && needs.version.outputs.release == 'true' }}
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Compare installer sizes against the previous release
@@ -771,7 +774,7 @@ jobs:
       # compare against, so it — not KEYS — is the authoritative statement of
       # which key is current. KEYS is a cumulative archive holding retired keys
       # too, so "the key in KEYS" is not a well-defined thing to check against.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: env.ENABLE_GPG == 'true'
         with:
           ref: ${{ github.ref_name == 'main' && 'main' || github.sha }}

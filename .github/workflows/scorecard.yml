@@ -1,0 +1,72 @@
+name: Scorecard
+
+# OpenSSF Scorecard (#230): a supply-chain health check over this repository —
+# are actions pinned, are workflow tokens least-privilege, is the default branch
+# protected, is there a security policy, are dependencies kept current.
+#
+# The score is published to the OpenSSF API, which is what the README badge
+# reads; the findings are also uploaded as SARIF so they show up in the repo's
+# Security tab next to the code-scanning alerts.
+on:
+  # A change to branch protection changes the score, so re-run on one.
+  branch_protection_rule:
+  schedule:
+    # Weekly: most checks are repo-configuration, which rarely moves, and a
+    # stale-dependency finding is not something to learn about hourly.
+    - cron: "20 7 * * 1"
+  # `dev` is this repository's DEFAULT branch, which is the one that matters
+  # here: Scorecard scores a repository rather than a change, and checks like
+  # Branch-Protection are evaluated against the default branch. It also has to
+  # be the only branch that publishes — schedule and branch_protection_rule
+  # events always run from the default branch, so also publishing from `main`
+  # would leave the badge showing whichever of the two ran last.
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-22.04
+    permissions:
+      # Upload the findings to the code-scanning dashboard.
+      security-events: write
+      # Publish the result to the OpenSSF API, which the badge reads. This is
+      # an OIDC token, not a repository secret: nothing here can write to the
+      # repo, and forks can't publish under this project's name.
+      id-token: write
+      contents: read
+      # Read-only workflow metadata, for the Token-Permissions check.
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Scorecard reads the repository, never pushes to it, so leaving a
+          # credential in the checkout would be handing it a right it has no
+          # use for.
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      # Kept for 5 days: long enough to compare two runs when a score moves,
+      # short enough not to accumulate.
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
+        with:
+          sarif_file: results.sarif
