@@ -1,0 +1,121 @@
+# Suppressions for the OSSF Scorecard "Vulnerabilities" check (code-scanning
+# alert #32) and any local `osv-scanner scan source --lockfile=Cargo.lock`.
+#
+# Everything listed here is a transitive advisory we cannot act on: the crate is
+# pinned by an upstream dependency, or no fixed version exists. Advisories we
+# *can* fix are fixed instead of being listed -- see the git history for this
+# file. Every entry carries `ignoreUntil` so the suppression expires and forces
+# a re-review rather than silently hiding a vulnerability forever.
+#
+# To re-audit: `osv-scanner scan source --lockfile=Cargo.lock`
+
+# --- gtk-rs GTK3 bindings: unmaintained, no fixed version ---------------------
+# Pulled in only on Linux via tauri -> muda/tray-icon -> gtk 0.18 (webkit2gtk
+# backend). These are "crate is unmaintained" advisories with no CVE and no
+# upstream release to move to; clearing them requires Tauri to migrate to GTK4.
+# RUSTSEC-2024-0429 (glib unsoundness, fixed in 0.20) is likewise unreachable
+# for us because tauri 2.x pins gtk 0.18, which pins glib 0.18.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0411"  # gdkwayland-sys
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0412"  # gdk
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0413"  # atk
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0414"  # gdkx11-sys
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0415"  # gtk
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0416"  # atk-sys
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0417"  # gdkx11
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0418"  # gdk-sys
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0419"  # gtk3-macros
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0420"  # gtk-sys
+reason = "Unmaintained GTK3 binding pinned by tauri's Linux backend; no fixed version exists."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"  # glib -- alias GHSA-wrw7-89jp-8q8g
+reason = "glib 0.18 Iterator unsoundness; fixed in 0.20 but tauri 2.x pins gtk 0.18 -> glib 0.18. Not upgradable from here."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"  # proc-macro-error
+reason = "Unmaintained; build-time proc-macro reached only via glib-macros in the same pinned GTK3 stack. No fixed version."
+ignoreUntil = 2027-02-18
+
+# --- unic-*: unmaintained, reached via tauri-utils -> urlpattern --------------
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0075"  # unic-char-range
+reason = "Unmaintained crate advisory; pinned by tauri-utils -> urlpattern. No fixed version."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0080"  # unic-common
+reason = "Unmaintained crate advisory; pinned by tauri-utils -> urlpattern. No fixed version."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0081"  # unic-char-property
+reason = "Unmaintained crate advisory; pinned by tauri-utils -> urlpattern. No fixed version."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0098"  # unic-ucd-version
+reason = "Unmaintained crate advisory; pinned by tauri-utils -> urlpattern. No fixed version."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0100"  # unic-ucd-ident
+reason = "Unmaintained crate advisory; pinned by tauri-utils -> urlpattern. No fixed version."
+ignoreUntil = 2027-02-18
+
+# --- remaining transitive advisories with no fix -----------------------------
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"  # paste
+reason = "Unmaintained proc-macro reached only via thirtyfour, a dev-dependency of srelens-desktop. Compile-time only and never linked into a shipped binary."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0235"  # rkyv
+reason = "rkyv 0.7 archive validation. Reached via tauri-plugin-log -> byte-unit, whose optional `rkyv` feature we do not enable, so the code is never compiled. byte-unit pins 0.7; the fix is 0.8."
+ignoreUntil = 2027-02-18
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"  # rsa -- Marvin timing sidechannel
+reason = "No fixed version of the rsa crate exists. Reached via openidconnect for OIDC token verification; srelens performs public-key signature verification, not RSA private-key decryption, so the key-recovery oracle does not apply."
+ignoreUntil = 2027-02-18
