@@ -215,10 +215,28 @@ works this out for itself rather than asking you:
 | `.deb` / `.rpm` | Downloads the new package and applies it with `dpkg -i` / `rpm -U`. This needs administrator rights, so your desktop will ask for your password; Settings warns you before the prompt appears. |
 | AUR (`srelens-bin`) | Not offered. pacman owns the files, so srelens points you at `paru -Syu` / `yay -Syu` instead of desyncing its database. |
 
-If a package update fails — no `pkexec`, no polkit agent, a locked package
-database — nothing is left half-applied: download the new `.deb`/`.rpm` from
+A package update can fail in two different ways, and they need different
+answers.
+
+**Before anything is applied** — no `pkexec` or polkit agent, the password
+prompt cancelled, a locked package database. Nothing has changed; download the
+new `.deb`/`.rpm` from
 [Releases](https://github.com/srelens/srelens/releases/latest) and install it
-the same way you installed the first one.
+the way you installed the first one.
+
+**Part-way through** — `dpkg`/`rpm` accepted the package and then failed while
+unpacking or configuring it (a full disk, an unmet dependency, a failing
+maintainer script). The package is left unpacked or unconfigured and srelens may
+not start until the package manager finishes the job:
+
+```bash
+sudo dpkg --configure -a        # Debian/Ubuntu: finish a half-configured install
+sudo apt --fix-broken install   # …and pull in whatever it was missing
+sudo dnf reinstall srelens      # Fedora/RHEL
+```
+
+The error `dpkg` or `rpm` printed names the actual cause; fix that first, since
+the commands above will otherwise stop at the same point.
 
 ## Uninstalling
 
