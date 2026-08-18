@@ -14,11 +14,14 @@ on:
     # Weekly: most checks are repo-configuration, which rarely moves, and a
     # stale-dependency finding is not something to learn about hourly.
     - cron: "20 7 * * 1"
-  # Only on the default branch. Scorecard scores a repository, not a change,
-  # and publishing from a branch would report that branch's settings as if they
-  # were the project's.
+  # `dev` is this repository's DEFAULT branch, which is the one that matters
+  # here: Scorecard scores a repository rather than a change, and checks like
+  # Branch-Protection are evaluated against the default branch. It also has to
+  # be the only branch that publishes — schedule and branch_protection_rule
+  # events always run from the default branch, so also publishing from `main`
+  # would leave the badge showing whichever of the two ran last.
   push:
-    branches: [main]
+    branches: [dev]
   workflow_dispatch:
 
 permissions: read-all
