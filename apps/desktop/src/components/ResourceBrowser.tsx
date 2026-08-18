@@ -393,6 +393,7 @@ const serviceColumns: Column<ServiceSummary>[] = [
   { key: "namespace", header: "Namespace", render: (s) => <span className="fl-link">{s.namespace}</span> },
   { key: "type", header: "Type" },
   { key: "clusterIP", header: "Cluster IP", render: (s) => <Muted>{s.clusterIP}</Muted> },
+  { key: "externalIP", header: "External IP", render: (s) => <Muted>{s.externalIP || "—"}</Muted> },
   { key: "ports", header: "Ports" },
   { key: "age", header: "Age", getSortValue: ageSortValue, render: (s) => <Muted>{s.age}</Muted> },
 ];

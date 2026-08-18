@@ -39,6 +39,9 @@ export interface ServiceSummary {
   namespace: string;
   type: string;
   clusterIP: string;
+  /** Load-balancer address, assigned external IPs, or an ExternalName target;
+   *  empty when there is none, `<pending>` while a LoadBalancer waits. */
+  externalIP: string;
   ports: string;
   age: string;
 }
