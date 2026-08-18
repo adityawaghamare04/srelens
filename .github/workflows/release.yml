@@ -699,9 +699,12 @@ jobs:
     needs: [version, build]
     if: ${{ always() && needs.build.result == 'success' && github.ref_name == 'main' && needs.version.outputs.release == 'true' }}
     runs-on: ubuntu-22.04
-    # Reads the Releases API to compare asset sizes; writes nothing.
+    # `contents: write` despite writing nothing: the release it compares is
+    # still a DRAFT at this point, and GitHub shows draft releases only to
+    # callers with push access. With `contents: read` the API reports the tag
+    # as not found and the job fails, which is what happened to v0.7.0.
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
