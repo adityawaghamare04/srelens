@@ -6,6 +6,7 @@ import {
   type ExitReason,
   type TermStatus,
   nextStatusOnExit,
+  sessionEarnedRetryReset,
   reconnectDelayMs,
 } from "../lib/terminalReconnect";
 
@@ -39,6 +40,8 @@ export function TerminalPane({ driver, banner }: { driver: TerminalDriver; banne
     let term: any = null;
     let conn: TerminalConnection | null = null;
     let attempt = 0;
+    /** When the current session went live, for judging whether it worked. */
+    let liveSince: number | null = null;
     let reconnectTimer: number | undefined;
     let cleanupExtra: (() => void) | undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -49,11 +52,23 @@ export function TerminalPane({ driver, banner }: { driver: TerminalDriver; banne
     const handleExit = (reason: ExitReason) => {
       if (disposed || !term) return;
       conn = null;
+      // A session that stayed up and then dropped gets its full retry budget
+      // back; one that died on arrival keeps counting, so a shell that can
+      // never start stops retrying and shows why (#263).
+      const lived = liveSince === null ? 0 : Date.now() - liveSince;
+      liveSince = null;
+      if (sessionEarnedRetryReset(lived)) attempt = 0;
       const next = nextStatusOnExit(reason, driver.reconnectable, attempt);
       setStatus(next);
       if (next.kind === "reconnecting") {
         attempt = next.attempt;
+        // Show the cause on every attempt, not only once the budget runs out:
+        // if the shell can never start, the reason is the useful part and the
+        // user should not have to wait through the backoff to read it.
         term.write(divider(`reconnecting… (attempt ${attempt})`));
+        if (reason.kind === "error" && reason.message) {
+          term.write(`\x1b[2m${reason.message}\x1b[0m\r\n`);
+        }
         reconnectTimer = window.setTimeout(() => void connect(true), reconnectDelayMs(attempt) ?? 0);
       } else if (reason.kind === "error") {
         term.write(`${divider("disconnected")}${reason.message}\r\n`);
@@ -82,12 +97,17 @@ export function TerminalPane({ driver, banner }: { driver: TerminalDriver; banne
       }
       conn = opened;
       if (isReconnect) term.write(divider("reconnected (new shell)"));
-      attempt = 0;
+      // NOT a retry-budget reset: connecting only means the session was
+      // spawned. Whether it works is decided by how long it survives, which
+      // handleExit judges.
+      liveSince = Date.now();
       setStatus({ kind: "live" });
     };
 
     controls.current = {
       reconnect: () => {
+        // An explicit reconnect is a fresh decision by the user, so it does
+        // start the budget over.
         if (reconnectTimer) clearTimeout(reconnectTimer);
         attempt = 0;
         void connect(true);

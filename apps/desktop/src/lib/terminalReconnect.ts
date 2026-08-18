@@ -21,6 +21,28 @@ export type TermStatus =
 /** Backoff before each successive reconnect attempt; length caps the retries. */
 export const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 
+/**
+ * How long a session must stay up to count as having worked.
+ *
+ * Opening an exec session and *keeping* one are different things: the backend
+ * returns a session id as soon as the task is spawned, so a shell that is
+ * refused (RBAC, a container that is not running, an image without a shell)
+ * still connects successfully and only fails a moment later. Treating that as
+ * a healthy connection reset the retry budget every cycle, so the terminal
+ * reconnected forever instead of stopping and showing the error (#263).
+ */
+export const HEALTHY_SESSION_MS = 5000;
+
+/**
+ * Whether a session that has just ended earned a fresh retry budget.
+ *
+ * A shell the user actually used and lost deserves the full backoff schedule
+ * again; one that died on arrival does not, or the schedule never runs out.
+ */
+export function sessionEarnedRetryReset(livedMs: number): boolean {
+  return livedMs >= HEALTHY_SESSION_MS;
+}
+
 /** Delay before reconnect attempt `attempt` (1-based), or null when exhausted. */
 export function reconnectDelayMs(attempt: number): number | null {
   if (attempt < 1 || attempt > RECONNECT_DELAYS_MS.length) return null;

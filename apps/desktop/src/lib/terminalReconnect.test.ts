@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  sessionEarnedRetryReset,
+  HEALTHY_SESSION_MS,
   reconnectDelayMs,
   shouldAutoReconnect,
   nextStatusOnExit,
@@ -41,5 +43,48 @@ describe("nextStatusOnExit", () => {
       kind: "disconnected",
       reason: "boom",
     });
+  });
+});
+
+describe("sessionEarnedRetryReset", () => {
+  it("does not reward a session that died on arrival", () => {
+    // The #263 loop: the backend returns a session id as soon as the task is
+    // spawned, so a shell that is refused still "connects". Resetting the
+    // budget on that meant reconnecting forever instead of reporting the
+    // error.
+    expect(sessionEarnedRetryReset(0)).toBe(false);
+    expect(sessionEarnedRetryReset(200)).toBe(false);
+    expect(sessionEarnedRetryReset(HEALTHY_SESSION_MS - 1)).toBe(false);
+  });
+
+  it("rewards a session the user actually had", () => {
+    expect(sessionEarnedRetryReset(HEALTHY_SESSION_MS)).toBe(true);
+    expect(sessionEarnedRetryReset(60_000)).toBe(true);
+  });
+
+  it("exhausts the schedule when every attempt dies immediately", () => {
+    // Walk the real policy: without a reset, attempts climb and stop.
+    let attempt = 0;
+    const statuses: string[] = [];
+    for (let i = 0; i < RECONNECT_DELAYS_MS.length + 1; i++) {
+      if (sessionEarnedRetryReset(50)) attempt = 0;
+      const next = nextStatusOnExit({ kind: "error", message: "boom" }, true, attempt);
+      statuses.push(next.kind);
+      if (next.kind === "reconnecting") attempt = next.attempt;
+    }
+    expect(statuses.filter((s) => s === "reconnecting")).toHaveLength(RECONNECT_DELAYS_MS.length);
+    expect(statuses.at(-1)).toBe("disconnected");
+  });
+
+  it("keeps retrying indefinitely if a healthy session keeps dropping", () => {
+    // The behaviour we still want: a working shell that loses its connection
+    // gets the full schedule again each time.
+    let attempt = 0;
+    for (let i = 0; i < 20; i++) {
+      if (sessionEarnedRetryReset(30_000)) attempt = 0;
+      const next = nextStatusOnExit({ kind: "error", message: "drop" }, true, attempt);
+      expect(next.kind).toBe("reconnecting");
+      if (next.kind === "reconnecting") attempt = next.attempt;
+    }
   });
 });
