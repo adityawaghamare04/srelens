@@ -2,7 +2,10 @@
 
 # ---- Stage 1: build the frontend bundle -------------------------------------
 FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS frontend
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# pnpm via npm, not corepack: Node 26 ships without corepack (it was unbundled
+# upstream), so `corepack enable` is a command-not-found in this image. The
+# pinned major is what pnpm-lock.yaml was written by.
+RUN npm install -g pnpm@9
 WORKDIR /src
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/desktop/package.json apps/desktop/package.json
