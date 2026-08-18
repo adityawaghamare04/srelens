@@ -49,7 +49,17 @@ pub struct ListContextsOut {
 
 /// Build the capability over the shared cache. Supplying `paths` replaces the
 /// additional kubeconfig files and invalidates authenticated clients.
-pub fn list_contexts_capability(cache: Arc<ClientCache>, default_paths: Vec<PathBuf>) -> Capability {
+/// `managed_dir` is the app's own kubeconfig folder, or `None` to disable that
+/// discovery. It is passed in rather than looked up globally so the capability
+/// stays hermetic — a global lookup makes every test depend on whatever is in
+/// the developer's real config directory. The DIRECTORY is fixed but its
+/// CONTENTS are read on each call, which is what lets a config pasted or
+/// dropped in while the app runs resolve without a restart (#256).
+pub fn list_contexts_capability(
+    cache: Arc<ClientCache>,
+    default_paths: Vec<PathBuf>,
+    managed_dir: Option<PathBuf>,
+) -> Capability {
     Capability::typed::<ListContextsIn, ListContextsOut, _, _>(
         "k8s.listContexts",
         "list the kube contexts available in the kubeconfig",
@@ -57,16 +67,46 @@ pub fn list_contexts_capability(cache: Arc<ClientCache>, default_paths: Vec<Path
         move |input: ListContextsIn| {
             let cache = cache.clone();
             let default_paths = default_paths.clone();
+            let managed_dir = managed_dir.clone();
             async move {
-                if let Some(additional) = input.paths {
-                    let mut paths = default_paths;
-                    for path in additional.into_iter().map(PathBuf::from) {
-                        if !paths.contains(&path) {
-                            paths.push(path);
+                // A caller that names its own files rebuilds from the static
+                // defaults; one that doesn't keeps whatever is already active,
+                // so an MCP `{}` call never discards paths the desktop set.
+                let mut paths = match input.paths {
+                    Some(additional) => {
+                        let mut paths = default_paths;
+                        for path in additional.into_iter().map(PathBuf::from) {
+                            if !paths.contains(&path) {
+                                paths.push(path);
+                            }
+                        }
+                        paths
+                    }
+                    None => cache.paths().await,
+                };
+                // Both branches then reconcile with the disk, so discovery
+                // behaves the same however the capability is invoked.
+                //
+                // Read HERE, not captured at registry-build time: the folder's
+                // contents change while the app runs, and a startup snapshot
+                // would miss anything pasted or dropped in afterwards (#256).
+                if let Some(dir) = &managed_dir {
+                    for managed in crate::connect::kubeconfig_files_in(dir) {
+                        if !paths.contains(&managed) {
+                            paths.push(managed);
                         }
                     }
-                    cache.set_paths(paths).await;
                 }
+                // `default_paths` and the cache seed are both snapshots, so a
+                // kubeconfig deleted while the app runs would otherwise be
+                // reintroduced on every call and sit in the cache forever —
+                // where `load_kubeconfigs` is strict and fails the
+                // merged-resolution fallback on the missing file. Only ABSENT
+                // files are dropped: one that exists but is malformed still
+                // reaches the reader and surfaces its parse error, which the
+                // caller needs to see.
+                paths.retain(|path| path.exists());
+                cache.set_paths(paths).await;
                 // Enumerate every context across all files with duplicate-name
                 // disambiguation, so contexts that share a name (e.g. `default`
                 // across per-cluster kubeconfigs) are all visible and each
@@ -292,7 +332,7 @@ mod tests {
     #[test]
     fn capability_has_expected_id_and_annotations() {
         let path = PathBuf::from("/nonexistent");
-        let cap = list_contexts_capability(ClientCache::new(path.clone()), vec![path]);
+        let cap = list_contexts_capability(ClientCache::new(path.clone()), vec![path], None);
         assert_eq!(cap.id, "k8s.listContexts");
         assert!(cap.annotations.read_only);
     }
@@ -309,7 +349,7 @@ mod tests {
         .unwrap();
 
         let mut reg = Registry::new();
-        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path.clone()]));
+        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path.clone()], None));
         let out = reg.invoke("k8s.listContexts", json!({})).await.unwrap();
 
         assert_eq!(out["contexts"][0]["name"], "ctx-a");
@@ -321,7 +361,7 @@ mod tests {
     async fn missing_file_is_a_handler_error() {
         let mut reg = Registry::new();
         let path = PathBuf::from("/no/such/kubeconfig");
-        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path]));
+        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path], None));
         let err = reg.invoke("k8s.listContexts", json!({})).await.unwrap_err();
         assert!(matches!(err, CapabilityError::Handler(_)));
     }
@@ -354,7 +394,7 @@ users:
         .unwrap();
 
         let mut reg = Registry::new();
-        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path.clone()]));
+        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path.clone()], None));
         let out = reg.invoke("k8s.listContexts", json!({})).await.unwrap();
         let contexts = out["contexts"].as_array().unwrap();
 
@@ -403,7 +443,7 @@ users:
         .unwrap();
 
         let mut reg = Registry::new();
-        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path.clone()]));
+        reg.register(list_contexts_capability(ClientCache::new(path.clone()), vec![path.clone()], None));
         let out = reg.invoke("k8s.listContexts", json!({})).await.unwrap();
         let contexts = out["contexts"].as_array().unwrap();
 
@@ -417,6 +457,131 @@ users:
         assert!(eks["provider"].is_null());
 
         let _ = tokio::fs::remove_file(&path).await;
+    }
+
+    #[tokio::test]
+    async fn a_kubeconfig_dropped_into_the_managed_folder_resolves_without_a_restart() {
+        // The #256 case: the capability is built once at startup, and the file
+        // appears afterwards. Reading the folder per call — rather than
+        // capturing its contents — is what makes it visible.
+        let dir = std::env::temp_dir().join(format!("srelens-managed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("base.yaml");
+        tokio::fs::write(
+            &base,
+            "clusters:\n- name: a\n  cluster: { server: https://a }\ncontexts:\n- name: ctx-a\n  context: { cluster: a, user: user-a }\n",
+        ).await.unwrap();
+
+        let managed = dir.join("managed");
+        std::fs::create_dir_all(&managed).unwrap();
+
+        let cache = ClientCache::new(base.clone());
+        let mut reg = Registry::new();
+        reg.register(list_contexts_capability(
+            cache,
+            vec![base.clone()],
+            Some(managed.clone()),
+        ));
+
+        // Registered while the folder is empty.
+        let before = reg.invoke("k8s.listContexts", json!({ "paths": [] })).await.unwrap();
+        assert_eq!(before["contexts"].as_array().unwrap().len(), 1);
+
+        // Now a config is pasted in, long after the capability was built.
+        tokio::fs::write(
+            managed.join("pasted.yaml"),
+            "clusters:\n- name: b\n  cluster: { server: https://b }\ncontexts:\n- name: ctx-b\n  context: { cluster: b, user: user-b }\n",
+        ).await.unwrap();
+
+        let after = reg.invoke("k8s.listContexts", json!({ "paths": [] })).await.unwrap();
+        let names: Vec<String> = after["contexts"].as_array().unwrap().iter()
+            .map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert!(names.iter().any(|n| n == "ctx-b"), "pasted context missing: {names:?}");
+
+        // …and removing it takes the context away again, no restart either.
+        std::fs::remove_file(managed.join("pasted.yaml")).unwrap();
+        let removed = reg.invoke("k8s.listContexts", json!({ "paths": [] })).await.unwrap();
+        let names: Vec<String> = removed["contexts"].as_array().unwrap().iter()
+            .map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert!(!names.iter().any(|n| n == "ctx-b"), "deleted context lingered: {names:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_managed_file_deleted_at_runtime_leaves_the_active_path_set() {
+        let dir = std::env::temp_dir().join(format!("srelens-repro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("base.yaml");
+        std::fs::write(&base, "clusters:\n- name: a\n  cluster: { server: https://a }\ncontexts:\n- name: ctx-a\n  context: { cluster: a, user: user-a }\n").unwrap();
+        let managed = dir.join("managed");
+        std::fs::create_dir_all(&managed).unwrap();
+        let pasted = managed.join("pasted.yaml");
+        std::fs::write(&pasted, "clusters:\n- name: b\n  cluster: { server: https://b }\ncontexts:\n- name: ctx-b\n  context: { cluster: b, user: user-b }\n").unwrap();
+
+        // Startup: default_kubeconfig_paths() included the managed file.
+        let startup_paths = vec![base.clone(), pasted.clone()];
+        let cache = ClientCache::new(base.clone());
+        let mut reg = Registry::new();
+        reg.register(list_contexts_capability(cache.clone(), startup_paths, Some(managed.clone())));
+
+        // The user deletes it while the app runs.
+        std::fs::remove_file(&pasted).unwrap();
+
+        let out = reg.invoke("k8s.listContexts", json!({ "paths": [] })).await.unwrap();
+        let names: Vec<String> = out["contexts"].as_array().unwrap().iter()
+            .map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert_eq!(names, ["ctx-a"], "the deleted context must be gone");
+
+        // The important half: default_paths is a startup SNAPSHOT that still
+        // holds the deleted file, so without pruning it would be reintroduced
+        // on every call and linger in the cache — where the strict merged
+        // fallback in load_kubeconfigs fails on the missing file.
+        let active = cache.paths().await;
+        assert!(
+            !active.contains(&pasted),
+            "deleted kubeconfig still active: {active:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn discovery_self_heals_for_a_caller_that_sends_no_paths() {
+        // An MCP client calls k8s.listContexts with {}. Reconciliation used to
+        // run only when `paths` was present, so such a caller kept whatever
+        // the startup cache seed held — including files since deleted.
+        let dir = std::env::temp_dir().join(format!("srelens-nopaths-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("base.yaml");
+        std::fs::write(&base, "clusters:\n- name: a\n  cluster: { server: https://a }\ncontexts:\n- name: ctx-a\n  context: { cluster: a, user: user-a }\n").unwrap();
+        let managed = dir.join("managed");
+        std::fs::create_dir_all(&managed).unwrap();
+        let seeded = managed.join("seeded.yaml");
+        std::fs::write(&seeded, "clusters:\n- name: b\n  cluster: { server: https://b }\ncontexts:\n- name: ctx-b\n  context: { cluster: b, user: user-b }\n").unwrap();
+
+        // Cache seeded at startup with the managed file, as the desktop does.
+        let cache = ClientCache::new_many(vec![base.clone(), seeded.clone()]);
+        let mut reg = Registry::new();
+        reg.register(list_contexts_capability(
+            cache.clone(),
+            vec![base.clone()],
+            Some(managed.clone()),
+        ));
+
+        // A NEW file appears, and the seeded one is deleted.
+        std::fs::write(managed.join("added.yaml"), "clusters:\n- name: c\n  cluster: { server: https://c }\ncontexts:\n- name: ctx-c\n  context: { cluster: c, user: user-c }\n").unwrap();
+        std::fs::remove_file(&seeded).unwrap();
+
+        // Invoked with NO paths key at all.
+        let out = reg.invoke("k8s.listContexts", json!({})).await.unwrap();
+        let names: Vec<String> = out["contexts"].as_array().unwrap().iter()
+            .map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert!(names.iter().any(|n| n == "ctx-c"), "new file not discovered: {names:?}");
+        assert!(!names.iter().any(|n| n == "ctx-b"), "deleted file lingered: {names:?}");
+
+        let active = cache.paths().await;
+        assert!(!active.contains(&seeded), "deleted path still active: {active:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -435,7 +600,7 @@ users:
 
         let cache = ClientCache::new(first.clone());
         let mut reg = Registry::new();
-        reg.register(list_contexts_capability(cache, vec![first.clone()]));
+        reg.register(list_contexts_capability(cache, vec![first.clone()], None));
         let out = reg.invoke(
             "k8s.listContexts",
             json!({ "paths": [second.to_string_lossy()] }),
@@ -469,7 +634,7 @@ users:
         let cache = ClientCache::new(path.clone());
         let mut reg = Registry::new();
         reg.register(delete_context_capability(cache.clone()));
-        reg.register(list_contexts_capability(cache.clone(), vec![path.clone()]));
+        reg.register(list_contexts_capability(cache.clone(), vec![path.clone()], None));
 
         // Delete the context
         let out = reg.invoke("k8s.deleteContext", json!({ "context": "ctx-a" })).await.unwrap();

@@ -3,7 +3,7 @@
 //! reachability. Authentication (client certs, tokens, exec plugins) is handled
 //! by kube-rs from the kubeconfig.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,6 +63,56 @@ pub fn init_timeout_from_env() -> u64 {
         }
     }
     request_timeout_secs()
+}
+
+/// The folder the app owns for kubeconfigs it manages itself — where a pasted
+/// config is saved. Tied to the bundle identifier, like `settings.json`, so it
+/// survives dev/installed builds and binary renames.
+pub fn default_kubeconfig_dir() -> Option<PathBuf> {
+    Some(
+        dirs::config_dir()?
+            .join("app.srelens.desktop")
+            .join("kubeconfigs"),
+    )
+}
+
+/// Kubeconfigs currently in the app's own folder, sorted for a stable order.
+///
+/// Enumerated on every call rather than captured once: a config pasted in, or
+/// dropped there by hand, is one the app should resolve without anyone
+/// registering it separately, and one deleted should stop resolving (#256). An
+/// unreadable folder or entry is simply absent — discovery is best-effort and
+/// must never fail a listing.
+pub fn managed_kubeconfig_files() -> Vec<PathBuf> {
+    let Some(dir) = default_kubeconfig_dir() else {
+        return Vec::new();
+    };
+    kubeconfig_files_in(&dir)
+}
+
+/// The enumeration itself, taking the directory so it is testable without the
+/// platform config dir (the same seam pattern used elsewhere for path-bound
+/// code). An unreadable folder or entry yields nothing rather than an error:
+/// discovery is best-effort and must never fail a context listing.
+pub fn kubeconfig_files_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            // Skip dotfiles: editors and sync tools leave partial copies
+            // (.foo.yaml.swp, .DS_Store) that are not kubeconfigs.
+            path.is_file()
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with('.'))
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 /// Build an authenticated kube-rs client for a named kubeconfig context.
@@ -456,6 +506,77 @@ pub fn test_cluster_connection_capability() -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmp_dir(label: &str) -> PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "srelens-kubecfg-{label}-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_file_created_after_startup_is_discovered() {
+        // The whole point of #256: enumerating the folder, rather than
+        // remembering a snapshot, is what makes a pasted or hand-dropped
+        // kubeconfig visible without a restart.
+        let dir = tmp_dir("created");
+        assert!(kubeconfig_files_in(&dir).is_empty());
+
+        std::fs::write(dir.join("team.yaml"), b"apiVersion: v1\n").unwrap();
+        let found = kubeconfig_files_in(&dir);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("team.yaml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_deleted_file_stops_being_discovered() {
+        let dir = tmp_dir("deleted");
+        let path = dir.join("gone.yaml");
+        std::fs::write(&path, b"apiVersion: v1\n").unwrap();
+        assert_eq!(kubeconfig_files_in(&dir).len(), 1);
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(kubeconfig_files_in(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dotfiles_and_subdirectories_are_ignored() {
+        // Editors and sync tools leave partial copies beside real files.
+        let dir = tmp_dir("noise");
+        std::fs::write(dir.join("real.yaml"), b"apiVersion: v1\n").unwrap();
+        std::fs::write(dir.join(".real.yaml.swp"), b"junk").unwrap();
+        std::fs::write(dir.join(".DS_Store"), b"junk").unwrap();
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+
+        let found = kubeconfig_files_in(&dir);
+        assert_eq!(found.len(), 1, "only the real file: {found:?}");
+        assert!(found[0].ends_with("real.yaml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discovery_is_sorted_and_survives_a_missing_folder() {
+        let dir = tmp_dir("sorted");
+        for name in ["c.yaml", "a.yaml", "b.yaml"] {
+            std::fs::write(dir.join(name), b"apiVersion: v1\n").unwrap();
+        }
+        let names: Vec<String> = kubeconfig_files_in(&dir)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["a.yaml", "b.yaml", "c.yaml"], "stable order");
+
+        // A folder that was never created must not be an error.
+        assert!(kubeconfig_files_in(&dir.join("nonexistent")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use serde_json::json;
     use srelens_capability::Registry;
     use std::path::PathBuf;

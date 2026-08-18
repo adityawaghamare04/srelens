@@ -31,7 +31,18 @@ pub fn capability_catalog() -> Vec<CatalogEntry> {
     catalog_of(&build_registry())
 }
 
-/// Resolve kubeconfig paths: every `$KUBECONFIG` entry, else `$HOME/.kube/config`.
+pub use srelens_kube::connect::{default_kubeconfig_dir, managed_kubeconfig_files};
+
+/// The STATIC kubeconfig sources: every `$KUBECONFIG` entry, else
+/// `$HOME/.kube/config`.
+///
+/// Deliberately excludes the app's managed folder. That folder's contents
+/// change while the app runs, and this result gets captured by long-lived
+/// consumers — the capability registry snapshots it once at build time — so
+/// folding volatile content in here means a file deleted at runtime is
+/// reintroduced on every later call and never goes away. Callers that want the
+/// managed folder as well should use [`all_kubeconfig_paths`], which resolves
+/// it at call time.
 pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
     if let Some(value) = std::env::var_os("KUBECONFIG") {
         let paths = std::env::split_paths(&value)
@@ -43,6 +54,22 @@ pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
     }
     let home = std::env::var("HOME").unwrap_or_default();
     vec![PathBuf::from(home).join(".kube").join("config")]
+}
+
+/// Every kubeconfig source as of RIGHT NOW: the static ones plus whatever is
+/// currently in the app's managed folder.
+///
+/// For callers that resolve paths per operation (a terminal, a helm command,
+/// the initial client cache). Anything that captures its result for later
+/// reuse wants [`default_kubeconfig_paths`] plus a live folder read instead.
+pub fn all_kubeconfig_paths() -> Vec<PathBuf> {
+    let mut paths = default_kubeconfig_paths();
+    for managed in srelens_kube::connect::managed_kubeconfig_files() {
+        if !paths.contains(&managed) {
+            paths.push(managed);
+        }
+    }
+    paths
 }
 
 #[cfg(test)]
@@ -172,6 +199,7 @@ pub fn build_registry_with_paths_and_settings(
     reg.register(srelens_kube::contexts::list_contexts_capability(
         cache.clone(),
         kubeconfig_paths.clone(),
+        srelens_kube::connect::default_kubeconfig_dir(),
     ));
     reg.register(srelens_kube::contexts::delete_context_capability(
         cache.clone(),

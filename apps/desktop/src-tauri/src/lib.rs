@@ -179,11 +179,26 @@ async fn watch_kubeconfig_files(app_handle: tauri::AppHandle, cache: std::sync::
     use std::time::SystemTime;
     use tauri::Emitter;
 
+    // The cache's paths plus everything in the app's own kubeconfig folder.
+    // Polling the cache alone only ever compares files it already knows about,
+    // so a config pasted in — or dropped there by hand — was invisible until a
+    // restart (#256). Enumerating the folder is what makes creation and
+    // deletion observable at all.
+    async fn watched_paths(cache: &ClientCache) -> Vec<PathBuf> {
+        let mut paths = cache.paths().await;
+        for managed in srelens_registry::managed_kubeconfig_files() {
+            if !paths.contains(&managed) {
+                paths.push(managed);
+            }
+        }
+        paths
+    }
+
+
     let mut last_modified: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
 
     // Initialize the map with current files
-    let initial_paths = cache.paths().await;
-    for path in initial_paths {
+    for path in watched_paths(&cache).await {
         let modified = tokio::fs::metadata(&path)
             .await
             .and_then(|m| m.modified())
@@ -194,7 +209,7 @@ async fn watch_kubeconfig_files(app_handle: tauri::AppHandle, cache: std::sync::
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
-        let current_paths = cache.paths().await;
+        let current_paths = watched_paths(&cache).await;
         let mut changed = false;
 
         let mut next_modified = HashMap::new();
@@ -246,7 +261,7 @@ pub fn run() {
 
     // One shared client cache: request/response capabilities AND live watches
     // reuse the same authenticated kube-rs clients.
-    let cache = ClientCache::new_many(capabilities::default_kubeconfig_paths());
+    let cache = ClientCache::new_many(capabilities::all_kubeconfig_paths());
     let registry = capabilities::build_registry_with(cache.clone());
 
     // single-instance is registered BEFORE every other plugin, as the plugin
@@ -345,7 +360,7 @@ pub fn run() {
                 .map_err(|e| e.to_string())
                 .map(|dir| dir.join("cluster-oidc"))
                 .and_then(|config_dir| {
-                    let paths = capabilities::default_kubeconfig_paths();
+                    let paths = capabilities::all_kubeconfig_paths();
                     let yamls = cluster_oidc::read_kubeconfig_yamls(&paths);
                     tauri::async_runtime::block_on(cluster_oidc::DesktopClusterOidc::build(
                         &config_dir,
