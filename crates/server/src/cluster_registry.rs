@@ -44,7 +44,7 @@ impl ClusterOidcRegistry {
             // A context is OIDC if its user is OIDC.
             for ctx in &kc.contexts {
                 if let Some(c) = &ctx.context {
-                    if let Some(cfg) = oidc_users.get(&c.user) {
+                    if let Some(cfg) = c.user.as_deref().and_then(|u| oidc_users.get(u)) {
                         let key = cfg.key();
                         reg.by_key.entry(key.clone()).or_insert_with(|| cfg.clone());
                         reg.key_by_context.insert(ctx.name.clone(), key);

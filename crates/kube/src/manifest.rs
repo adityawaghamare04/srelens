@@ -1223,12 +1223,13 @@ metadata:
 
     #[test]
     fn apply_doc_from_result_409_becomes_conflict() {
-        let err = kube::Error::Api(kube::core::ErrorResponse {
-            status: "Failure".into(),
+        let err = kube::Error::Api(Box::new(kube::core::Status {
+            status: Some(kube::core::response::StatusSummary::Failure),
             message: "conflict with \"kubectl\": .spec.replicas".into(),
             reason: "Conflict".into(),
             code: 409,
-        });
+            ..Default::default()
+        }));
         let doc = apply_doc_from_result("Deployment".into(), "web".into(), Err(err));
         assert!(!doc.applied);
         assert!(doc.error.is_none());
@@ -1238,12 +1239,13 @@ metadata:
 
     #[test]
     fn apply_doc_from_result_other_error_is_cleaned() {
-        let err = kube::Error::Api(kube::core::ErrorResponse {
-            status: "Failure".into(),
+        let err = kube::Error::Api(Box::new(kube::core::Status {
+            status: Some(kube::core::response::StatusSummary::Failure),
             message: "boom".into(),
             reason: "InternalError".into(),
             code: 500,
-        });
+            ..Default::default()
+        }));
         let doc = apply_doc_from_result("Deployment".into(), "web".into(), Err(err));
         assert!(!doc.applied);
         assert!(doc.conflict.is_none());

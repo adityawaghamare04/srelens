@@ -63,7 +63,8 @@ pub(crate) fn summarise(np: NetworkPolicy) -> NetworkPolicySummary {
     let namespace = np.metadata.namespace.clone().unwrap_or_default();
     let spec = np.spec.as_ref();
     let pod_selector = spec
-        .map(|s| summarise_selector(&s.pod_selector))
+        .and_then(|s| s.pod_selector.as_ref())
+        .map(summarise_selector)
         .unwrap_or_else(|| "all pods".into());
     let ingress = spec.and_then(|s| s.ingress.as_ref()).map_or(0, |r| r.len()) as i32;
     let egress = spec.and_then(|s| s.egress.as_ref()).map_or(0, |r| r.len()) as i32;
@@ -138,10 +139,10 @@ mod tests {
                 ..Default::default()
             },
             spec: Some(NetworkPolicySpec {
-                pod_selector: LabelSelector {
+                pod_selector: Some(LabelSelector {
                     match_labels: Some(match_labels),
                     ..Default::default()
-                },
+                }),
                 ingress: Some(vec![NetworkPolicyIngressRule::default()]),
                 egress: Some(vec![
                     NetworkPolicyEgressRule::default(),

@@ -55,7 +55,7 @@ pub(crate) fn summarise(job: Job) -> JobSummary {
         status.and_then(|s| s.start_time.as_ref()),
         status.and_then(|s| s.completion_time.as_ref()),
     ) {
-        (Some(start), Some(end)) => crate::format_age((end.0 - start.0).num_seconds()),
+        (Some(start), Some(end)) => crate::format_age(end.0.duration_since(start.0).as_secs()),
         _ => String::new(),
     };
     JobSummary {
@@ -101,7 +101,7 @@ mod tests {
     use super::*;
     use k8s_openapi::api::batch::v1::{JobSpec, JobStatus};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{OwnerReference, Time};
-    use k8s_openapi::chrono::{TimeZone, Utc};
+    use k8s_openapi::jiff::Timestamp;
     use std::path::PathBuf;
 
     #[test]
@@ -113,8 +113,8 @@ mod tests {
 
     #[test]
     fn summarises_completions_owner_and_duration() {
-        let start = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
-        let end = Utc.with_ymd_and_hms(2026, 1, 1, 10, 2, 30).unwrap();
+        let start: Timestamp = "2026-01-01T10:00:00Z".parse().unwrap();
+        let end: Timestamp = "2026-01-01T10:02:30Z".parse().unwrap();
         let job = Job {
             metadata: kube::core::ObjectMeta {
                 name: Some("backup-123".into()),

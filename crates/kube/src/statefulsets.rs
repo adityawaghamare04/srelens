@@ -41,7 +41,7 @@ pub(crate) fn summarise(sts: StatefulSet) -> StatefulSetSummary {
     let service = sts
         .spec
         .as_ref()
-        .map(|s| s.service_name.clone())
+        .and_then(|s| s.service_name.clone())
         .unwrap_or_default();
     let status = sts.status.as_ref();
     let ready = status.and_then(|s| s.ready_replicas).unwrap_or(0);
@@ -105,7 +105,7 @@ mod tests {
             },
             spec: Some(StatefulSetSpec {
                 replicas: Some(3),
-                service_name: "pg-headless".into(),
+                service_name: Some("pg-headless".into()),
                 ..Default::default()
             }),
             status: Some(StatefulSetStatus {

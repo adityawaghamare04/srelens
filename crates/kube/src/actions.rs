@@ -264,7 +264,7 @@ pub fn rollout_restart_capability(cache: Arc<ClientCache>) -> Capability {
             async move {
                 let client = cache.get(&input.context).await.map_err(CapabilityError::Handler)?;
                 let api = dynamic_api(client, &input.kind, &input.namespace)?;
-                let now = k8s_openapi::chrono::Utc::now().to_rfc3339();
+                let now = k8s_openapi::jiff::Timestamp::now().to_string();
                 let patch = json!({
                     "spec": { "template": { "metadata": { "annotations": {
                         "kubectl.kubernetes.io/restartedAt": now
