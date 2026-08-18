@@ -1,0 +1,46 @@
+version: 2
+
+# Workflow actions are pinned by commit SHA (#230), which is what stops a
+# compromised tag from silently changing what CI runs — but a pin only stays
+# safe if something moves it forward, or the project quietly ends up running
+# year-old actions with known holes. That is this file's job.
+#
+# Only github-actions is watched here. Cargo and npm updates arrive through the
+# lockfiles and are exercised by the test suites on every change; opening a PR
+# per dependency on top of that would bury the updates that actually need a
+# human to look at them.
+updates:
+  # The Dockerfile's base images are pinned by digest, which freezes them at
+  # whatever was current the day they were pinned — including the CVEs. A pin
+  # without something moving it forward is worse than a tag, so the docker
+  # ecosystem is watched here too.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - dependencies
+    groups:
+      # One PR for the routine bumps: they are reviewed the same way and
+      # land together, and fifteen separate PRs a month is how a bot gets
+      # ignored.
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch

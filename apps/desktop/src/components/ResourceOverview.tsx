@@ -3,6 +3,7 @@ import { ArrowLeftRight, ChevronDown, ChevronUp, ScrollText, SquareTerminal } fr
 import type { X509Certificate } from "@peculiar/x509";
 import { getObject, getSecret, type K8sObject } from "../lib/manifest";
 import { listEndpointSlices } from "../lib/network";
+import { serviceExternalAddress } from "../lib/serviceAddress";
 import { podsForPvc, formatStorageSize } from "../lib/storage";
 import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from "../lib/rbac";
 import { updateConfigData } from "../lib/actions";
@@ -1296,6 +1297,7 @@ function ServiceBody({
           pairs={[
             ["Type", str(spec.type) || "ClusterIP"],
             ["Cluster IP", <span className="fl-mono">{str(spec.clusterIP)}</span>],
+            ["External IP", <span className="fl-mono">{serviceExternalAddress(obj) || "—"}</span>],
             ["Session affinity", str(spec.sessionAffinity)],
             ["Selector", <Chips key="s" map={selector} />],
           ]}

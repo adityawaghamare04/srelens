@@ -1,4 +1,5 @@
 mod app_log;
+mod deep_link;
 mod appimage;
 mod assistant;
 mod assistant_history;
@@ -56,7 +57,10 @@ use updater::{update_check, update_install};
 use watch::{start_resource_watch, stop_watch};
 
 pub use appimage::gio_module_dir_for_appimage;
-pub use capabilities::{build_registry, build_registry_with_paths};
+pub use capabilities::{
+    build_registry, build_registry_with_paths, build_registry_with_paths_and_settings,
+    default_settings_path,
+};
 
 /// Size the main window to a comfortable default, clamped to the screen it
 /// opens on: on a large display it stays at the preferred ~16" size (centered),
@@ -175,11 +179,26 @@ async fn watch_kubeconfig_files(app_handle: tauri::AppHandle, cache: std::sync::
     use std::time::SystemTime;
     use tauri::Emitter;
 
+    // The cache's paths plus everything in the app's own kubeconfig folder.
+    // Polling the cache alone only ever compares files it already knows about,
+    // so a config pasted in — or dropped there by hand — was invisible until a
+    // restart (#256). Enumerating the folder is what makes creation and
+    // deletion observable at all.
+    async fn watched_paths(cache: &ClientCache) -> Vec<PathBuf> {
+        let mut paths = cache.paths().await;
+        for managed in srelens_registry::managed_kubeconfig_files() {
+            if !paths.contains(&managed) {
+                paths.push(managed);
+            }
+        }
+        paths
+    }
+
+
     let mut last_modified: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
 
     // Initialize the map with current files
-    let initial_paths = cache.paths().await;
-    for path in initial_paths {
+    for path in watched_paths(&cache).await {
         let modified = tokio::fs::metadata(&path)
             .await
             .and_then(|m| m.modified())
@@ -190,7 +209,7 @@ async fn watch_kubeconfig_files(app_handle: tauri::AppHandle, cache: std::sync::
     loop {
         tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
-        let current_paths = cache.paths().await;
+        let current_paths = watched_paths(&cache).await;
         let mut changed = false;
 
         let mut next_modified = HashMap::new();
@@ -242,17 +261,35 @@ pub fn run() {
 
     // One shared client cache: request/response capabilities AND live watches
     // reuse the same authenticated kube-rs clients.
-    let cache = ClientCache::new_many(capabilities::default_kubeconfig_paths());
+    let cache = ClientCache::new_many(capabilities::all_kubeconfig_paths());
     let registry = capabilities::build_registry_with(cache.clone());
 
-    let builder = tauri::Builder::default()
+    // single-instance is registered BEFORE every other plugin, as the plugin
+    // requires: it has to claim the lock and hand a second launch's argv over
+    // before anything else initializes. Its `deep-link` feature forwards those
+    // arguments to the deep-link plugin first, so an `srelens://` link on
+    // Windows/Linux reaches the running app rather than starting a rival one.
+    #[cfg(desktop)]
+    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(
+        |app, _argv, _cwd| {
+            deep_link::focus_main_window(app);
+        },
+    ));
+    #[cfg(not(desktop))]
+    let builder = tauri::Builder::default();
+
+    let builder = builder
+        .manage(deep_link::PendingDeepLink::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_biometry::init())
         .plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_deep_link::init())
+        // Size, position and maximized state, restored at window creation.
+        .plugin(tauri_plugin_window_state::Builder::default().build());
 
     let watcher_cache = cache.clone();
     let oidc_cache = cache.clone();
@@ -285,8 +322,15 @@ pub fn run() {
                     .build(),
             )?;
             log::info!("srelens {} starting", env!("CARGO_PKG_VERSION"));
+            // Only impose the default geometry on a first launch: after that
+            // the window-state plugin has already restored the user's own
+            // size and position, and re-centering would undo it every time.
             #[cfg(desktop)]
-            size_main_window(app);
+            if !deep_link::has_saved_window_state(app) {
+                size_main_window(app);
+            }
+            #[cfg(desktop)]
+            deep_link::register_deep_links(app);
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
 
@@ -316,7 +360,7 @@ pub fn run() {
                 .map_err(|e| e.to_string())
                 .map(|dir| dir.join("cluster-oidc"))
                 .and_then(|config_dir| {
-                    let paths = capabilities::default_kubeconfig_paths();
+                    let paths = capabilities::all_kubeconfig_paths();
                     let yamls = cluster_oidc::read_kubeconfig_yamls(&paths);
                     tauri::async_runtime::block_on(cluster_oidc::DesktopClusterOidc::build(
                         &config_dir,
@@ -391,6 +435,7 @@ pub fn run() {
         .manage(TerminalManager::new())
         .manage(HelmManager::new())
         .invoke_handler(tauri::generate_handler![
+            deep_link::take_pending_deep_links,
             assistant::agent_list,
             assistant::chat_start,
             assistant::chat_send,

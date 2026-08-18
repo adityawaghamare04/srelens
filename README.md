@@ -33,13 +33,14 @@
   <a href="https://aur.archlinux.org/packages/srelens-bin"><img alt="AUR version" src="https://img.shields.io/aur/version/srelens-bin?label=aur&logo=archlinux&logoColor=white&color=1793d1"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/srelens/srelens?color=675e80"></a>
   <a href="https://github.com/srelens/srelens/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/srelens/srelens/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/srelens/srelens"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/srelens/srelens/badge"></a>
 </p>
 
 <p align="center">
   <img alt="Rust core" src="https://img.shields.io/badge/core-Rust-8b5cf6">
   <img alt="Tauri v2" src="https://img.shields.io/badge/desktop-Tauri_v2-e457c2">
   <img alt="MCP server" src="https://img.shields.io/badge/agents-MCP-fb923c">
-  <img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-f59e0b">
+  <img alt="Project status: stable" src="https://img.shields.io/badge/status-stable-22c55e">
 </p>
 
 ---
@@ -109,7 +110,7 @@ See the [user guide](docs/USAGE.md) for how to use each of these.
 
 ## Install
 
-Download the latest beta for your platform from
+Download the latest release for your platform from
 [GitHub Releases](https://github.com/srelens/srelens/releases/latest).
 
 | Platform | Packages | Notes |
@@ -247,12 +248,13 @@ docs/                    Installation, usage, development, and project documenta
 
 ## Project status
 
-srelens is currently in **beta**. It is ready for evaluation and everyday testing,
-but users should review release notes and take extra care when using it with
-critical clusters.
+srelens is **stable and in active development**, with regular releases for macOS,
+Linux, and Windows. macOS builds are Developer ID signed and notarized, and
+supported packages update in place through the in-app updater.
 
-Breaking changes may still occur before a stable release. Feedback, bug reports,
-and reproducible troubleshooting details are welcome.
+New capabilities land continuously, so the release notes are worth a glance when
+you upgrade. Feedback, bug reports, and reproducible troubleshooting details are
+always welcome.
 
 - [Latest release](https://github.com/srelens/srelens/releases/latest)
 - [All releases](https://github.com/srelens/srelens/releases)

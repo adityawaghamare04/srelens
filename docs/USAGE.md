@@ -26,6 +26,7 @@ actions are identified and ask for confirmation before they run.
 - [Toolbox: CLI toolchain and auth plugins](#toolbox-cli-toolchain-and-auth-plugins)
 - [Metrics](#metrics)
 - [Command palette](#command-palette)
+- [Keyboard shortcuts](#keyboard-shortcuts)
 - [Application logs](#application-logs)
 - [MCP server for AI agents](#mcp-server-for-ai-agents)
 - [AI assistant](#ai-assistant)
@@ -68,9 +69,14 @@ look.
 **Kubeconfig sources.** Your default kubeconfig / `KUBECONFIG` is loaded first;
 additional files merge in order. Use **Add files** to pick more kubeconfig files,
 or **Paste** to paste raw YAML (with an optional name) — pasted configs are saved
-into the srelens application directory. Each added file appears as a chip you can
-remove. srelens watches these files and refreshes automatically when they change
-on disk.
+into srelens's own `kubeconfigs` folder in the application directory. Each added
+file appears as a chip you can remove.
+
+srelens watches all of these and refreshes automatically — both when a file
+changes on disk and when one is **created or deleted**. That includes its own
+`kubeconfigs` folder, so a config you drop in there by hand is picked up without
+restarting, and one you delete disappears the same way. Only the app's folder is
+scanned like this; files you add from elsewhere are tracked individually.
 
 **Context identity.** Select a context to give it a recognisable identity without
 touching your kubeconfig:
@@ -293,6 +299,65 @@ Press **Cmd/Ctrl-K** to open the command palette. It offers your **recent** pick
 (pods, deployments, services, config, and more, indexed when you open the
 palette). Selecting a view opens its tab; selecting a resource opens its detail.
 
+## Keyboard shortcuts
+
+Press **?** anywhere outside a text field for the full list, grouped by where
+each key applies. The ones worth knowing before you look:
+
+| Key | Does |
+| --- | --- |
+| **Cmd/Ctrl-K** | Command palette |
+| **?** | This list |
+| **Cmd-W** (macOS only) | Close the tab — or the window, on the last one. It comes from the macOS app menu, so there is no Windows/Linux equivalent yet. |
+| **Cmd/Ctrl +** / **-** / **0** | Interface larger / smaller / reset |
+| **Cmd/Ctrl-F** | Search the terminal's scrollback, or find in the YAML editor |
+| **Esc** | Close the open dialog, drawer, or search bar |
+
+## Deep links
+
+srelens registers the `srelens://` URL scheme, so a link in a browser, chat
+message, runbook, or alert can open the exact thing it refers to. Clicking one
+reuses the running app — a second copy is never started — and brings its window
+to the front.
+
+| Link | Opens |
+| --- | --- |
+| `srelens://cluster/<context>` | That context's cluster overview |
+| `srelens://resource/<context>/<namespace>/<kind>/<name>` | That resource's detail view |
+
+`<kind>` is the Kubernetes kind (`Pod`, `Deployment`, `Service`, …). Use `-` in
+place of the namespace for a **cluster-scoped** resource such as a Node; a
+namespaced kind must name its namespace, since searching every namespace could
+otherwise open the wrong object when the name is not unique:
+
+```
+srelens://resource/prod-eu/kube-system/Pod/coredns-7db6d8ff4d-abcde
+srelens://resource/prod-eu/-/Node/worker-1
+```
+
+Percent-encode any segment containing a `/` or `:` — OpenShift context names
+usually need this:
+
+```
+srelens://cluster/default%2Fapi-example-com%3A6443%2Fdev
+```
+
+A link is reported and otherwise ignored when it names a context you don't
+have, a kind with no detail view (Events, for instance, are list-only), or a
+namespaced kind without a namespace.
+
+## Window and session state
+
+The window's size, position, and maximized state are remembered across
+restarts, as are your open tabs and the active one — see
+[Reopen tabs on launch](#settings-reference) to turn the tab part off.
+
+Each tab also keeps its own **sort, search text, and column filter** — across
+resource lists, custom resources, and Helm releases — so switching between tabs
+no longer resets them and a search typed in one list never carries into another.
+These are restored along with the tabs themselves. Column show/hide choices
+remain shared by every tab of the same kind.
+
 ## Application logs
 
 srelens keeps its own rotating log file so you can diagnose problems after they
@@ -395,6 +460,19 @@ bearer token good for this loopback MCP server and nothing else.
    ([above](#application-logs)).
 7. **Updates** — version, release channel, and the in-app updater
    ([below](#updating)).
+
+Desktop preferences are stored in a schema-versioned `settings.json` under the
+OS application-config directory (`app.srelens.desktop`). That location is tied
+to the application identifier rather than the executable name, so preferences
+survive dev/installed builds and binary renames. The first launch after an
+upgrade imports the previous WebView `localStorage` values automatically.
+
+Web mode is different. Most preferences — theme, layout, namespace selections,
+request timeout, interface scale — stay in the browser's own `localStorage`, so
+they belong to that **browser profile rather than to your account**: they do not
+follow you to another browser or machine, and anyone sharing the profile shares
+them. Saved port-forwards are the exception, stored per user in the server
+database through the settings API.
 
 ## Updating
 

@@ -13,6 +13,8 @@ use srelens_kube::client_cache::ClientCache;
 
 mod catalog;
 pub use catalog::{catalog_of, CatalogEntry};
+mod settings;
+pub use settings::default_settings_path;
 
 // Test-only: every consumer of this module — `render_catalog` (regenerated via
 // `UPDATE_CATALOG=1 cargo test`), the doc-scan tests below, and mcp_docs.rs's
@@ -29,7 +31,18 @@ pub fn capability_catalog() -> Vec<CatalogEntry> {
     catalog_of(&build_registry())
 }
 
-/// Resolve kubeconfig paths: every `$KUBECONFIG` entry, else `$HOME/.kube/config`.
+pub use srelens_kube::connect::{default_kubeconfig_dir, managed_kubeconfig_files};
+
+/// The STATIC kubeconfig sources: every `$KUBECONFIG` entry, else
+/// `$HOME/.kube/config`.
+///
+/// Deliberately excludes the app's managed folder. That folder's contents
+/// change while the app runs, and this result gets captured by long-lived
+/// consumers — the capability registry snapshots it once at build time — so
+/// folding volatile content in here means a file deleted at runtime is
+/// reintroduced on every later call and never goes away. Callers that want the
+/// managed folder as well should use [`all_kubeconfig_paths`], which resolves
+/// it at call time.
 pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
     if let Some(value) = std::env::var_os("KUBECONFIG") {
         let paths = std::env::split_paths(&value)
@@ -41,6 +54,22 @@ pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
     }
     let home = std::env::var("HOME").unwrap_or_default();
     vec![PathBuf::from(home).join(".kube").join("config")]
+}
+
+/// Every kubeconfig source as of RIGHT NOW: the static ones plus whatever is
+/// currently in the app's managed folder.
+///
+/// For callers that resolve paths per operation (a terminal, a helm command,
+/// the initial client cache). Anything that captures its result for later
+/// reuse wants [`default_kubeconfig_paths`] plus a live folder read instead.
+pub fn all_kubeconfig_paths() -> Vec<PathBuf> {
+    let mut paths = default_kubeconfig_paths();
+    for managed in srelens_kube::connect::managed_kubeconfig_files() {
+        if !paths.contains(&managed) {
+            paths.push(managed);
+        }
+    }
+    paths
 }
 
 #[cfg(test)]
@@ -148,6 +177,17 @@ pub fn build_registry_with_paths(
     cache: Arc<ClientCache>,
     kubeconfig_paths: Vec<PathBuf>,
 ) -> Registry {
+    build_registry_with_paths_and_settings(cache, kubeconfig_paths, None)
+}
+
+/// Build a registry and optionally add the durable desktop settings surface.
+/// Web-server registries omit it because web settings are per-user SQLite
+/// rows; desktop GUI and MCP callers pass the stable desktop settings path.
+pub fn build_registry_with_paths_and_settings(
+    cache: Arc<ClientCache>,
+    kubeconfig_paths: Vec<PathBuf>,
+    settings_path: Option<PathBuf>,
+) -> Registry {
     let mut reg = Registry::new();
 
     reg.register(Capability::read_only(
@@ -159,6 +199,7 @@ pub fn build_registry_with_paths(
     reg.register(srelens_kube::contexts::list_contexts_capability(
         cache.clone(),
         kubeconfig_paths.clone(),
+        srelens_kube::connect::default_kubeconfig_dir(),
     ));
     reg.register(srelens_kube::contexts::delete_context_capability(
         cache.clone(),
@@ -349,13 +390,21 @@ pub fn build_registry_with_paths(
     ));
     reg.register(srelens_kube::manifest::list_resource_capability(cache));
 
+    if let Some(path) = settings_path {
+        settings::register(&mut reg, path);
+    }
+
     reg
 }
 
 /// Build the registry using a caller-provided client cache with the host's
 /// default kubeconfig discovery (desktop + MCP behavior, unchanged).
 pub fn build_registry_with(cache: Arc<ClientCache>) -> Registry {
-    build_registry_with_paths(cache, default_kubeconfig_paths())
+    build_registry_with_paths_and_settings(
+        cache,
+        default_kubeconfig_paths(),
+        default_settings_path(),
+    )
 }
 
 /// The real resource kind resolver, over `srelens_kube::manifest::gvk_for`.
@@ -422,15 +471,27 @@ mod tests {
     }
 
     #[test]
-    fn with_paths_builds_same_capability_set() {
+    fn with_paths_and_settings_builds_same_capability_set() {
         let cache = ClientCache::new_many(vec![]);
-        let reg = build_registry_with_paths(cache, vec![std::path::PathBuf::from("/nonexistent")]);
+        let reg = build_registry_with_paths_and_settings(
+            cache,
+            vec![std::path::PathBuf::from("/nonexistent")],
+            default_settings_path(),
+        );
         let mut ids = reg.ids();
         ids.sort();
         let default_reg = build_registry();
         let mut default_ids = default_reg.ids();
         default_ids.sort();
         assert_eq!(ids, default_ids, "same capabilities regardless of paths");
+    }
+
+    #[test]
+    fn web_registry_omits_host_desktop_settings() {
+        let cache = ClientCache::new_many(vec![]);
+        let reg = build_registry_with_paths(cache, vec![]);
+        assert!(!reg.ids().contains(&"settings.get"));
+        assert!(!reg.ids().contains(&"settings.set"));
     }
 
     #[test]

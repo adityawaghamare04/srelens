@@ -47,6 +47,7 @@ import {
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 type PodRow = PodSummary & { cpu?: number; memory?: number };
 import { watchResource, WATCHABLE_KINDS, type WatchHandle, type WatchStatus } from "../lib/watch";
+import type { TabViewState } from "../lib/tabView";
 import {
   parseNamespaceSelection,
   serializeNamespaceSelection,
@@ -63,6 +64,7 @@ import { isTauri } from "../transport/platform";
 import type { OpenResource } from "../lib/resourceNavigation";
 import { describeError } from "../lib/errors";
 import { ageSortValue } from "../lib/age";
+import { emptyListMessage } from "../lib/onboarding";
 import {
   Table,
   filterTableData,
@@ -392,6 +394,7 @@ const serviceColumns: Column<ServiceSummary>[] = [
   { key: "namespace", header: "Namespace", render: (s) => <span className="fl-link">{s.namespace}</span> },
   { key: "type", header: "Type" },
   { key: "clusterIP", header: "Cluster IP", render: (s) => <Muted>{s.clusterIP}</Muted> },
+  { key: "externalIP", header: "External IP", render: (s) => <Muted>{s.externalIP || "—"}</Muted> },
   { key: "ports", header: "Ports" },
   { key: "age", header: "Age", getSortValue: ageSortValue, render: (s) => <Muted>{s.age}</Muted> },
 ];
@@ -582,11 +585,17 @@ export function ResourceBrowser({
   onNamespaceChange,
   detailDrawerWidth = 480,
   kubeconfigFiles = [],
+  view,
+  onViewChange,
 }: {
   context: string;
   kind: ResourceKind;
   query?: string;
   onQueryChange?: (q: string) => void;
+  /** Sort + filtered column, owned by the tab so they survive a switch (#254).
+   *  Absent means the browser keeps them itself, as it used to. */
+  view?: TabViewState;
+  onViewChange?: (patch: Partial<TabViewState>) => void;
   onOpenTerminal?: (s: {
     context: string;
     namespace: string;
@@ -652,14 +661,30 @@ export function ResourceBrowser({
   const [bulkKeys, setBulkKeys] = useState<Set<string>>(new Set());
   // Bumped after a write action so the open detail overview re-fetches.
   const [detailReload, setDetailReload] = useState(0);
-  const [filterColumn, setFilterColumn] = useState<string | null>(null);
+  // Owned by the tab when it supplies a change handler; otherwise local, so
+  // the component still works standalone (tests, and any non-tabbed caller).
+  const [localFilterColumn, setLocalFilterColumn] = useState<string | null>(null);
+  const filterColumn = onViewChange ? (view?.filterColumn ?? null) : localFilterColumn;
+  const setFilterColumn = (next: string | null) => {
+    if (onViewChange) onViewChange({ filterColumn: next });
+    else setLocalFilterColumn(next);
+  };
   // Per-pod CPU/memory (millicores / MiB), merged into the pods table.
   const [podCpuMem, setPodCpuMem] = useState<Map<string, { cpu: number; mem: number }>>(new Map());
   const viewKeyRef = useRef("");
 
   const namespaced = isNamespaced(kind);
 
-  useEffect(() => setFilterColumn(null), [kind]);
+  // Reset the search column only when the kind genuinely CHANGES in place —
+  // not on mount. This component is keyed by tab id, so it remounts on every
+  // tab switch, and a mount-time reset would patch `filterColumn: null` into
+  // the tab and wipe the very value #254 restores.
+  const previousKindRef = useRef(kind);
+  useEffect(() => {
+    if (previousKindRef.current === kind) return;
+    previousKindRef.current = kind;
+    setFilterColumn(null);
+  }, [kind]);
 
   useEffect(() => {
     if (namespaced && namespaces === null) return; // wait for the namespace list
@@ -905,6 +930,12 @@ export function ResourceBrowser({
   );
   // Clear the selection whenever the underlying list changes shape.
   useEffect(() => setBulkKeys(new Set()), [context, kind, watchNamespace, selectionKey]);
+  const emptyMessage = emptyListMessage({
+    kind: RESOURCE_LABELS[kind].toLowerCase(),
+    query,
+    namespaces: selection,
+    namespaced,
+  });
   const filterLabel = filterColumn
     ? visibleColumns.find((column) => column.key === filterColumn)?.header
     : null;
@@ -1086,17 +1117,13 @@ export function ResourceBrowser({
                   onRowClick={kind === "events" ? undefined : onRowClick}
                   activeFilterKey={filterColumn}
                   onActiveFilterKeyChange={setFilterColumn}
-                  emptyText={
-                    query
-                      ? "No matches"
-                      : `No ${kind}${
-                          namespaced && selection.length === 1
-                            ? ` in ${selection[0]}`
-                            : namespaced && selection.length > 1
-                              ? ` in ${selection.length} namespaces`
-                              : ""
-                        }`
-                  }
+                  sort={view?.sort ?? null}
+                  onSortChange={onViewChange ? (sort) => onViewChange({ sort }) : undefined}
+                  // Say what is narrowing the view, not just that nothing was
+                  // found (#161): an empty list otherwise reads the same
+                  // whether the cluster is empty or a filter is hiding it.
+                  emptyText={emptyMessage.title}
+                  emptyHint={emptyMessage.hint}
                 />
               )}
             </div>

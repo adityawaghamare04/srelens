@@ -19,15 +19,21 @@ jobs:
     name: frontend
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Nothing else in CI typechecks (#249): `vite build` strips types with
+      # esbuild and Vitest transpiles per file, so a real type error passed
+      # every check until it was caught by hand (PR #248, main.tsx). Runs
+      # before the build — it is the fastest step and the most likely to fail.
+      - name: Typecheck
+        run: pnpm typecheck
       - name: Build
         run: pnpm build
       - name: Unit tests with coverage
@@ -43,7 +49,7 @@ jobs:
     name: backend
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Tauri v2 system libraries needed to compile the desktop crate.
       - name: Install Linux dependencies
         run: |
@@ -57,10 +63,10 @@ jobs:
             libgtk-3-dev \
             libssl-dev \
             build-essential
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
@@ -68,16 +74,23 @@ jobs:
       # so build the frontend before compiling the Rust workspace.
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned by SHA, so `toolchain` has to be explicit: this action reads the
+      # ref it was called by to decide which toolchain to install, and a SHA
+      # names no channel.
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
-      - uses: azure/setup-helm@v4
+      # Same reason: pinned, so the tool comes from an input rather than the tag.
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2
+        with:
+          tool: cargo-llvm-cov
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.16.3
       - name: Create kind cluster
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: srelens-e2e
       # ONE instrumented run covers everything (#28): the unit suites AND the
@@ -124,7 +137,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -139,17 +152,19 @@ jobs:
             build-essential \
             webkit2gtk-driver \
             xvfb
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
       # custom-protocol makes the debug binary serve the EMBEDDED frontend
@@ -159,7 +174,7 @@ jobs:
       - name: Build the app binary
         run: cargo build -p srelens-desktop --features custom-protocol --profile ci-smoke
       - name: Create kind cluster
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: srelens-e2e
       - name: Smoke suite through the real app
@@ -172,7 +187,7 @@ jobs:
             cargo test -p srelens-desktop --features custom-protocol --profile ci-smoke --test webdriver_smoke -- --ignored --nocapture
       - name: Upload failure artifacts (screenshot + app logs)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: smoke-failure-artifacts
           path: ${{ runner.temp }}/smoke-artifacts

@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "./Dashboard";
+import { nextSort, type TableSort } from "@/lib/tabView";
 
 export interface Column<T> {
   key: string;
@@ -47,9 +48,15 @@ export interface TableProps<T> {
   selection?: TableSelection;
   /** Shown when `data` is empty. */
   emptyText?: React.ReactNode;
+  /** Second line of the empty state: what the reader can do about it. */
+  emptyHint?: React.ReactNode;
   /** Column currently used by the toolbar search; null searches every column. */
   activeFilterKey?: string | null;
   onActiveFilterKeyChange?: (key: string | null) => void;
+  /** Controlled sort. Supply both to own it (so it can live on the tab and
+   *  survive a switch, #254); omit them and the table keeps its own. */
+  sort?: TableSort | null;
+  onSortChange?: (sort: TableSort | null) => void;
 }
 
 function getColumnValue<T>(row: T, column: Column<T>): unknown {
@@ -111,10 +118,17 @@ export function Table<T>({
   selectedKey,
   selection,
   emptyText = "No items",
+  emptyHint,
   activeFilterKey = null,
   onActiveFilterKeyChange,
+  sort: controlledSort,
+  onSortChange,
 }: TableProps<T>) {
-  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
+  // Controlled when a change handler is supplied, otherwise self-managed —
+  // tables outside the tabbed workspace (the MCP audit list, for instance)
+  // have no tab to store a sort on.
+  const [internalSort, setInternalSort] = useState<TableSort | null>(null);
+  const sort = onSortChange ? (controlledSort ?? null) : internalSort;
   // Anchor for shift-click range selection (a key in sorted/visible order).
   const selectionAnchor = useRef<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -175,11 +189,9 @@ export function Table<T>({
   };
 
   const cycleSort = (key: string) => {
-    setSort((current) => {
-      if (!current || current.key !== key) return { key, direction: "asc" };
-      if (current.direction === "asc") return { key, direction: "desc" };
-      return null;
-    });
+    const next = nextSort(sort, key);
+    if (onSortChange) onSortChange(next);
+    else setInternalSort(next);
   };
 
   const startColumnResize = (event: React.PointerEvent<HTMLDivElement>, column: Column<T>) => {
@@ -304,7 +316,7 @@ export function Table<T>({
   const bottomPad = virtualize ? (visibleData.length - range.end) * metrics.rowHeight : 0;
 
   if (data.length === 0) {
-    return <EmptyState title={emptyText} />;
+    return <EmptyState title={emptyText} description={emptyHint} />;
   }
   return (
     <div ref={rootRef} style={{ display: "contents" }}>

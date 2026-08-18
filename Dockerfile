@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1
 
 # ---- Stage 1: build the frontend bundle -------------------------------------
-FROM node:24-slim AS frontend
-RUN corepack enable && corepack prepare pnpm@9 --activate
+FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e703e5fe503 AS frontend
+# pnpm via npm, not corepack: Node 26 ships without corepack (it was unbundled
+# upstream), so `corepack enable` is a command-not-found in this image. The
+# pinned major is what pnpm-lock.yaml was written by.
+RUN npm install -g pnpm@9
 WORKDIR /src
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/desktop/package.json apps/desktop/package.json
@@ -11,7 +14,7 @@ COPY apps/desktop apps/desktop
 RUN pnpm --filter @srelens/desktop build
 
 # ---- Stage 2: build the headless server binary ------------------------------
-FROM rust:1-slim-bookworm AS backend
+FROM rust:1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS backend
 WORKDIR /src
 # Only C toolchain + perl are needed (no GTK/webkit — this binary isn't Tauri).
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,7 +28,7 @@ RUN cargo build --release -p srelens-server --bin srelens-server
 RUN strip target/release/srelens-server
 
 # ---- Stage 3: slim runtime --------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 ARG KUBECTL_VERSION=v1.36.3
 # Helm is pinned to the 3.x line on purpose: Helm 4 has breaking CLI/behavior
 # changes the helm capabilities aren't validated against yet.

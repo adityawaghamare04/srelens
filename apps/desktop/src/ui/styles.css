@@ -2816,6 +2816,41 @@ body {
   accent-color: var(--fl-color-accent);
   cursor: pointer;
 }
+/* A checkbox preference with a title + explanation, matching the framing of
+   the slider controls above it (session restore, #159). */
+.fl-settings-toggle {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 13px;
+  border: 1px solid var(--fl-color-border-faint);
+  border-radius: var(--fl-radius-lg);
+  background: var(--fl-color-bg);
+  padding: 12px;
+  cursor: pointer;
+}
+.fl-settings-toggle > input {
+  margin-top: 2px;
+  flex-shrink: 0;
+  accent-color: var(--fl-color-accent);
+  cursor: pointer;
+}
+.fl-settings-toggle > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.fl-settings-toggle strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.fl-settings-toggle small {
+  color: var(--fl-color-text-muted);
+  font-size: 12px;
+}
+
 /* Interface scale (#237): −/+ steppers flanking the slider, then Reset.
    Request timeout (#238): slider plus an exact number box, since the range
    now runs to two minutes and dragging alone can't land a precise value.
@@ -4442,4 +4477,57 @@ body {
 .fl-changes-panel__resize:hover::after {
   background: rgba(128, 128, 128, 0.65);
   opacity: 1;
+}
+
+/* Keycap, for the shortcut cheat sheet (#160) */
+.fl-kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--fl-color-border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--fl-color-surface);
+  color: var(--fl-color-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* Keyboard focus (#160).
+ *
+ * A ring on every focusable thing, drawn only for keyboard focus so a mouse
+ * click doesn't leave one behind. The app's own `.fl-*` controls are plain
+ * buttons with custom styling and had nothing but the browser default, which
+ * several rules had already turned off — tabbing through the sidebar or the
+ * cluster hotbar left no way to tell where you were. `:focus-visible` is
+ * scoped to `:where()` so it adds no specificity and any component that wants
+ * its own treatment still wins. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--fl-color-accent);
+  outline-offset: 2px;
+  border-radius: var(--fl-radius-sm, 4px);
+}
+
+/* First-run help on the landing page (#161) */
+.fl-landing__firstrun-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fl-color-text-muted);
+  font-size: 13px;
+}
+.fl-landing__firstrun-list strong {
+  color: var(--fl-color-text);
+}
+
+/* Right-hand column of the landing workspace: first-run help above the
+   context list, sharing one grid cell (#161). */
+.fl-landing__side {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
 }

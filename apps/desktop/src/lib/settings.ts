@@ -1,4 +1,7 @@
-// Small persisted-settings helpers (localStorage). Survives app restarts.
+// Small synchronous persisted-settings helpers. Desktop reads from an
+// in-memory mirror of settings.json; web mode falls back to localStorage.
+
+import { settingsStorage } from "./settingsStorage";
 
 const CLUSTER_NS_KEY = "srelens.clusterNamespaces";
 const DEFAULT_NS_KEY = "srelens.defaultNamespace";
@@ -33,7 +36,7 @@ export function getRequestTimeoutSecs(): number {
 export function setRequestTimeoutSecs(secs: number): number {
   const clamped = clampTimeoutSecs(secs);
   try {
-    localStorage.setItem(REQUEST_TIMEOUT_KEY, JSON.stringify(clamped));
+    settingsStorage.setItem(REQUEST_TIMEOUT_KEY, JSON.stringify(clamped));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -41,7 +44,9 @@ export function setRequestTimeoutSecs(secs: number): number {
 }
 
 function stored(key: string): string | null {
-  return localStorage.getItem(key) ?? localStorage.getItem(key.replace("srelens", LEGACY_PREFIX));
+  return (
+    settingsStorage.getItem(key) ?? settingsStorage.getItem(key.replace("srelens", LEGACY_PREFIX))
+  );
 }
 
 export type ContextLogo = "initials" | "cluster" | "cloud" | "shield" | "database" | "globe" | "custom";
@@ -84,7 +89,7 @@ export function loadClusterNamespaces(): Record<string, string> {
 
 export function saveClusterNamespaces(map: Record<string, string>): void {
   try {
-    localStorage.setItem(CLUSTER_NS_KEY, JSON.stringify(map));
+    settingsStorage.setItem(CLUSTER_NS_KEY, JSON.stringify(map));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -101,7 +106,7 @@ export function getDefaultNamespace(): string {
 
 export function setDefaultNamespace(ns: string): void {
   try {
-    localStorage.setItem(DEFAULT_NS_KEY, ns);
+    settingsStorage.setItem(DEFAULT_NS_KEY, ns);
   } catch {
     // ignore
   }
@@ -123,7 +128,7 @@ export function loadWorkspaceLayout(): WorkspaceLayoutSettings {
 
 export function saveWorkspaceLayout(layout: WorkspaceLayoutSettings): void {
   try {
-    localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(layout));
+    settingsStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify(layout));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -142,7 +147,7 @@ export function loadContextProfiles(): ContextProfiles {
 
 export function saveContextProfiles(profiles: ContextProfiles): void {
   try {
-    localStorage.setItem(CONTEXT_PROFILES_KEY, JSON.stringify(profiles));
+    settingsStorage.setItem(CONTEXT_PROFILES_KEY, JSON.stringify(profiles));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -165,7 +170,7 @@ export function loadKubeconfigFiles(): string[] {
 
 export function saveKubeconfigFiles(paths: string[]): void {
   try {
-    localStorage.setItem(KUBECONFIG_FILES_KEY, JSON.stringify([...new Set(paths)]));
+    settingsStorage.setItem(KUBECONFIG_FILES_KEY, JSON.stringify([...new Set(paths)]));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -191,7 +196,7 @@ export function saveHiddenColumns(view: string, keys: string[]): void {
     const parsed = JSON.parse(stored(HIDDEN_COLUMNS_KEY) ?? "{}") as unknown;
     const map = parsed && typeof parsed === "object" ? (parsed as Record<string, string[]>) : {};
     map[view] = [...new Set(keys)];
-    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(map));
+    settingsStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify(map));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -210,7 +215,32 @@ export function loadContextOrder(): string[] {
 
 export function saveContextOrder(order: string[]): void {
   try {
-    localStorage.setItem(CONTEXT_ORDER_KEY, JSON.stringify([...new Set(order)]));
+    settingsStorage.setItem(CONTEXT_ORDER_KEY, JSON.stringify([...new Set(order)]));
+  } catch {
+    // ignore unavailable/quota-exceeded storage
+  }
+}
+
+const RESTORE_SESSION_KEY = "srelens.restoreSession";
+
+/**
+ * Whether to reopen the previous session's tabs on launch (#159). Defaults to
+ * true: landing back where you left off is the useful behavior, and the
+ * opt-out exists for people who prefer a clean workspace every launch.
+ */
+export function loadRestoreSession(): boolean {
+  try {
+    // Only an explicit "false" disables it, so an absent or unparseable value
+    // keeps the default rather than silently starting fresh.
+    return stored(RESTORE_SESSION_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export function saveRestoreSession(enabled: boolean): void {
+  try {
+    settingsStorage.setItem(RESTORE_SESSION_KEY, String(enabled));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -232,7 +262,7 @@ export function loadUpdateChannel(): UpdateChannel {
 
 export function saveUpdateChannel(channel: UpdateChannel): void {
   try {
-    localStorage.setItem(UPDATE_CHANNEL_KEY, channel);
+    settingsStorage.setItem(UPDATE_CHANNEL_KEY, channel);
   } catch {
     // ignore unavailable/quota-exceeded storage
   }
@@ -282,7 +312,7 @@ export function loadMcpSettings(): McpSettings {
 
 export function saveMcpSettings(settings: McpSettings): void {
   try {
-    localStorage.setItem(MCP_SETTINGS_KEY, JSON.stringify(settings));
+    settingsStorage.setItem(MCP_SETTINGS_KEY, JSON.stringify(settings));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }

@@ -1,3 +1,5 @@
+import { settingsStorage } from "../lib/settingsStorage";
+
 export type ThemeMode = "dark" | "light" | "system";
 export type ThemeName = "slate" | "srelens" | "graphite";
 
@@ -61,7 +63,7 @@ export function resolvedThemeMode(mode: ThemeMode): "dark" | "light" {
 /** Read the persisted theme (defaults to dark). */
 export function getInitialTheme(): Theme {
   try {
-    const stored = localStorage.getItem(KEY);
+    const stored = settingsStorage.getItem(KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as Partial<Theme>;
       return {
@@ -70,7 +72,7 @@ export function getInitialTheme(): Theme {
       };
     }
 
-    const legacy = localStorage.getItem(LEGACY_KEY);
+    const legacy = settingsStorage.getItem(LEGACY_KEY);
     if (legacy === "light" || legacy === "dark") {
       return { ...DEFAULT_THEME, mode: legacy };
     }
@@ -94,7 +96,7 @@ export function applyTheme(theme: Theme): void {
   root.classList.toggle("dark", mode === "dark");
   root.style.colorScheme = mode;
   try {
-    localStorage.setItem(KEY, JSON.stringify(theme));
+    settingsStorage.setItem(KEY, JSON.stringify(theme));
   } catch {
     /* storage unavailable, theme still applied for this session */
   }

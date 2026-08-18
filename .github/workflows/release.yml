@@ -32,8 +32,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only by default; the jobs that publish declare `contents: write` for
+# themselves (#38). A job added later therefore starts with no write access
+# rather than silently inheriting it.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Auto-versioning (main only): compute the next semver from Conventional
@@ -41,15 +44,18 @@ jobs:
   # so it doesn't re-trigger). Outputs the new version + whether to release.
   version:
     runs-on: ubuntu-22.04
+    # Commits the version bump back to main.
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.compute.outputs.version }}
       release: ${{ steps.compute.outputs.release }}
       notes: ${{ steps.compute.outputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Compute + commit next version
@@ -192,8 +198,11 @@ jobs:
     needs: version
     if: needs.version.outputs.release == 'true' && github.ref_name == 'main'
     runs-on: ubuntu-22.04
+    # Builds and drives the app against kind; touches nothing in the repo.
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -208,17 +217,19 @@ jobs:
             build-essential \
             webkit2gtk-driver \
             xvfb
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install tauri-driver
         run: cargo install tauri-driver --locked
       # custom-protocol makes the debug binary serve the EMBEDDED frontend
@@ -228,7 +239,7 @@ jobs:
       - name: Build the app binary
         run: cargo build -p srelens-desktop --features custom-protocol --profile ci-smoke
       - name: Create kind cluster
-        uses: helm/kind-action@v1
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
         with:
           cluster_name: srelens-e2e
       - name: Full smoke suite through the real app
@@ -242,7 +253,7 @@ jobs:
             cargo test -p srelens-desktop --features custom-protocol --profile ci-smoke --test webdriver_smoke -- --ignored --nocapture
       - name: Upload failure artifacts (screenshot + app logs)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: smoke-full-failure-artifacts
           path: ${{ runner.temp }}/smoke-artifacts
@@ -267,7 +278,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Stamp the release version into the workspace before the image builds:
       # every crate inherits [workspace.package].version, and without this the
       # server binary in the image reports the committed placeholder instead
@@ -286,16 +297,16 @@ jobs:
           ' "$V"
           echo "Docker build version: $V"
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -316,7 +327,7 @@ jobs:
           fi
           touch "/tmp/digests/${digest#sha256:}"
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: docker-digest-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -336,15 +347,15 @@ jobs:
       packages: write
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: /tmp/digests
           pattern: docker-digest-*
           merge-multiple: true
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -417,7 +428,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # On main, the version job already pushed the bump commit — build it.
           ref: ${{ github.ref_name == 'main' && 'main' || github.sha }}
@@ -469,20 +480,21 @@ jobs:
           echo "${LINUXDEPLOY_SHA256}  $HOME/.cache/tauri/linuxdeploy-x86_64.AppImage" | sha256sum -c -
           chmod +x ~/.cache/tauri/linuxdeploy-x86_64.AppImage
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - run: pnpm install --frozen-lockfile
 
@@ -530,7 +542,7 @@ jobs:
           echo "REL_NAME=srelens v${{ needs.version.outputs.version }}" >> "$GITHUB_ENV"
 
       - name: Build app & publish release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Updater signing — produces the .sig files latest.json needs so the
@@ -601,7 +613,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Compose and publish release notes
@@ -647,7 +659,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.ref_name == 'main' && 'main' || github.sha }}
       - name: Compose and publish updater manifest
@@ -687,9 +699,12 @@ jobs:
     needs: [version, build]
     if: ${{ always() && needs.build.result == 'success' && github.ref_name == 'main' && needs.version.outputs.release == 'true' }}
     runs-on: ubuntu-22.04
+    # Reads the Releases API to compare asset sizes; writes nothing.
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Compare installer sizes against the previous release
@@ -727,18 +742,129 @@ jobs:
   # Attach detached GPG signatures (.asc) to every release asset so users can
   # verify authenticity (`gpg --verify file.asc file`). Activates automatically
   # once the GPG_PRIVATE_KEY secret is set; otherwise it's a no-op.
+  # Signs the assets attached to THIS release's tag. On a stable release that
+  # includes latest.json, which updater-manifest uploads to the same tag —
+  # hence the dependency below, since both used to run off [version, build] in
+  # parallel and whether the manifest got signed came down to which finished
+  # first. On a dev pre-release the manifest instead goes to the rolling
+  # `dev-channel` release, so it is NOT signed here. That is acceptable because
+  # the manifest is not a trust anchor: it lists each installer's URL and .sig,
+  # and the updater verifies the installer it downloads against the public key
+  # pinned in tauri.conf.json — so tampering with the manifest cannot get a
+  # modified build accepted. (The manifest itself carries no signature of its
+  # own, on either channel.)
+  #
+  # Signing is a publication GATE on stable only: publish-release requires this
+  # job, so a stable release that fails to sign stays an invisible draft. Dev
+  # pre-releases are public the moment they build (releaseDraft is false for
+  # dev), so a failure here turns the run red but the assets are already
+  # downloadable. That is deliberate — the dev-channel manifest points at those
+  # asset URLs, so drafting the release would 404 the updater until a publish
+  # step ran, and gating a daily automated pre-release on GPG infrastructure
+  # trades availability for a guarantee dev users have not asked for. The docs
+  # scope the promise to stable accordingly.
   sign-artifacts:
-    needs: [version, build]
-    if: ${{ always() && needs.build.result == 'success' && (github.ref_name != 'main' || needs.version.outputs.release == 'true') }}
+    needs: [version, build, updater-manifest]
+    if: ${{ always() && needs.build.result == 'success' && needs.updater-manifest.result == 'success' && (github.ref_name != 'main' || needs.version.outputs.release == 'true') }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     env:
       ENABLE_GPG: ${{ secrets.GPG_PRIVATE_KEY != '' }}
     steps:
+      # ENABLE_GPG makes signing opt-in, which is right for dev but fail-OPEN
+      # for stable: a deleted or renamed secret would skip both steps, report
+      # success, and let publish-release ship an unsigned release while the
+      # docs promise otherwise. Stable requires the key.
+      - name: Require a signing key for stable releases
+        if: github.ref_name == 'main' && env.ENABLE_GPG != 'true'
+        run: |
+          echo "GPG_PRIVATE_KEY is not set, so this stable release cannot be signed." >&2
+          echo "Set the secret (docs/DEVELOPMENT.md -> Release signing key) and re-run." >&2
+          exit 1
+      # The fingerprint printed in docs/INSTALL.md is what a user is told to
+      # compare against, so it — not KEYS — is the authoritative statement of
+      # which key is current. KEYS is a cumulative archive holding retired keys
+      # too, so "the key in KEYS" is not a well-defined thing to check against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.ENABLE_GPG == 'true'
+        with:
+          ref: ${{ github.ref_name == 'main' && 'main' || github.sha }}
       - name: Import GPG key
         if: env.ENABLE_GPG == 'true'
-        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode | gpg --batch --import
+        env:
+          # Through the environment rather than interpolated into the script:
+          # a secret spliced into the command text is one quoting accident away
+          # from being mangled, and it keeps the value out of the shell trace.
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$GPG_PRIVATE_KEY" | base64 --decode | gpg --batch --import
+      # A rotation done in the wrong order — new key published in KEYS, old one
+      # still in GPG_PRIVATE_KEY, or the reverse — otherwise signs happily and
+      # ships .asc files that no user can verify against the documented
+      # fingerprint. The failure is silent at signing time and only surfaces
+      # when someone tries to verify a download, so it is caught here instead.
+      - name: Check the signing key matches what users are told to expect
+        if: env.ENABLE_GPG == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -f KEYS ] || { echo "KEYS is missing — publish the public key first." >&2; exit 1; }
+
+          SIGNING_FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+          # The install guide lists a fingerprint per key generation so older
+          # releases stay verifiable after a rotation; the row marked **current**
+          # is the one this release must be signed with.
+          # Exactly one row may be marked current. A rotation that adds the new
+          # row but forgets to unmark the old one would otherwise let head -1
+          # pick the retired fingerprint, match a stale secret, and publish
+          # under a key the release range does not point users at.
+          CURRENT_ROWS=$(grep -icE '^\|.*\*\*current\*\*.*\|' docs/INSTALL.md || true)
+          if [ "$CURRENT_ROWS" -ne 1 ]; then
+            echo "docs/INSTALL.md marks $CURRENT_ROWS signing-key rows as **current**;" >&2
+            echo "exactly one must be marked. Fix the fingerprint table." >&2
+            exit 1
+          fi
+          DOC_FPR=$(grep -iE '^\|.*\*\*current\*\*.*\|' docs/INSTALL.md \
+            | grep -oE '[0-9A-F]{8}( +[0-9A-F]{8}){4}' | tr -d ' ')
+
+          if [ -z "$SIGNING_FPR" ] || [ -z "$DOC_FPR" ]; then
+            echo "Could not read a fingerprint (signing='$SIGNING_FPR' docs='$DOC_FPR')." >&2
+            exit 1
+          fi
+
+          # Catches a rotation that updated the secret but not the docs, or the
+          # reverse: users following the guide would reject a good release, or
+          # accept one signed by a key the guide never named.
+          if [ "$SIGNING_FPR" != "$DOC_FPR" ]; then
+            echo "Signing key does not match the fingerprint published to users:" >&2
+            echo "  GPG_PRIVATE_KEY:            $SIGNING_FPR" >&2
+            echo "  docs/INSTALL.md (current):  $DOC_FPR" >&2
+            exit 1
+          fi
+
+          # …and that the key is actually IN the archive users import from —
+          # anywhere in it, since KEYS also carries retired keys — and that
+          # KEYS does not itself say the key is revoked or expired. Presence
+          # alone is not enough: a revocation added to KEYS while the secret
+          # still holds the un-revoked key would sign and publish happily,
+          # while every user importing KEYS gets the revocation warning the
+          # install guide tells them to treat as a failure.
+          # show-only inspects KEYS without importing it into the keyring.
+          VALIDITY=$(gpg --with-colons --import-options show-only --import KEYS \
+            | awk -F: -v want="$SIGNING_FPR" '/^pub:/{v=$2} /^fpr:/{if ($10==want) {print v; exit}}')
+          if [ -z "$VALIDITY" ]; then
+            echo "Signing key $SIGNING_FPR is not published in KEYS," >&2
+            echo "so users could not import the key needed to verify it." >&2
+            exit 1
+          fi
+          case "$VALIDITY" in
+            r) echo "KEYS marks $SIGNING_FPR as REVOKED — rotate before releasing." >&2; exit 1 ;;
+            e) echo "KEYS marks $SIGNING_FPR as EXPIRED — rotate before releasing." >&2; exit 1 ;;
+          esac
+          echo "Signing key $SIGNING_FPR matches the docs, is published in KEYS, and is usable."
       - name: Sign release assets
         if: env.ENABLE_GPG == 'true'
         env:
@@ -749,17 +875,33 @@ jobs:
           set -euo pipefail
           TAG="srelens-v${{ needs.version.outputs.version }}"
           KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
+          if [ -z "$KEYID" ]; then
+            echo "GPG_PRIVATE_KEY is set but no secret key was imported." >&2
+            exit 1
+          fi
+          echo "Signing with key $KEYID"
           mkdir -p _assets && cd _assets
           gh release download "$TAG" --repo "${{ github.repository }}" --clobber
           shopt -s nullglob
+          signed=0
           for f in *; do
-            case "$f" in *.asc) continue ;; esac
+            # Skip our own output, and the minisign updater signatures — those
+            # are verified by the updater's own key, and a .sig.asc is noise on
+            # the release page.
+            case "$f" in *.asc | *.sig) continue ;; esac
             gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
                 --local-user "$KEYID" --armor --detach-sign --output "$f.asc" "$f"
+            signed=$((signed + 1))
           done
-          if ls *.asc >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "${{ github.repository }}" *.asc --clobber
+          # A configured key that signs nothing means the download or the skip
+          # rules are wrong; failing here keeps the release a draft rather than
+          # publishing one that silently claims to be signed.
+          if [ "$signed" -eq 0 ]; then
+            echo "No assets were signed — nothing matched on $TAG." >&2
+            exit 1
           fi
+          echo "Signed $signed asset(s)."
+          gh release upload "$TAG" --repo "${{ github.repository }}" *.asc --clobber
 
   # Stable only (dev never drafts — see releaseDraft above). Flip the draft once
   # the whole pipeline is green: every matrix leg built and passed its asserts,
@@ -803,6 +945,12 @@ jobs:
     # plain HTTPS, which only works once the release is out of draft.
     needs: [version, build, publish-release]
     if: ${{ github.ref_name == 'main' && needs.publish-release.result == 'success' && needs.version.outputs.release == 'true' }}
+    # The called workflow declares `contents: read` for itself; the AUR push
+    # authenticates with its own SSH deploy key, not GITHUB_TOKEN. Repeated
+    # here because a reusable workflow cannot be granted more than its caller
+    # holds, so this is the ceiling, not a duplicate.
+    permissions:
+      contents: read
     uses: ./.github/workflows/aur-publish.yml
     with:
       version: ${{ needs.version.outputs.version }}

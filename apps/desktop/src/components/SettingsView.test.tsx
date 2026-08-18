@@ -39,8 +39,8 @@ vi.mock("../lib/clusters", () => ({
   listContexts: () =>
     Promise.resolve({
       contexts: [
-        { name: "prod-eu", cluster: "production", server: "https://prod.example", isCurrent: true },
-        { name: "staging", cluster: "staging", server: "https://staging.example", isCurrent: false },
+        { name: "prod-eu", stableId: "/k/prod-eu.yaml#prod-eu", cluster: "production", server: "https://prod.example", isCurrent: true },
+        { name: "staging", stableId: "/k/staging.yaml#staging", cluster: "staging", server: "https://staging.example", isCurrent: false },
       ],
     }),
 }));
@@ -434,6 +434,39 @@ describe("SettingsView", () => {
     expect(await screen.findByText(/0\.2\.0/)).toBeDefined();
     expect(screen.getByText(/system package manager/)).toBeDefined();
     expect(screen.queryByRole("button", { name: /Download & install/ })).toBeNull();
+  });
+
+  it("warns before a .deb/.rpm update asks for a password (#35)", async () => {
+    updaterMocks.checkForUpdate.mockResolvedValue({
+      version: "0.2.0",
+      currentVersion: "0.1.0",
+      notes: "New things",
+      elevates: true,
+    });
+    render(
+      <SettingsView
+        theme={{ name: "slate", mode: "dark" }}
+        onThemeNameChange={() => {}}
+        onThemeModeChange={() => {}}
+        defaultNamespace=""
+        onDefaultNamespaceChange={() => {}}
+        layout={DEFAULT_WORKSPACE_LAYOUT}
+        onLayoutChange={() => {}}
+        contextProfiles={{}}
+        onContextProfilesChange={() => {}}
+        kubeconfigFiles={[]}
+        onKubeconfigFilesChange={() => {}}
+        contextOrder={[]}
+        onContextOrderChange={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updates/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/0\.2\.0/)).toBeDefined();
+    // The install still goes ahead in-app; the point is that the system's
+    // password prompt doesn't arrive unannounced.
+    expect(screen.getByText(/administrator rights/)).toBeDefined();
+    expect(screen.getByRole("button", { name: /Download & install/ })).toBeDefined();
   });
 
   it("surfaces update check failures", async () => {

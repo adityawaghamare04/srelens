@@ -13,6 +13,7 @@
 // suppress the native zoom the user already has).
 
 import { setWebviewZoom } from "../transport/transport";
+import { settingsStorage } from "./settingsStorage";
 
 const UI_SCALE_KEY = "srelens.uiScale";
 
@@ -29,7 +30,7 @@ export function clampUiScale(value: unknown): number {
 /** The persisted interface scale in percent, or 100 when unset/invalid. */
 export function getUiScale(): number {
   try {
-    const raw = localStorage.getItem(UI_SCALE_KEY);
+    const raw = settingsStorage.getItem(UI_SCALE_KEY);
     return raw === null ? UI_SCALE.DEFAULT : clampUiScale(JSON.parse(raw));
   } catch {
     return UI_SCALE.DEFAULT;
@@ -40,7 +41,7 @@ export function getUiScale(): number {
 export function setUiScale(percent: number): number {
   const clamped = clampUiScale(percent);
   try {
-    localStorage.setItem(UI_SCALE_KEY, JSON.stringify(clamped));
+    settingsStorage.setItem(UI_SCALE_KEY, JSON.stringify(clamped));
   } catch {
     // ignore unavailable/quota-exceeded storage
   }

@@ -22,7 +22,7 @@ pub async fn start_terminal(
     app: AppHandle,
     manager: State<'_, TerminalManager>,
 ) -> Result<u64, String> {
-    let mut paths = crate::capabilities::default_kubeconfig_paths();
+    let mut paths = crate::capabilities::all_kubeconfig_paths();
     paths.extend(extra_kubeconfigs.iter().map(std::path::PathBuf::from));
     manager
         .start(
