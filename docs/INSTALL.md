@@ -32,8 +32,7 @@ Pick the package for your distribution:
 | Fedora/RHEL | `srelens-<version>-1.x86_64.rpm` | `sudo dnf install ./srelens-*.rpm` |
 
 Requires a WebKitGTK runtime (`webkit2gtk-4.1`); the deb/rpm pull it in
-automatically. The in-app updater applies to the **AppImage** build; update
-deb/rpm installs by downloading the new package.
+automatically. See [Updating](#updating) for how each format updates itself.
 
 The AppImage deliberately does **not** bundle the Wayland client libraries
 (`libwayland-client/cursor/egl/server`) — bundling them breaks EGL on hosts with
@@ -205,8 +204,21 @@ srelens checks for updates from **Settings → Updates**:
 - **Stable** — released versions (default).
 - **Dev** — rolling pre-releases for early access.
 
-Updates are cryptographically signed and verified before install. On Linux, the
-in-app updater applies to the AppImage build only.
+Updates are cryptographically signed and verified before install.
+
+On Linux what happens next depends on how srelens was installed, and the app
+works this out for itself rather than asking you:
+
+| Install | In-app update |
+| --- | --- |
+| AppImage | Replaces the AppImage in place. Nothing else needed. |
+| `.deb` / `.rpm` | Downloads the new package and applies it with `dpkg -i` / `rpm -U`. This needs administrator rights, so your desktop will ask for your password; Settings warns you before the prompt appears. |
+| AUR (`srelens-bin`) | Not offered. pacman owns the files, so srelens points you at `paru -Syu` / `yay -Syu` instead of desyncing its database. |
+
+If a package update fails — no `pkexec`, no polkit agent, a locked package
+database — nothing is left half-applied: download the new `.deb`/`.rpm` from
+[Releases](https://github.com/srelens/srelens/releases/latest) and install it
+the same way you installed the first one.
 
 ## Uninstalling
 
