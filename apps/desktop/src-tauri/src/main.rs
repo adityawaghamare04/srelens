@@ -225,7 +225,7 @@ fn run_mcp_http(
         // connections, and could diverge from the read path on credential
         // refresh.
         let cache = srelens_kube::client_cache::ClientCache::new_many(
-            srelens_registry::default_kubeconfig_paths(),
+            srelens_registry::all_kubeconfig_paths(),
         );
         let registry = srelens_desktop_lib::build_registry_with_paths_and_settings(
             cache.clone(),
@@ -290,7 +290,7 @@ fn run_mcp_stdio(allow_destructive: bool, allow_sensitive_reads: bool) {
         // share it between the registry and the watcher rather than letting
         // `build_registry` create one it doesn't expose.
         let cache = srelens_kube::client_cache::ClientCache::new_many(
-            srelens_registry::default_kubeconfig_paths(),
+            srelens_registry::all_kubeconfig_paths(),
         );
         let registry = srelens_desktop_lib::build_registry_with_paths_and_settings(
             cache.clone(),

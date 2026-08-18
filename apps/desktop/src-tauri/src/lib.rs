@@ -194,6 +194,7 @@ async fn watch_kubeconfig_files(app_handle: tauri::AppHandle, cache: std::sync::
         paths
     }
 
+
     let mut last_modified: HashMap<PathBuf, Option<SystemTime>> = HashMap::new();
 
     // Initialize the map with current files
@@ -260,7 +261,7 @@ pub fn run() {
 
     // One shared client cache: request/response capabilities AND live watches
     // reuse the same authenticated kube-rs clients.
-    let cache = ClientCache::new_many(capabilities::default_kubeconfig_paths());
+    let cache = ClientCache::new_many(capabilities::all_kubeconfig_paths());
     let registry = capabilities::build_registry_with(cache.clone());
 
     // single-instance is registered BEFORE every other plugin, as the plugin
@@ -359,7 +360,7 @@ pub fn run() {
                 .map_err(|e| e.to_string())
                 .map(|dir| dir.join("cluster-oidc"))
                 .and_then(|config_dir| {
-                    let paths = capabilities::default_kubeconfig_paths();
+                    let paths = capabilities::all_kubeconfig_paths();
                     let yamls = cluster_oidc::read_kubeconfig_yamls(&paths);
                     tauri::async_runtime::block_on(cluster_oidc::DesktopClusterOidc::build(
                         &config_dir,

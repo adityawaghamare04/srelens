@@ -8,6 +8,7 @@
 
 pub use srelens_registry::{
     build_registry, build_registry_with, build_registry_with_paths,
-    build_registry_with_paths_and_settings, default_kubeconfig_paths, default_settings_path,
+    all_kubeconfig_paths, build_registry_with_paths_and_settings, default_kubeconfig_paths,
+    default_settings_path,
     run_tool,
 };

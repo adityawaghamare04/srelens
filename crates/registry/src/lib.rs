@@ -33,20 +33,37 @@ pub fn capability_catalog() -> Vec<CatalogEntry> {
 
 pub use srelens_kube::connect::{default_kubeconfig_dir, managed_kubeconfig_files};
 
-/// Resolve kubeconfig paths: every `$KUBECONFIG` entry, else `$HOME/.kube/config`,
-/// plus anything in the app's own kubeconfig folder.
+/// The STATIC kubeconfig sources: every `$KUBECONFIG` entry, else
+/// `$HOME/.kube/config`.
+///
+/// Deliberately excludes the app's managed folder. That folder's contents
+/// change while the app runs, and this result gets captured by long-lived
+/// consumers — the capability registry snapshots it once at build time — so
+/// folding volatile content in here means a file deleted at runtime is
+/// reintroduced on every later call and never goes away. Callers that want the
+/// managed folder as well should use [`all_kubeconfig_paths`], which resolves
+/// it at call time.
 pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
-    let mut paths = if let Some(value) = std::env::var_os("KUBECONFIG") {
-        std::env::split_paths(&value)
+    if let Some(value) = std::env::var_os("KUBECONFIG") {
+        let paths = std::env::split_paths(&value)
             .filter(|path| !path.as_os_str().is_empty())
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    if paths.is_empty() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        paths.push(PathBuf::from(home).join(".kube").join("config"));
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            return paths;
+        }
     }
+    let home = std::env::var("HOME").unwrap_or_default();
+    vec![PathBuf::from(home).join(".kube").join("config")]
+}
+
+/// Every kubeconfig source as of RIGHT NOW: the static ones plus whatever is
+/// currently in the app's managed folder.
+///
+/// For callers that resolve paths per operation (a terminal, a helm command,
+/// the initial client cache). Anything that captures its result for later
+/// reuse wants [`default_kubeconfig_paths`] plus a live folder read instead.
+pub fn all_kubeconfig_paths() -> Vec<PathBuf> {
+    let mut paths = default_kubeconfig_paths();
     for managed in srelens_kube::connect::managed_kubeconfig_files() {
         if !paths.contains(&managed) {
             paths.push(managed);

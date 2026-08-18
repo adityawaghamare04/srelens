@@ -87,6 +87,15 @@ pub fn list_contexts_capability(
                             }
                         }
                     }
+                    // `default_paths` is a snapshot taken when the registry was
+                    // built, so a kubeconfig deleted while the app runs would
+                    // otherwise be reintroduced on every call and sit in the
+                    // cache forever — where `load_kubeconfigs` is strict and
+                    // fails the merged-resolution fallback on the missing file.
+                    // Only ABSENT files are dropped: one that exists but is
+                    // malformed still reaches the reader and surfaces its parse
+                    // error, which the caller needs to see.
+                    paths.retain(|path| path.exists());
                     cache.set_paths(paths).await;
                 }
                 // Enumerate every context across all files with duplicate-name
@@ -487,6 +496,43 @@ users:
             .map(|c| c["name"].as_str().unwrap().to_string()).collect();
         assert!(!names.iter().any(|n| n == "ctx-b"), "deleted context lingered: {names:?}");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_managed_file_deleted_at_runtime_leaves_the_active_path_set() {
+        let dir = std::env::temp_dir().join(format!("srelens-repro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("base.yaml");
+        std::fs::write(&base, "clusters:\n- name: a\n  cluster: { server: https://a }\ncontexts:\n- name: ctx-a\n  context: { cluster: a, user: user-a }\n").unwrap();
+        let managed = dir.join("managed");
+        std::fs::create_dir_all(&managed).unwrap();
+        let pasted = managed.join("pasted.yaml");
+        std::fs::write(&pasted, "clusters:\n- name: b\n  cluster: { server: https://b }\ncontexts:\n- name: ctx-b\n  context: { cluster: b, user: user-b }\n").unwrap();
+
+        // Startup: default_kubeconfig_paths() included the managed file.
+        let startup_paths = vec![base.clone(), pasted.clone()];
+        let cache = ClientCache::new(base.clone());
+        let mut reg = Registry::new();
+        reg.register(list_contexts_capability(cache.clone(), startup_paths, Some(managed.clone())));
+
+        // The user deletes it while the app runs.
+        std::fs::remove_file(&pasted).unwrap();
+
+        let out = reg.invoke("k8s.listContexts", json!({ "paths": [] })).await.unwrap();
+        let names: Vec<String> = out["contexts"].as_array().unwrap().iter()
+            .map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert_eq!(names, ["ctx-a"], "the deleted context must be gone");
+
+        // The important half: default_paths is a startup SNAPSHOT that still
+        // holds the deleted file, so without pruning it would be reintroduced
+        // on every call and linger in the cache — where the strict merged
+        // fallback in load_kubeconfigs fails on the missing file.
+        let active = cache.paths().await;
+        assert!(
+            !active.contains(&pasted),
+            "deleted kubeconfig still active: {active:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
