@@ -15,7 +15,9 @@ import {
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { listContexts, type ClusterContext } from "../lib/clusters";
 import { ContextAvatar } from "./ContextAvatar";
+import type { SettingsSection } from "./SettingsView";
 import { contextDisplayName, orderContexts, type ContextProfiles } from "../lib/settings";
+import { loadOnboarded, saveOnboarded, shouldShowFirstRun } from "../lib/onboarding";
 
 const EMPTY_LIST: string[] = [];
 
@@ -47,7 +49,7 @@ export function LandingPage({
   contextsError = "",
 }: {
   onOpenContext: (context: string) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: SettingsSection) => void;
   contextProfiles?: ContextProfiles;
   kubeconfigFiles?: string[];
   contextOrder?: string[];
@@ -87,6 +89,14 @@ export function LandingPage({
   }, [contextProfiles, contexts, query]);
 
   const contextCount = contexts?.length ?? 0;
+  // First-run help, shown until the user opens a cluster or dismisses it.
+  const [onboarded, setOnboarded] = useState(loadOnboarded);
+  const dismissFirstRun = () => {
+    saveOnboarded();
+    setOnboarded(true);
+  };
+  const firstRun = shouldShowFirstRun(onboarded, contexts === null ? null : contextCount);
+
 
   const localContexts = filteredContexts.filter((context) => context.isLocal);
   const remoteContexts = filteredContexts.filter((context) => !context.isLocal);
@@ -99,7 +109,12 @@ export function LandingPage({
       key={context.name}
       type="button"
       className="fl-landing__context-row"
-      onClick={() => onOpenContext(context.name)}
+      onClick={() => {
+        // Opening a cluster is the thing the first-run card exists to get
+        // the user to do, so it retires the card as surely as dismissing it.
+        saveOnboarded();
+        onOpenContext(context.name);
+      }}
       aria-label={`Open context ${context.name}`}
     >
       <span className="fl-landing__context-main">
@@ -148,7 +163,7 @@ export function LandingPage({
               <small>Kubernetes desktop workspace</small>
             </span>
           </div>
-          <Button variant="ghost" size="sm" onClick={onOpenSettings} aria-label="Workspace preferences">
+          <Button variant="ghost" size="sm" onClick={() => onOpenSettings()} aria-label="Workspace preferences">
             <Settings data-icon="inline-start" />
             Preferences
           </Button>
@@ -202,7 +217,12 @@ export function LandingPage({
               </CardContent>
               <CardFooter className="fl-landing__current-footer">
                 <Button
-                  onClick={() => currentContext && onOpenContext(currentContext.name)}
+                  onClick={() => {
+                    if (!currentContext) return;
+                    // Same as picking from the list: the user is in.
+                    saveOnboarded();
+                    onOpenContext(currentContext.name);
+                  }}
                   disabled={!currentContext}
                   aria-label={`Open current context ${currentContext?.name ?? "cluster"}`}
                 >
@@ -213,6 +233,40 @@ export function LandingPage({
               </CardFooter>
             </Card>
           </section>
+
+          {/* One column, not two siblings: the workspace is a two-column grid,
+              so a third auto-placed child would take the right column and push
+              the context list underneath the intro on the left. */}
+          <div className="fl-landing__side">
+          {firstRun && (
+            <Card className="fl-landing__firstrun" aria-labelledby="firstrun-title">
+              <CardHeader>
+                <CardTitle id="firstrun-title">New here?</CardTitle>
+                <CardDescription>
+                  Three things worth knowing. This card goes away once you open a cluster.
+                </CardDescription>
+                <CardAction>
+                  <Button variant="ghost" size="sm" onClick={dismissFirstRun}>
+                    Dismiss
+                  </Button>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                <ul className="fl-landing__firstrun-list">
+                  <li>
+                    <strong>Pick a context below</strong> to open that cluster — these come from your
+                    kubeconfig.
+                  </li>
+                  <li>
+                    <strong>Cmd/Ctrl-K</strong> jumps to any view or resource by name.
+                  </li>
+                  <li>
+                    <strong>?</strong> lists every keyboard shortcut.
+                  </li>
+                </ul>
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="fl-landing__contexts" aria-label="Available contexts">
             <CardHeader>
@@ -242,8 +296,18 @@ export function LandingPage({
                   <p className="fl-landing__empty">Reading kubeconfig…</p>
                 ) : error ? (
                   <p className="fl-landing__empty">Unable to load kube contexts.</p>
+                ) : contextCount === 0 ? (
+                  <div className="fl-landing__empty">
+                    <p>
+                      No clusters yet — srelens read your kubeconfig and found no contexts in it.
+                    </p>
+                    <Button size="sm" onClick={() => onOpenSettings("contexts")}>
+                      Add or paste a kubeconfig
+                      <ArrowRight data-icon="inline-end" />
+                    </Button>
+                  </div>
                 ) : filteredContexts.length === 0 ? (
-                  <p className="fl-landing__empty">No contexts match this filter.</p>
+                  <p className="fl-landing__empty">No contexts match “{query}”. Clear the filter to see all {contextCount}.</p>
                 ) : grouped ? (
                   <>
                     {renderGroup("Local", localContexts)}
@@ -259,6 +323,7 @@ export function LandingPage({
               <span>Source: local kubeconfig</span>
             </CardFooter>
           </Card>
+          </div>
         </main>
 
         <section className="fl-landing__capabilities" aria-labelledby="capabilities-title">
