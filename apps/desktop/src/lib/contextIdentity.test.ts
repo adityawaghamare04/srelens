@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   mergeFromNames,
   mergeOrderFromNames,
+  remapTabsToContexts,
   migrateOrder,
   migrateRecordKeys,
   projectOrderToNames,
@@ -156,5 +157,57 @@ describe("order projection", () => {
     const byId = ["/k/other.yaml#k8s02", "/k/offline.yaml#X", "/k/prod.yaml#M01"];
     const merged = mergeOrderFromNames(byId, ["prod-kube/M01", "k8s02"], contexts);
     expect(merged).toEqual(["/k/prod.yaml#M01", "/k/other.yaml#k8s02", "/k/offline.yaml#X"]);
+  });
+});
+
+describe("order deletion", () => {
+  const contexts = [ctx("prod-kube/M01", "/k/prod.yaml#M01"), ctx("k8s02", "/k/other.yaml#k8s02")];
+
+  it("removes a connected context the caller dropped", () => {
+    // Deleting a context filters it out of the name list. Treating that as
+    // "offline" and re-appending made deletion impossible.
+    const byId = ["/k/prod.yaml#M01", "/k/other.yaml#k8s02"];
+    const merged = mergeOrderFromNames(byId, ["prod-kube/M01"], contexts);
+    expect(merged).toEqual(["/k/prod.yaml#M01"]);
+    expect(merged).not.toContain("/k/other.yaml#k8s02");
+  });
+});
+
+describe("remapTabsToContexts", () => {
+  it("follows its context through the rename a collision causes", () => {
+    // THE reported case: a second file declares M01, so BOTH contexts gain a
+    // prefix. Name matching cannot resolve that — identity can.
+    const before = [{ cluster: "M01", clusterId: "/k/prod.yaml#M01" }];
+    const afterCollision = [
+      ctx("prod/M01", "/k/prod.yaml#M01"),
+      ctx("dev/M01", "/k/dev.yaml#M01"),
+    ];
+    expect(remapTabsToContexts(before, afterCollision)).toEqual([
+      { cluster: "prod/M01", clusterId: "/k/prod.yaml#M01" },
+    ]);
+  });
+
+  it("adopts an id for a tab restored from before identities existed", () => {
+    const legacy = [{ cluster: "k8s02" }];
+    const contexts = [ctx("k8s02", "/k/other.yaml#k8s02")];
+    expect(remapTabsToContexts(legacy, contexts)).toEqual([
+      { cluster: "k8s02", clusterId: "/k/other.yaml#k8s02" },
+    ]);
+  });
+
+  it("leaves a genuinely removed context alone, for the prune to handle", () => {
+    const tabs = [{ cluster: "gone", clusterId: "/k/gone.yaml#gone" }];
+    expect(remapTabsToContexts(tabs, [ctx("k8s02", "/k/other.yaml#k8s02")])).toEqual(tabs);
+  });
+
+  it("returns the same objects when nothing moved", () => {
+    const contexts = [ctx("k8s02", "/k/other.yaml#k8s02")];
+    const tabs = [{ cluster: "k8s02", clusterId: "/k/other.yaml#k8s02" }];
+    expect(remapTabsToContexts(tabs, contexts)[0]).toBe(tabs[0]);
+  });
+
+  it("ignores cluster-less tabs", () => {
+    const tabs = [{ cluster: null }];
+    expect(remapTabsToContexts(tabs, [])).toEqual(tabs);
   });
 });

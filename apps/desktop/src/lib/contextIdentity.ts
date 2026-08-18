@@ -179,6 +179,44 @@ export function mergeOrderFromNames(
     .map((name) => idOf.get(name))
     .filter((id): id is string => !!id);
   const seen = new Set(reordered);
-  const offline = orderById.filter((id) => !seen.has(id) && !idOf.has(id));
+  // Compare ids to ids: `idOf` is keyed by NAME, so asking it about a stable
+  // id is always false and would re-append a connected context the caller
+  // deliberately removed — making deletion impossible.
+  const connectedIds = new Set(contexts.map((context) => context.stableId));
+  const offline = orderById.filter((id) => !seen.has(id) && !connectedIds.has(id));
   return [...reordered, ...offline];
+}
+
+/** The subset of a tab this module reconciles. */
+export interface ClusterBoundTab {
+  cluster: string | null;
+  /** Identity of that cluster, absent on tabs restored from before #265. */
+  clusterId?: string;
+}
+
+/**
+ * Point tabs back at their context after a rename.
+ *
+ * A tab carrying `clusterId` follows its context wherever the display name
+ * goes. One without it — restored from a session saved before ids existed —
+ * is matched by name and adopts an id, so it only has to survive this once.
+ *
+ * This must run BEFORE pruning: a renamed context is not a removed one, and
+ * pruning first would close the tab exactly when the rename happened.
+ */
+export function remapTabsToContexts<T extends ClusterBoundTab>(
+  tabs: readonly T[],
+  contexts: readonly ContextIdentity[],
+): T[] {
+  const byId = new Map(contexts.map((context) => [context.stableId, context]));
+  return tabs.map((tab) => {
+    if (!tab.cluster) return tab;
+    if (tab.clusterId) {
+      const owner = byId.get(tab.clusterId);
+      // Unknown id: the context really is gone, so leave it for the prune.
+      return owner && owner.name !== tab.cluster ? { ...tab, cluster: owner.name } : tab;
+    }
+    const owner = resolveStoredKey(tab.cluster, contexts);
+    return owner ? { ...tab, cluster: owner.name, clusterId: owner.stableId } : tab;
+  });
 }

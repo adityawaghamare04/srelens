@@ -58,13 +58,13 @@ import { applyUiScale, getUiScale, setUiScale, stepUiScale, uiScaleShortcut } fr
 import { dedupeDeepLinkTargets, parseDeepLink, type DeepLinkTarget } from "./lib/deepLink";
 import { applyViewPatch, type TabViewState } from "./lib/tabView";
 import {
+  remapTabsToContexts,
   mergeFromNames,
   mergeOrderFromNames,
   migrateOrder,
   migrateRecordKeys,
   projectOrderToNames,
   projectToNames,
-  resolveStoredKey,
 } from "./lib/contextIdentity";
 import { invokeCommand } from "./transport/transport";
 import {
@@ -101,6 +101,10 @@ export interface ViewTab {
   create?: { initialKind?: string };
   /** For an "edit resource" tab: the resource to preload and apply back. */
   edit?: { kind: string; namespace: string | null; name: string };
+  /** Identity of `cluster` (#265). The display name changes when another
+   *  kubeconfig declares the same context name; this does not, so a rename
+   *  never reads as a deleted context and never closes the tab. */
+  clusterId?: string;
   /** Selected namespace filter (empty = all), preserved per tab. */
   namespace?: string;
   /** Sort, search text and filtered column for this tab's list (#254). */
@@ -212,20 +216,16 @@ export function App() {
       // Auto close any tabs of clusters/contexts that no longer exist!
       if (o.contexts) {
         const names = o.contexts.map((c) => c.name);
-        // A collision renames an existing context, so a tab pointing at the
-        // old name would otherwise be pruned as "context removed" — closing
-        // the user's tabs because an unrelated kubeconfig was added (#265).
-        setTabs((ts) =>
-          ts.map((t) => {
-            if (!t.cluster || names.includes(t.cluster)) return t;
-            const owner = resolveStoredKey(t.cluster, o.contexts!);
-            return owner ? { ...t, cluster: owner.name } : t;
-          }),
-        );
+        // Remap BEFORE pruning, and prune the remapped list — a separate
+        // setTabs would be overwritten by the prune below, which reads
+        // tabsRef, so the remap would be dead exactly when a rename happened.
+        const remapped = remapTabsToContexts(tabsRef.current, o.contexts);
         // Computed from the ref rather than inside the updater: the active id
         // has to be reconciled alongside, and state updaters must stay free
         // of side effects (React re-invokes them in development).
-        const { tabs: kept, dropped } = pruneMissingContexts(tabsRef.current, names);
+        const { tabs: kept, dropped } = pruneMissingContexts(remapped, names);
+        const renamed = remapped.some((tab, i) => tab !== tabsRef.current[i]);
+        if (renamed && dropped === 0) setTabs(remapped);
         if (dropped > 0) {
           setTabs(kept);
           // Without this the workspace goes blank behind a populated tab
@@ -446,7 +446,10 @@ export function App() {
   };
 
   // Persist per-cluster namespace whenever it changes.
-  useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
+  // No effect persisting `clusterNs`: it is a DERIVED, name-keyed projection.
+  // Saving it wrote `{}` on the first paint (before contexts resolve) and
+  // name-keyed data afterwards, undoing the id migration on disk. The id-keyed
+  // setters — rememberNamespace, the migration, delete-context — save instead.
 
   // Persist the open tabs (web only) so a browser reload restores them.
   useEffect(() => scheduleSaveOpenTabs(tabs, activeTabId), [tabs, activeTabId]);
@@ -672,7 +675,7 @@ export function App() {
       return;
     }
     const id = tabIdRef.current++;
-    setTabs((ts) => [...ts, { id, cluster, kind, namespace: namespaceFor(cluster) }]);
+    setTabs((ts) => [...ts, { id, cluster, clusterId: stableIdOf(cluster), kind, namespace: namespaceFor(cluster) }]);
     setActiveTabId(id);
   }
 
@@ -803,7 +806,7 @@ export function App() {
       setActiveTabId(existing.id);
     } else {
       const id = tabIdRef.current++;
-      setTabs((ts) => [...ts, { id, cluster, kind, focus, namespace: ns }]);
+      setTabs((ts) => [...ts, { id, cluster, clusterId: stableIdOf(cluster), kind, focus, namespace: ns }]);
       setActiveTabId(id);
     }
     rememberNamespace(cluster, ns);
@@ -858,7 +861,7 @@ export function App() {
       return;
     }
     const id = tabIdRef.current++;
-    setTabs((ts) => [...ts, { id, cluster, kind: "overview", crd }]);
+    setTabs((ts) => [...ts, { id, cluster, clusterId: stableIdOf(cluster), kind: "overview", crd }]);
     setActiveTabId(id);
   }
   function closeView(id: number) {
