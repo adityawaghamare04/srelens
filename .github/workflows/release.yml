@@ -32,8 +32,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only by default; the jobs that publish declare `contents: write` for
+# themselves (#38). A job added later therefore starts with no write access
+# rather than silently inheriting it.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # Auto-versioning (main only): compute the next semver from Conventional
@@ -41,6 +44,9 @@ jobs:
   # so it doesn't re-trigger). Outputs the new version + whether to release.
   version:
     runs-on: ubuntu-22.04
+    # Commits the version bump back to main.
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.compute.outputs.version }}
       release: ${{ steps.compute.outputs.release }}
@@ -192,6 +198,9 @@ jobs:
     needs: version
     if: needs.version.outputs.release == 'true' && github.ref_name == 'main'
     runs-on: ubuntu-22.04
+    # Builds and drives the app against kind; touches nothing in the repo.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux dependencies
@@ -690,6 +699,9 @@ jobs:
     needs: [version, build]
     if: ${{ always() && needs.build.result == 'success' && github.ref_name == 'main' && needs.version.outputs.release == 'true' }}
     runs-on: ubuntu-22.04
+    # Reads the Releases API to compare asset sizes; writes nothing.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -933,6 +945,12 @@ jobs:
     # plain HTTPS, which only works once the release is out of draft.
     needs: [version, build, publish-release]
     if: ${{ github.ref_name == 'main' && needs.publish-release.result == 'success' && needs.version.outputs.release == 'true' }}
+    # The called workflow declares `contents: read` for itself; the AUR push
+    # authenticates with its own SSH deploy key, not GITHUB_TOKEN. Repeated
+    # here because a reusable workflow cannot be granted more than its caller
+    # holds, so this is the ceiling, not a duplicate.
+    permissions:
+      contents: read
     uses: ./.github/workflows/aur-publish.yml
     with:
       version: ${{ needs.version.outputs.version }}
