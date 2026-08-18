@@ -140,6 +140,15 @@ describe("what the sheet shows", () => {
     expect(visibleShortcuts(true).map((s) => s.id)).toContain("zoom-in");
   });
 
+  it("hides Cmd-W off macOS, where nothing implements it", () => {
+    // Close-tab comes from the macOS app menu, which is compiled only for
+    // macOS — there is no key handler for it in the web layer.
+    expect(visibleShortcuts(true, false).map((s) => s.id)).not.toContain("close-tab");
+    expect(visibleShortcuts(true, true).map((s) => s.id)).toContain("close-tab");
+    // Everything else survives the filter.
+    expect(visibleShortcuts(true, false).map((s) => s.id)).toContain("zoom-in");
+  });
+
   it("groups in the order the groups first appear", () => {
     const groups = groupedShortcuts(true).map(([name]) => name);
     expect(groups[0]).toBe("Global");

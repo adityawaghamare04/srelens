@@ -23,6 +23,8 @@ export interface Shortcut {
   scope: "global" | "surface";
   /** Desktop-only: in a browser these keys already belong to the browser. */
   desktopOnly?: boolean;
+  /** macOS-only: served by the app menu, which only macOS builds install. */
+  appleOnly?: boolean;
 }
 
 /**
@@ -52,6 +54,10 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: "Global",
     scope: "global",
     desktopOnly: true,
+    // Served by the macOS app menu (`install_macos_menu`, compiled only for
+    // macOS), not by a key handler in the web layer. Listing it elsewhere
+    // would promise a key nothing answers.
+    appleOnly: true,
   },
   {
     id: "zoom-in",
@@ -159,15 +165,19 @@ export function formatShortcut(shortcut: Shortcut, apple: boolean): string {
   return shortcut.chords.map((chord) => formatChord(chord, apple)).join(" or ");
 }
 
-/** The shortcuts to show: browser builds omit the ones the browser owns. */
-export function visibleShortcuts(desktop: boolean): Shortcut[] {
-  return SHORTCUTS.filter((s) => desktop || !s.desktopOnly);
+/**
+ * The shortcuts to show here: browser builds omit the ones the browser owns,
+ * and non-Apple builds omit the ones only the macOS app menu provides. A sheet
+ * that lists a key nothing answers is worse than one that omits it.
+ */
+export function visibleShortcuts(desktop: boolean, apple = true): Shortcut[] {
+  return SHORTCUTS.filter((s) => (desktop || !s.desktopOnly) && (apple || !s.appleOnly));
 }
 
 /** Shortcuts grouped for display, in the order the groups first appear. */
-export function groupedShortcuts(desktop: boolean): Array<[string, Shortcut[]]> {
+export function groupedShortcuts(desktop: boolean, apple = true): Array<[string, Shortcut[]]> {
   const groups = new Map<string, Shortcut[]>();
-  for (const shortcut of visibleShortcuts(desktop)) {
+  for (const shortcut of visibleShortcuts(desktop, apple)) {
     const list = groups.get(shortcut.group);
     if (list) list.push(shortcut);
     else groups.set(shortcut.group, [shortcut]);

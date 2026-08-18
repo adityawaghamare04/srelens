@@ -26,7 +26,10 @@ export function ShortcutCheatSheet({
   /** Label the modifier as `⌘` rather than `Ctrl`. Injectable for tests. */
   apple?: boolean;
 }) {
-  const groups = groupedShortcuts(desktop);
+  const groups = groupedShortcuts(desktop, apple);
+  // An IDREF list is whitespace-separated, so "shortcuts-Command palette" reads
+  // as two references, neither of which exists, and the section loses its name.
+  const headingId = (group: string) => `shortcuts-${group.replace(/\s+/g, "-").toLowerCase()}`;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[80vh] overflow-y-auto sm:max-w-lg">
@@ -38,9 +41,9 @@ export function ShortcutCheatSheet({
         </DialogHeader>
         <div className="flex flex-col gap-4">
           {groups.map(([group, shortcuts]) => (
-            <section key={group} aria-labelledby={`shortcuts-${group}`}>
+            <section key={group} aria-labelledby={headingId(group)}>
               <h3
-                id={`shortcuts-${group}`}
+                id={headingId(group)}
                 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
               >
                 {group}
