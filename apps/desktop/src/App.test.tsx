@@ -7,9 +7,12 @@ import React from "react";
 const tauri = vi.hoisted(() => {
   const handlers = new Map<string, (e: { payload: unknown }) => void>();
   const windowClose = vi.fn();
+  const windowDestroy = vi.fn();
   return {
     handlers,
     windowClose,
+    windowDestroy,
+    closeRequestedHandler: null as null | ((event: { preventDefault: () => void }) => unknown),
     listen: vi.fn((name: string, cb: (e: { payload: unknown }) => void) => {
       handlers.set(name, cb);
       return Promise.resolve(() => handlers.delete(name));
@@ -18,7 +21,17 @@ const tauri = vi.hoisted(() => {
 });
 vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ close: tauri.windowClose }),
+  getCurrentWindow: () => ({
+    close: tauri.windowClose,
+    destroy: tauri.windowDestroy,
+    // Capture the handler so a test can drive the close-request path.
+    onCloseRequested: (handler: (event: { preventDefault: () => void }) => unknown) => {
+      tauri.closeRequestedHandler = handler;
+      return Promise.resolve(() => {
+        tauri.closeRequestedHandler = null;
+      });
+    },
+  }),
 }));
 
 const { checkForUpdateMock, notifyUpdateAvailableMock } = vi.hoisted(() => ({
@@ -84,16 +97,22 @@ vi.mock("./components/ResourceBrowser", () => ({
   ResourceBrowser: ({
     context,
     kind,
+    query,
+    onViewChange,
     onOpenResource,
     onOpenEdit,
   }: {
     context: string;
     kind: string;
+    query?: string;
+    onViewChange?: (patch: { query?: string }) => void;
     onOpenResource?: (target: { kind: string; namespace: string | null; name: string }) => void;
     onOpenEdit?: (kind: string, namespace: string | null, name: string) => void;
   }) => (
     <div data-testid="browser">
       {context}:{kind}
+      <span data-testid="browser-query">{query ?? ""}</span>
+      <button onClick={() => onViewChange?.({ query: "nginx" })}>set-query</button>
       <button
         onClick={() => onOpenResource?.({ kind: "Pod", namespace: "default", name: "web-1" })}
       >
@@ -171,6 +190,32 @@ describe("App", () => {
     expect(screen.getByTestId("browser").textContent).toContain("kind-dev:pods");
   });
 
+  it("clears only the target tab's search when focusing a resource in it (#254)", () => {
+    // The detail opens from the UNFILTERED rows, so a leftover search would
+    // leave the user on a list that doesn't contain what they navigated to
+    // once the drawer closes.
+    render(<App />);
+    fireEvent.click(screen.getByText("open-kind-dev"));
+    fireEvent.click(screen.getByText("nav-services"));
+    fireEvent.click(screen.getByText("linked-pod")); // creates the pods tab
+    expect(screen.getByTestId("browser").textContent).toContain("kind-dev:pods");
+
+    fireEvent.click(screen.getByText("set-query"));
+    expect(screen.getByTestId("browser-query").textContent).toBe("nginx");
+
+    // Navigate to a pod again from Services: the existing pods tab is reused
+    // and its search must be cleared so the focused row is actually listed.
+    fireEvent.click(screen.getByRole("tab", { name: /Services/ }));
+    fireEvent.click(screen.getByText("set-query")); // Services keeps its own
+    fireEvent.click(screen.getByText("linked-pod"));
+    expect(screen.getByTestId("browser").textContent).toContain("kind-dev:pods");
+    expect(screen.getByTestId("browser-query").textContent).toBe("");
+
+    // The Services tab's own search survived — only the target was cleared.
+    fireEvent.click(screen.getByRole("tab", { name: /Services/ }));
+    expect(screen.getByTestId("browser-query").textContent).toBe("nginx");
+  });
+
   it("opens an edit tab from a resource and de-dupes re-edits", () => {
     render(<App />);
     fireEvent.click(screen.getByText("open-kind-dev"));
@@ -242,6 +287,26 @@ describe("App", () => {
     expect(screen.queryByRole("tab", { name: /^Assistant$/ })).toBeNull();
   });
 
+  it("waits for the settings write before letting the window close (#254)", async () => {
+    // The durable write is an async IPC round trip; an unload handler returns
+    // immediately and the WebView is torn down mid-write, losing the last
+    // sort/search. The close is intercepted and resumed instead.
+    (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
+    tauri.windowDestroy.mockClear();
+    render(<App />);
+    fireEvent.click(screen.getByText("open-kind-dev"));
+
+    expect(tauri.closeRequestedHandler).toBeTypeOf("function");
+    const preventDefault = vi.fn();
+    await tauri.closeRequestedHandler!({ preventDefault });
+
+    // The default close is cancelled, then re-issued as destroy() once the
+    // write has drained — close() would re-enter this handler and loop.
+    expect(preventDefault).toHaveBeenCalled();
+    expect(tauri.windowDestroy).toHaveBeenCalled();
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+  });
+
   it("close-active-tab (Cmd+W) closes the active tab, not the window", () => {
     (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
     tauri.windowClose.mockClear();
@@ -257,6 +322,25 @@ describe("App", () => {
     expect(screen.queryByRole("tab", { name: /Overview · prod/ })).toBeNull();
     expect(screen.getByTestId("overview").textContent).toBe("kind-dev");
     expect(tauri.windowClose).not.toHaveBeenCalled();
+    delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
+  });
+
+  it("persists the post-close session when Cmd+W closes the last tab (#254)", async () => {
+    // closeView only SCHEDULES the state change, and the window close fires in
+    // the same callback — so without queueing the post-close snapshot first,
+    // the flush writes the pre-close one and the closed tab returns on the
+    // next launch.
+    (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__ = {};
+    localStorage.clear();
+    render(<App />);
+    fireEvent.click(screen.getByText("open-kind-dev"));
+
+    tauri.handlers.get("close-active-tab")?.({ payload: null });
+    // Drive the close the way Tauri would, so the flush runs.
+    await tauri.closeRequestedHandler?.({ preventDefault: vi.fn() });
+
+    // Nothing to restore: the user closed their last tab deliberately.
+    expect(localStorage.getItem("srelens.openTabs")).toBeNull();
     delete (window as unknown as { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__;
   });
 

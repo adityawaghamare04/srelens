@@ -56,15 +56,18 @@ import {
 } from "./lib/settings";
 import { applyUiScale, getUiScale, setUiScale, stepUiScale, uiScaleShortcut } from "./lib/uiScale";
 import { dedupeDeepLinkTargets, parseDeepLink, type DeepLinkTarget } from "./lib/deepLink";
+import { applyViewPatch, type TabViewState } from "./lib/tabView";
 import { invokeCommand } from "./transport/transport";
 import {
   loadOpenTabs,
-  saveOpenTabs,
+  scheduleSaveOpenTabs,
+  flushSaveOpenTabs,
   nextTabId,
   pruneMissingContexts,
   reconcileActiveTab,
   reconcileCrdTabs,
 } from "./lib/openTabs";
+import { flushSettingsWrites } from "./lib/settingsStorage";
 import { startMcpHttp } from "./lib/mcp";
 import { checkForUpdateAndNotify } from "./lib/updateNotifier";
 import { notify } from "./lib/notify";
@@ -73,6 +76,9 @@ import type { SettingsSection } from "./components/SettingsView";
 import { listContexts, deleteContext, type ClusterContext } from "./lib/clusters";
 import { deletePod } from "./lib/workloads";
 import { clearAccessCache } from "./lib/access";
+
+/** How long a closing window waits for the settings write to land. */
+const CLOSE_WRITE_TIMEOUT_MS = 2000;
 
 export interface ViewTab {
   id: number;
@@ -88,6 +94,8 @@ export interface ViewTab {
   edit?: { kind: string; namespace: string | null; name: string };
   /** Selected namespace filter (empty = all), preserved per tab. */
   namespace?: string;
+  /** Sort, search text and filtered column for this tab's list (#254). */
+  view?: TabViewState;
 }
 
 export function App() {
@@ -100,7 +108,6 @@ export function App() {
   const [activeTabId, setActiveTabId] = useState<number | null>(
     () => restored?.activeTabId ?? null,
   );
-  const [query, setQuery] = useState("");
   const [layout, setLayout] = useState(loadWorkspaceLayout);
   const [sidebarWidth, setSidebarWidth] = useState(layout.leftSidebarWidth);
   const [contextProfiles, setContextProfiles] = useState(loadContextProfiles);
@@ -369,7 +376,57 @@ export function App() {
   useEffect(() => saveClusterNamespaces(clusterNs), [clusterNs]);
 
   // Persist the open tabs (web only) so a browser reload restores them.
-  useEffect(() => saveOpenTabs(tabs, activeTabId), [tabs, activeTabId]);
+  useEffect(() => scheduleSaveOpenTabs(tabs, activeTabId), [tabs, activeTabId]);
+
+  // Web: localStorage writes are synchronous, so unload handlers suffice.
+  useEffect(() => {
+    if (isTauri()) return;
+    const flush = () => flushSaveOpenTabs();
+    window.addEventListener("beforeunload", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+    // Deliberately no flush on unmount: the real teardown is the window going
+    // away, which fires the events above. Flushing here would also write on
+    // every test/HMR unmount, persisting a session the next mount restores.
+  }, []);
+
+  // Desktop: the durable write is an async IPC round trip, which an unload
+  // handler cannot wait for — it returns immediately and the WebView is torn
+  // down mid-write. Intercept the close instead, drain the queue, then close.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const win = getCurrentWindow();
+    // Older runtimes (and the test harness) may not expose this; losing the
+    // close-time flush is far better than failing to mount the app.
+    if (typeof win?.onCloseRequested !== "function") return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void win
+      .onCloseRequested(async (event) => {
+        event.preventDefault();
+        flushSaveOpenTabs();
+        // Bounded: a stuck or slow write must never leave the user unable to
+        // quit, so the close proceeds either way.
+        await Promise.race([
+          flushSettingsWrites(),
+          new Promise((resolve) => setTimeout(resolve, CLOSE_WRITE_TIMEOUT_MS)),
+        ]);
+        // destroy(), not close() — close() re-emits this event and would loop.
+        await win.destroy();
+      })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   /** The namespace a new tab in `cluster` should start on. */
   const namespaceFor = (cluster: string) => clusterNs[cluster] ?? defaultNs;
@@ -472,7 +529,14 @@ export function App() {
       const id = activeTabIdRef.current;
       if (id != null) {
         const closingLastTab = tabsRef.current.length === 1 && tabsRef.current[0]?.id === id;
+        const remaining = tabsRef.current.filter((t) => t.id !== id);
         closeView(id);
+        // `closeView` only SCHEDULES the state change; the close below fires
+        // in this same callback, before React has re-rendered and run the
+        // persistence effect. Without queueing the post-close snapshot here,
+        // the close-request flush would write the pre-close one and the tab
+        // the user just closed would come back on the next launch.
+        scheduleSaveOpenTabs(remaining, remaining.at(-1)?.id ?? null);
         if (closingLastTab) void getCurrentWindow().close();
       } else {
         void getCurrentWindow().close();
@@ -485,6 +549,18 @@ export function App() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
   const activeCluster = activeTab?.cluster ?? null;
+  // Sort, search text and filtered column belong to the ACTIVE tab (#254).
+  // Previously sort/filter lived in the unmounted-on-switch view components
+  // and the search box was one App-level value shared by every tab, so the
+  // first vanished on a switch and the second leaked across tabs.
+  const activeView = activeTab?.view;
+  const query = activeView?.query ?? "";
+  const updateActiveView = (patch: Partial<TabViewState>) => {
+    if (activeTabId == null) return;
+    setTabs((ts) =>
+      ts.map((t) => (t.id === activeTabId ? { ...t, view: applyViewPatch(t.view, patch) } : t)),
+    );
+  };
   const activeKind: ResourceKind = activeTab?.kind ?? "pods";
   const activeCrd = activeTab?.crd ?? null;
   const clusters = orderContexts(
@@ -521,7 +597,6 @@ export function App() {
     const id = tabIdRef.current++;
     setTabs((ts) => [...ts, { id, cluster, kind, namespace: namespaceFor(cluster) }]);
     setActiveTabId(id);
-    setQuery("");
   }
 
   /** Open the single workspace-level Settings tab, optionally at a section. */
@@ -540,7 +615,6 @@ export function App() {
     const id = tabIdRef.current++;
     setTabs((ts) => [...ts, { id, cluster: null, kind: "settings" }]);
     setActiveTabId(id);
-    setQuery("");
   }
 
   /** Open (or focus) the single workspace-level Toolbox tab. When `context` is
@@ -556,7 +630,6 @@ export function App() {
     const id = tabIdRef.current++;
     setTabs((ts) => [...ts, { id, cluster: null, kind: "toolbox" }]);
     setActiveTabId(id);
-    setQuery("");
   }
 
   /** Open (or focus) the single workspace-level Assistant tab: a full-tab,
@@ -577,7 +650,6 @@ export function App() {
     const id = tabIdRef.current++;
     setTabs((ts) => [...ts, { id, cluster: null, kind: "assistant", namespace: "" }]);
     setActiveTabId(id);
-    setQuery("");
   }
   // Keep a stable handle to openSettings so the update-check effect's toast
   // action always uses the current tab state, not a stale closure.
@@ -634,7 +706,23 @@ export function App() {
     const ns = namespace ?? "";
     const existing = tabs.find((t) => t.cluster === cluster && t.kind === kind && !t.crd);
     if (existing) {
-      setTabs((ts) => ts.map((t) => (t.id === existing.id ? { ...t, focus, namespace: ns } : t)));
+      setTabs((ts) =>
+        ts.map((t) =>
+          t.id === existing.id
+            ? {
+                ...t,
+                focus,
+                namespace: ns,
+                // Clear THIS tab's search only. The detail opens from the
+                // unfiltered rows, so a leftover query would leave the user
+                // on a list that doesn't contain what they navigated to once
+                // the drawer closes. Sort and filter column are unaffected,
+                // and other tabs keep their own searches.
+                view: applyViewPatch(t.view, { query: "" }),
+              }
+            : t,
+        ),
+      );
       setActiveTabId(existing.id);
     } else {
       const id = tabIdRef.current++;
@@ -642,7 +730,6 @@ export function App() {
       setActiveTabId(id);
     }
     setClusterNs((m) => ({ ...m, [cluster]: ns }));
-    setQuery("");
   }
 
   /** Open a resource's kind view and deep-link to its detail (from search). */
@@ -696,7 +783,6 @@ export function App() {
     const id = tabIdRef.current++;
     setTabs((ts) => [...ts, { id, cluster, kind: "overview", crd }]);
     setActiveTabId(id);
-    setQuery("");
   }
   function closeView(id: number) {
     setTabs((ts) => {
@@ -867,7 +953,9 @@ export function App() {
                       context={activeCluster}
                       crd={activeTab.crd}
                       query={query}
-                      onQueryChange={setQuery}
+                      onQueryChange={(q) => updateActiveView({ query: q })}
+                      view={activeView}
+                      onViewChange={updateActiveView}
                       detailDrawerWidth={layout.rightSidebarWidth}
                     />
                   ) : activeCluster && activeKind === "overview" ? (
@@ -892,6 +980,8 @@ export function App() {
                       initialNamespace={activeTab.namespace ?? ""}
                       onNamespaceChange={(ns) => setTabNamespace(activeTab.id, activeCluster, ns)}
                       kubeconfigFiles={kubeconfigFiles}
+                      view={activeView}
+                      onViewChange={updateActiveView}
                     />
                   ) : activeCluster && activeKind === "newresource" ? (
                     <NewResourceEditor
@@ -913,7 +1003,9 @@ export function App() {
                       context={activeCluster}
                       kind={activeKind}
                       query={query}
-                      onQueryChange={setQuery}
+                      onQueryChange={(q) => updateActiveView({ query: q })}
+                      view={activeView}
+                      onViewChange={updateActiveView}
                       onOpenTerminal={(s) => openDock("terminal", s)}
                       onOpenLogs={(s) => openDock("logs", s)}
                       onOpenEdit={openEditResource}
