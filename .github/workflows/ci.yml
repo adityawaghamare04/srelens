@@ -7,9 +7,15 @@ on:
   pull_request:
     branches: [dev, main]
 
+# Cancel superseded runs on pull requests only. On dev and main every merge is
+# a push to the SAME ref, so cancelling there meant each merge killed the run
+# started by the one before it: the badge read "failing" (GitHub scores a
+# cancelled run as not-success) and, worse, those merge commits were never
+# actually tested — the tree only got a verdict when a merge happened to be the
+# last one for a while.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
