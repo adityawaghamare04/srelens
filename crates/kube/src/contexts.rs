@@ -69,35 +69,44 @@ pub fn list_contexts_capability(
             let default_paths = default_paths.clone();
             let managed_dir = managed_dir.clone();
             async move {
-                if let Some(additional) = input.paths {
-                    let mut paths = default_paths;
-                    for path in additional.into_iter().map(PathBuf::from) {
-                        if !paths.contains(&path) {
-                            paths.push(path);
-                        }
-                    }
-                    // Read HERE, not captured at registry-build time: the
-                    // folder's contents change while the app runs, and a
-                    // startup snapshot would miss anything pasted or dropped
-                    // in afterwards (#256).
-                    if let Some(dir) = &managed_dir {
-                        for managed in crate::connect::kubeconfig_files_in(dir) {
-                            if !paths.contains(&managed) {
-                                paths.push(managed);
+                // A caller that names its own files rebuilds from the static
+                // defaults; one that doesn't keeps whatever is already active,
+                // so an MCP `{}` call never discards paths the desktop set.
+                let mut paths = match input.paths {
+                    Some(additional) => {
+                        let mut paths = default_paths;
+                        for path in additional.into_iter().map(PathBuf::from) {
+                            if !paths.contains(&path) {
+                                paths.push(path);
                             }
                         }
+                        paths
                     }
-                    // `default_paths` is a snapshot taken when the registry was
-                    // built, so a kubeconfig deleted while the app runs would
-                    // otherwise be reintroduced on every call and sit in the
-                    // cache forever — where `load_kubeconfigs` is strict and
-                    // fails the merged-resolution fallback on the missing file.
-                    // Only ABSENT files are dropped: one that exists but is
-                    // malformed still reaches the reader and surfaces its parse
-                    // error, which the caller needs to see.
-                    paths.retain(|path| path.exists());
-                    cache.set_paths(paths).await;
+                    None => cache.paths().await,
+                };
+                // Both branches then reconcile with the disk, so discovery
+                // behaves the same however the capability is invoked.
+                //
+                // Read HERE, not captured at registry-build time: the folder's
+                // contents change while the app runs, and a startup snapshot
+                // would miss anything pasted or dropped in afterwards (#256).
+                if let Some(dir) = &managed_dir {
+                    for managed in crate::connect::kubeconfig_files_in(dir) {
+                        if !paths.contains(&managed) {
+                            paths.push(managed);
+                        }
+                    }
                 }
+                // `default_paths` and the cache seed are both snapshots, so a
+                // kubeconfig deleted while the app runs would otherwise be
+                // reintroduced on every call and sit in the cache forever —
+                // where `load_kubeconfigs` is strict and fails the
+                // merged-resolution fallback on the missing file. Only ABSENT
+                // files are dropped: one that exists but is malformed still
+                // reaches the reader and surfaces its parse error, which the
+                // caller needs to see.
+                paths.retain(|path| path.exists());
+                cache.set_paths(paths).await;
                 // Enumerate every context across all files with duplicate-name
                 // disambiguation, so contexts that share a name (e.g. `default`
                 // across per-cluster kubeconfigs) are all visible and each
@@ -533,6 +542,45 @@ users:
             !active.contains(&pasted),
             "deleted kubeconfig still active: {active:?}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn discovery_self_heals_for_a_caller_that_sends_no_paths() {
+        // An MCP client calls k8s.listContexts with {}. Reconciliation used to
+        // run only when `paths` was present, so such a caller kept whatever
+        // the startup cache seed held — including files since deleted.
+        let dir = std::env::temp_dir().join(format!("srelens-nopaths-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("base.yaml");
+        std::fs::write(&base, "clusters:\n- name: a\n  cluster: { server: https://a }\ncontexts:\n- name: ctx-a\n  context: { cluster: a, user: user-a }\n").unwrap();
+        let managed = dir.join("managed");
+        std::fs::create_dir_all(&managed).unwrap();
+        let seeded = managed.join("seeded.yaml");
+        std::fs::write(&seeded, "clusters:\n- name: b\n  cluster: { server: https://b }\ncontexts:\n- name: ctx-b\n  context: { cluster: b, user: user-b }\n").unwrap();
+
+        // Cache seeded at startup with the managed file, as the desktop does.
+        let cache = ClientCache::new_many(vec![base.clone(), seeded.clone()]);
+        let mut reg = Registry::new();
+        reg.register(list_contexts_capability(
+            cache.clone(),
+            vec![base.clone()],
+            Some(managed.clone()),
+        ));
+
+        // A NEW file appears, and the seeded one is deleted.
+        std::fs::write(managed.join("added.yaml"), "clusters:\n- name: c\n  cluster: { server: https://c }\ncontexts:\n- name: ctx-c\n  context: { cluster: c, user: user-c }\n").unwrap();
+        std::fs::remove_file(&seeded).unwrap();
+
+        // Invoked with NO paths key at all.
+        let out = reg.invoke("k8s.listContexts", json!({})).await.unwrap();
+        let names: Vec<String> = out["contexts"].as_array().unwrap().iter()
+            .map(|c| c["name"].as_str().unwrap().to_string()).collect();
+        assert!(names.iter().any(|n| n == "ctx-c"), "new file not discovered: {names:?}");
+        assert!(!names.iter().any(|n| n == "ctx-b"), "deleted file lingered: {names:?}");
+
+        let active = cache.paths().await;
+        assert!(!active.contains(&seeded), "deleted path still active: {active:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
