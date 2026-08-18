@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ClusterHotbar } from "./components/ClusterHotbar";
@@ -941,6 +941,17 @@ export function App() {
     setActiveDock(null);
   }
 
+  // Contexts the status bar's terminal launcher can open a shell for, in the
+  // hotbar's order so the two lists agree.
+  const terminalContexts = useMemo(
+    () =>
+      orderContexts(contexts ?? [], contextOrder).map((c) => ({
+        name: c.name,
+        label: contextDisplayName(c.name, contextProfiles[c.name]),
+      })),
+    [contexts, contextOrder, contextProfiles],
+  );
+
   const tabDescriptors: TabDescriptor[] = tabs.map((t) => ({
     id: t.id,
     label: t.edit
@@ -1116,42 +1127,50 @@ export function App() {
                     />
                   )}
                 </div>
-                {dockSessions.length > 0 && (
-                  <Dock
-                    sessions={dockSessions}
-                    activeId={activeDock}
-                    height={dockHeight}
-                    onActivate={setActiveDock}
-                    onCloseTab={closeDockTab}
-                    onClose={closeDock}
-                    onResize={setDockHeight}
-                    onNewTerminal={(() => {
-                      // "+" opens another host shell for the active shell's
-                      // context. The host shell is desktop-only — web users get
-                      // in-pod exec terminals, so no "+" there.
-                      if (isWeb) return undefined;
-                      const active = dockSessions.find((s) => s.id === activeDock);
-                      const ctx = active?.kind === "shell" ? active.context : activeCluster;
-                      const files =
-                        active?.kind === "shell" ? active.kubeconfigFiles ?? kubeconfigFiles : kubeconfigFiles;
-                      return ctx
-                        ? () => openDock("shell", { context: ctx, namespace: "", kubeconfigFiles: files })
-                        : undefined;
-                    })()}
-                  />
-                )}
               </>
             )}
           </>
         ) : (
-          <LandingPage
-            onOpenContext={(ctx) => openView(ctx, "overview")}
-            onOpenSettings={openSettings}
-            contextProfiles={contextProfiles}
-            kubeconfigFiles={kubeconfigFiles}
-            contextOrder={contextOrder}
-            contexts={contexts}
-            contextsError={contextsError}
+          // Wrapped so the landing page shrinks when the dock is open: it asks
+          // for `min-height: 100%`, which unwrapped is 100% of the whole main
+          // column and would push the dock off the bottom.
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <LandingPage
+              onOpenContext={(ctx) => openView(ctx, "overview")}
+              onOpenSettings={openSettings}
+              contextProfiles={contextProfiles}
+              kubeconfigFiles={kubeconfigFiles}
+              contextOrder={contextOrder}
+              contexts={contexts}
+              contextsError={contextsError}
+            />
+          </div>
+        )}
+        {/* Outside the tab branch: the status bar can start a shell with no
+            tabs open at all, and a dock that only mounts alongside a tab would
+            swallow that session silently. */}
+        {dockSessions.length > 0 && (
+          <Dock
+            sessions={dockSessions}
+            activeId={activeDock}
+            height={dockHeight}
+            onActivate={setActiveDock}
+            onCloseTab={closeDockTab}
+            onClose={closeDock}
+            onResize={setDockHeight}
+            onNewTerminal={(() => {
+              // "+" opens another host shell for the active shell's context.
+              // The host shell is desktop-only — web users get in-pod exec
+              // terminals, so no "+" there.
+              if (isWeb) return undefined;
+              const active = dockSessions.find((s) => s.id === activeDock);
+              const ctx = active?.kind === "shell" ? active.context : activeCluster;
+              const files =
+                active?.kind === "shell" ? active.kubeconfigFiles ?? kubeconfigFiles : kubeconfigFiles;
+              return ctx
+                ? () => openDock("shell", { context: ctx, namespace: "", kubeconfigFiles: files })
+                : undefined;
+            })()}
           />
         )}
       </div>
@@ -1161,14 +1180,17 @@ export function App() {
           activeTab ? (activeTab.crd ? activeTab.crd.kind : RESOURCE_LABELS[activeKind]) : undefined
         }
         tabCount={tabs.length}
+        // Every configured context, not just the active tab's: a shell for a
+        // second cluster used to need a tab opened for it first, and the
+        // launcher disappeared entirely on tabs with no cluster (#257).
+        terminalContexts={terminalContexts}
         onOpenTerminal={
           // The host shell (`kubectl · <ctx>`) is desktop-only: on the shared
           // web server a container-host shell would break user isolation. Web
           // users reach an RBAC-scoped in-pod exec terminal from a pod instead.
-          activeCluster && !isWeb
-            ? () =>
-                openDock("shell", { context: activeCluster, namespace: "", kubeconfigFiles })
-            : undefined
+          isWeb
+            ? undefined
+            : (context) => openDock("shell", { context, namespace: "", kubeconfigFiles })
         }
       />
       <CommandPalette

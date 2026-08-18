@@ -28,11 +28,85 @@ describe("StatusBar", () => {
 
   it("offers a terminal launcher only when a handler is provided", () => {
     const onOpenTerminal = vi.fn();
-    const { rerender } = render(<StatusBar activeCluster="dev" tabCount={1} />);
+    const contexts = [{ name: "dev", label: "dev" }];
+    const { rerender } = render(
+      <StatusBar activeCluster="dev" tabCount={1} terminalContexts={contexts} />,
+    );
     expect(screen.queryByRole("button", { name: "Open kubectl terminal" })).toBeNull();
 
-    rerender(<StatusBar activeCluster="dev" tabCount={1} onOpenTerminal={onOpenTerminal} />);
+    rerender(
+      <StatusBar
+        activeCluster="dev"
+        tabCount={1}
+        terminalContexts={contexts}
+        onOpenTerminal={onOpenTerminal}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Open kubectl terminal" }));
-    expect(onOpenTerminal).toHaveBeenCalledTimes(1);
+    expect(onOpenTerminal).toHaveBeenCalledWith("dev");
+  });
+
+  it("asks which context when several are configured", async () => {
+    const onOpenTerminal = vi.fn();
+    render(
+      <StatusBar
+        activeCluster="dev"
+        tabCount={1}
+        terminalContexts={[
+          { name: "dev", label: "dev" },
+          { name: "prod", label: "production" },
+        ]}
+        onOpenTerminal={onOpenTerminal}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open kubectl terminal" }));
+    // A shell for a second cluster used to require opening a tab for it first.
+    fireEvent.click(await screen.findByRole("menuitem", { name: "production" }));
+    expect(onOpenTerminal).toHaveBeenCalledWith("prod");
+  });
+
+  it("puts the open context first, wherever it sits in the list", async () => {
+    // With a kubeconfig full of contexts the one you are already in would
+    // otherwise be somewhere down a scrolling menu.
+    render(
+      <StatusBar
+        activeCluster="prod"
+        tabCount={1}
+        terminalContexts={[
+          { name: "dev", label: "dev" },
+          { name: "staging", label: "staging" },
+          { name: "prod", label: "production" },
+        ]}
+        onOpenTerminal={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open kubectl terminal" }));
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["production", "dev", "staging"]);
+  });
+
+  it("still launches a terminal on a tab with no cluster", async () => {
+    // Settings/Toolbox/Assistant tabs have no cluster; the launcher used to
+    // disappear on them entirely, even with clusters configured (#257).
+    const onOpenTerminal = vi.fn();
+    render(
+      <StatusBar
+        activeCluster={null}
+        tabCount={1}
+        terminalContexts={[
+          { name: "dev", label: "dev" },
+          { name: "prod", label: "production" },
+        ]}
+        onOpenTerminal={onOpenTerminal}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open kubectl terminal" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "dev" }));
+    expect(onOpenTerminal).toHaveBeenCalledWith("dev");
+  });
+
+  it("hides the launcher when nothing is configured", () => {
+    render(<StatusBar activeCluster={null} tabCount={0} onOpenTerminal={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Open kubectl terminal" })).toBeNull();
   });
 });
