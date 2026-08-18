@@ -108,7 +108,7 @@ pub fn resolve_from(configs: &[SourceConfig]) -> Vec<ResolvedContext> {
 
             let context = named.context.clone().unwrap_or_default();
             let cluster_name = context.cluster;
-            let user_name = context.user;
+            let user_name = context.user.unwrap_or_default();
             let server = sc
                 .config
                 .clusters

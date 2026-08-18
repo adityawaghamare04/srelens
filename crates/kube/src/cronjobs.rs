@@ -230,7 +230,7 @@ mod tests {
     use super::*;
     use k8s_openapi::api::batch::v1::{CronJobSpec, CronJobStatus};
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-    use k8s_openapi::chrono::Utc;
+    use k8s_openapi::jiff::Timestamp;
     use std::path::PathBuf;
 
     #[test]
@@ -271,7 +271,7 @@ mod tests {
             }),
             status: Some(CronJobStatus {
                 active: Some(vec![Default::default(), Default::default()]),
-                last_schedule_time: Some(Time(Utc::now())),
+                last_schedule_time: Some(Time(Timestamp::now())),
                 ..Default::default()
             }),
         };

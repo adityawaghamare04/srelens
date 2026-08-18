@@ -379,7 +379,7 @@ mod tests {
 
     fn pod_with(phase: Option<&str>, deleted: bool) -> Pod {
         let deletion_timestamp = deleted.then(|| {
-            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(k8s_openapi::chrono::Utc::now())
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(k8s_openapi::jiff::Timestamp::now())
         });
         Pod {
             metadata: kube::core::ObjectMeta {

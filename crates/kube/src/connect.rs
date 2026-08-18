@@ -173,16 +173,17 @@ fn standalone_context_yaml(mut config: Kubeconfig, context: &str) -> Result<Stri
         .context
         .clone()
         .ok_or_else(|| format!("context '{context}' has no cluster/user"))?;
+    let inner_user = inner.user.clone().unwrap_or_default();
     // A split config might not carry this context's cluster/user in this file.
     if !config.clusters.iter().any(|c| c.name == inner.cluster)
-        || !config.auth_infos.iter().any(|a| a.name == inner.user)
+        || !config.auth_infos.iter().any(|a| a.name == inner_user)
     {
         return Err(format!("context '{context}' is missing its cluster or user here"));
     }
 
     config.contexts.retain(|c| c.name == context);
     config.clusters.retain(|c| c.name == inner.cluster);
-    config.auth_infos.retain(|a| a.name == inner.user);
+    config.auth_infos.retain(|a| a.name == inner_user);
     config.current_context = Some(context.to_string());
     if config.kind.is_none() {
         config.kind = Some("Config".to_string());
@@ -284,7 +285,7 @@ fn set_context_bearer(kc: &mut Kubeconfig, in_config_ctx: &str, bearer: &str) {
         .iter()
         .find(|c| c.name == in_config_ctx)
         .and_then(|c| c.context.as_ref())
-        .map(|c| c.user.clone());
+        .map(|c| c.user.clone().unwrap_or_default());
     if let Some(user_name) = user_name {
         for named in kc.auth_infos.iter_mut() {
             if named.name == user_name {
@@ -442,7 +443,7 @@ async fn probe_cluster_from_yaml(yaml: &str, context: &str) -> ClusterInfoOut {
         .iter()
         .find(|c| c.name == context)
         .and_then(|c| c.context.as_ref())
-        .map(|c| c.user.clone());
+        .map(|c| c.user.clone().unwrap_or_default());
     match user_name {
         Some(user_name) => {
             for named in kc.auth_infos.iter_mut() {
