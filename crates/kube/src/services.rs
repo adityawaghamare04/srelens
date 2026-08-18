@@ -26,8 +26,53 @@ pub struct ServiceSummary {
     pub type_: String,
     #[serde(rename = "clusterIP")]
     pub cluster_ip: String,
+    /// The address the service is reachable on from outside the cluster:
+    /// load-balancer ingress, explicit `spec.externalIPs`, or the target of an
+    /// ExternalName. Empty when the service has none; `<pending>` while a
+    /// LoadBalancer waits on its provider.
+    #[serde(rename = "externalIP")]
+    pub external_ip: String,
     pub ports: String,
     pub age: String,
+}
+
+/// The service's external address, following `kubectl get svc`'s EXTERNAL-IP.
+///
+/// A LoadBalancer publishes ingress entries in `status`, each carrying an ip or
+/// a hostname (AWS gives hostnames, most others ips); `spec.externalIPs` is a
+/// separate, manually assigned set that any service type may carry, and both
+/// are shown. An ExternalName has no address of its own — it resolves to the
+/// name it points at, which is what kubectl prints in this column.
+///
+/// A LoadBalancer with nothing yet is `<pending>` rather than empty: waiting on
+/// a cloud provider and having no external address at all are different states,
+/// and the first is the one that resolves itself.
+pub(crate) fn external_ip(svc: &Service) -> String {
+    let spec = svc.spec.as_ref();
+    let type_ = spec.and_then(|s| s.type_.as_deref()).unwrap_or("ClusterIP");
+    if type_ == "ExternalName" {
+        return spec.and_then(|s| s.external_name.clone()).unwrap_or_default();
+    }
+    let mut addresses: Vec<String> = svc
+        .status
+        .as_ref()
+        .and_then(|st| st.load_balancer.as_ref())
+        .and_then(|lb| lb.ingress.as_ref())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|i| i.ip.clone().or_else(|| i.hostname.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    addresses.extend(spec.and_then(|s| s.external_ips.clone()).unwrap_or_default());
+    if !addresses.is_empty() {
+        return addresses.join(", ");
+    }
+    if type_ == "LoadBalancer" {
+        return "<pending>".into();
+    }
+    String::new()
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -36,6 +81,7 @@ pub struct ListServicesOut {
 }
 
 pub(crate) fn summarise(svc: Service) -> ServiceSummary {
+    let external_ip = external_ip(&svc);
     let name = svc.metadata.name.clone().unwrap_or_default();
     let namespace = svc.metadata.namespace.clone().unwrap_or_default();
     let spec = svc.spec.as_ref();
@@ -63,6 +109,7 @@ pub(crate) fn summarise(svc: Service) -> ServiceSummary {
         namespace,
         type_,
         cluster_ip,
+        external_ip,
         ports,
         age: crate::humanize_age(svc.metadata.creation_timestamp.as_ref()),
     }
@@ -97,7 +144,9 @@ pub fn list_services_capability(cache: Arc<ClientCache>) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k8s_openapi::api::core::v1::{ServicePort, ServiceSpec};
+    use k8s_openapi::api::core::v1::{
+        LoadBalancerIngress, LoadBalancerStatus, ServicePort, ServiceSpec, ServiceStatus,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -131,5 +180,124 @@ mod tests {
         assert_eq!(s.type_, "ClusterIP");
         assert_eq!(s.cluster_ip, "10.0.0.1");
         assert_eq!(s.ports, "80/TCP");
+        assert_eq!(s.external_ip, "");
+    }
+
+    fn svc(spec: ServiceSpec, status: Option<ServiceStatus>) -> Service {
+        Service {
+            metadata: kube::core::ObjectMeta {
+                name: Some("api".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            spec: Some(spec),
+            status,
+        }
+    }
+
+    fn lb_status(ingress: Vec<LoadBalancerIngress>) -> ServiceStatus {
+        ServiceStatus {
+            load_balancer: Some(LoadBalancerStatus {
+                ingress: Some(ingress),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reports_a_load_balancer_ip() {
+        let s = summarise(svc(
+            ServiceSpec {
+                type_: Some("LoadBalancer".into()),
+                ..Default::default()
+            },
+            Some(lb_status(vec![LoadBalancerIngress {
+                ip: Some("34.1.2.3".into()),
+                ..Default::default()
+            }])),
+        ));
+        assert_eq!(s.external_ip, "34.1.2.3");
+    }
+
+    #[test]
+    fn reports_a_load_balancer_hostname() {
+        // AWS publishes a hostname instead of an ip; the column is empty
+        // without this even though the service is fully provisioned.
+        let s = summarise(svc(
+            ServiceSpec {
+                type_: Some("LoadBalancer".into()),
+                ..Default::default()
+            },
+            Some(lb_status(vec![LoadBalancerIngress {
+                hostname: Some("a1b2.elb.amazonaws.com".into()),
+                ..Default::default()
+            }])),
+        ));
+        assert_eq!(s.external_ip, "a1b2.elb.amazonaws.com");
+    }
+
+    #[test]
+    fn distinguishes_a_pending_load_balancer_from_having_no_address() {
+        // Waiting on a provider is a state that resolves itself; a ClusterIP
+        // with no external address never will. Both would otherwise be blank.
+        let pending = summarise(svc(
+            ServiceSpec {
+                type_: Some("LoadBalancer".into()),
+                ..Default::default()
+            },
+            None,
+        ));
+        assert_eq!(pending.external_ip, "<pending>");
+        let never = summarise(svc(
+            ServiceSpec {
+                type_: Some("ClusterIP".into()),
+                ..Default::default()
+            },
+            None,
+        ));
+        assert_eq!(never.external_ip, "");
+    }
+
+    #[test]
+    fn joins_manually_assigned_external_ips() {
+        // spec.externalIPs is set by hand and is independent of the type.
+        let s = summarise(svc(
+            ServiceSpec {
+                type_: Some("NodePort".into()),
+                external_ips: Some(vec!["192.0.2.1".into(), "192.0.2.2".into()]),
+                ..Default::default()
+            },
+            None,
+        ));
+        assert_eq!(s.external_ip, "192.0.2.1, 192.0.2.2");
+    }
+
+    #[test]
+    fn shows_both_the_load_balancer_and_the_assigned_addresses() {
+        let s = summarise(svc(
+            ServiceSpec {
+                type_: Some("LoadBalancer".into()),
+                external_ips: Some(vec!["192.0.2.1".into()]),
+                ..Default::default()
+            },
+            Some(lb_status(vec![LoadBalancerIngress {
+                ip: Some("34.1.2.3".into()),
+                ..Default::default()
+            }])),
+        ));
+        assert_eq!(s.external_ip, "34.1.2.3, 192.0.2.1");
+    }
+
+    #[test]
+    fn an_external_name_resolves_to_what_it_points_at() {
+        let s = summarise(svc(
+            ServiceSpec {
+                type_: Some("ExternalName".into()),
+                external_name: Some("db.example.com".into()),
+                ..Default::default()
+            },
+            None,
+        ));
+        assert_eq!(s.external_ip, "db.example.com");
     }
 }
