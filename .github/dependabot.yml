@@ -10,6 +10,20 @@ version: 2
 # per dependency on top of that would bury the updates that actually need a
 # human to look at them.
 updates:
+  # The Dockerfile's base images are pinned by digest, which freezes them at
+  # whatever was current the day they were pinned — including the CVEs. A pin
+  # without something moving it forward is worse than a tag, so the docker
+  # ecosystem is watched here too.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - dependencies
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
