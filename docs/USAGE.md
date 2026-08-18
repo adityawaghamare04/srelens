@@ -308,7 +308,7 @@ each key applies. The ones worth knowing before you look:
 | --- | --- |
 | **Cmd/Ctrl-K** | Command palette |
 | **?** | This list |
-| **Cmd/Ctrl-W** | Close the tab — or the window, on the last one |
+| **Cmd-W** (macOS only) | Close the tab — or the window, on the last one. It comes from the macOS app menu, so there is no Windows/Linux equivalent yet. |
 | **Cmd/Ctrl +** / **-** / **0** | Interface larger / smaller / reset |
 | **Cmd/Ctrl-F** | Search the terminal's scrollback, or find in the YAML editor |
 | **Esc** | Close the open dialog, drawer, or search bar |
