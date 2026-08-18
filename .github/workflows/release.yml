@@ -727,18 +727,129 @@ jobs:
   # Attach detached GPG signatures (.asc) to every release asset so users can
   # verify authenticity (`gpg --verify file.asc file`). Activates automatically
   # once the GPG_PRIVATE_KEY secret is set; otherwise it's a no-op.
+  # Signs the assets attached to THIS release's tag. On a stable release that
+  # includes latest.json, which updater-manifest uploads to the same tag —
+  # hence the dependency below, since both used to run off [version, build] in
+  # parallel and whether the manifest got signed came down to which finished
+  # first. On a dev pre-release the manifest instead goes to the rolling
+  # `dev-channel` release, so it is NOT signed here. That is acceptable because
+  # the manifest is not a trust anchor: it lists each installer's URL and .sig,
+  # and the updater verifies the installer it downloads against the public key
+  # pinned in tauri.conf.json — so tampering with the manifest cannot get a
+  # modified build accepted. (The manifest itself carries no signature of its
+  # own, on either channel.)
+  #
+  # Signing is a publication GATE on stable only: publish-release requires this
+  # job, so a stable release that fails to sign stays an invisible draft. Dev
+  # pre-releases are public the moment they build (releaseDraft is false for
+  # dev), so a failure here turns the run red but the assets are already
+  # downloadable. That is deliberate — the dev-channel manifest points at those
+  # asset URLs, so drafting the release would 404 the updater until a publish
+  # step ran, and gating a daily automated pre-release on GPG infrastructure
+  # trades availability for a guarantee dev users have not asked for. The docs
+  # scope the promise to stable accordingly.
   sign-artifacts:
-    needs: [version, build]
-    if: ${{ always() && needs.build.result == 'success' && (github.ref_name != 'main' || needs.version.outputs.release == 'true') }}
+    needs: [version, build, updater-manifest]
+    if: ${{ always() && needs.build.result == 'success' && needs.updater-manifest.result == 'success' && (github.ref_name != 'main' || needs.version.outputs.release == 'true') }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     env:
       ENABLE_GPG: ${{ secrets.GPG_PRIVATE_KEY != '' }}
     steps:
+      # ENABLE_GPG makes signing opt-in, which is right for dev but fail-OPEN
+      # for stable: a deleted or renamed secret would skip both steps, report
+      # success, and let publish-release ship an unsigned release while the
+      # docs promise otherwise. Stable requires the key.
+      - name: Require a signing key for stable releases
+        if: github.ref_name == 'main' && env.ENABLE_GPG != 'true'
+        run: |
+          echo "GPG_PRIVATE_KEY is not set, so this stable release cannot be signed." >&2
+          echo "Set the secret (docs/DEVELOPMENT.md -> Release signing key) and re-run." >&2
+          exit 1
+      # The fingerprint printed in docs/INSTALL.md is what a user is told to
+      # compare against, so it — not KEYS — is the authoritative statement of
+      # which key is current. KEYS is a cumulative archive holding retired keys
+      # too, so "the key in KEYS" is not a well-defined thing to check against.
+      - uses: actions/checkout@v4
+        if: env.ENABLE_GPG == 'true'
+        with:
+          ref: ${{ github.ref_name == 'main' && 'main' || github.sha }}
       - name: Import GPG key
         if: env.ENABLE_GPG == 'true'
-        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 --decode | gpg --batch --import
+        env:
+          # Through the environment rather than interpolated into the script:
+          # a secret spliced into the command text is one quoting accident away
+          # from being mangled, and it keeps the value out of the shell trace.
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$GPG_PRIVATE_KEY" | base64 --decode | gpg --batch --import
+      # A rotation done in the wrong order — new key published in KEYS, old one
+      # still in GPG_PRIVATE_KEY, or the reverse — otherwise signs happily and
+      # ships .asc files that no user can verify against the documented
+      # fingerprint. The failure is silent at signing time and only surfaces
+      # when someone tries to verify a download, so it is caught here instead.
+      - name: Check the signing key matches what users are told to expect
+        if: env.ENABLE_GPG == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -f KEYS ] || { echo "KEYS is missing — publish the public key first." >&2; exit 1; }
+
+          SIGNING_FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
+          # The install guide lists a fingerprint per key generation so older
+          # releases stay verifiable after a rotation; the row marked **current**
+          # is the one this release must be signed with.
+          # Exactly one row may be marked current. A rotation that adds the new
+          # row but forgets to unmark the old one would otherwise let head -1
+          # pick the retired fingerprint, match a stale secret, and publish
+          # under a key the release range does not point users at.
+          CURRENT_ROWS=$(grep -icE '^\|.*\*\*current\*\*.*\|' docs/INSTALL.md || true)
+          if [ "$CURRENT_ROWS" -ne 1 ]; then
+            echo "docs/INSTALL.md marks $CURRENT_ROWS signing-key rows as **current**;" >&2
+            echo "exactly one must be marked. Fix the fingerprint table." >&2
+            exit 1
+          fi
+          DOC_FPR=$(grep -iE '^\|.*\*\*current\*\*.*\|' docs/INSTALL.md \
+            | grep -oE '[0-9A-F]{8}( +[0-9A-F]{8}){4}' | tr -d ' ')
+
+          if [ -z "$SIGNING_FPR" ] || [ -z "$DOC_FPR" ]; then
+            echo "Could not read a fingerprint (signing='$SIGNING_FPR' docs='$DOC_FPR')." >&2
+            exit 1
+          fi
+
+          # Catches a rotation that updated the secret but not the docs, or the
+          # reverse: users following the guide would reject a good release, or
+          # accept one signed by a key the guide never named.
+          if [ "$SIGNING_FPR" != "$DOC_FPR" ]; then
+            echo "Signing key does not match the fingerprint published to users:" >&2
+            echo "  GPG_PRIVATE_KEY:            $SIGNING_FPR" >&2
+            echo "  docs/INSTALL.md (current):  $DOC_FPR" >&2
+            exit 1
+          fi
+
+          # …and that the key is actually IN the archive users import from —
+          # anywhere in it, since KEYS also carries retired keys — and that
+          # KEYS does not itself say the key is revoked or expired. Presence
+          # alone is not enough: a revocation added to KEYS while the secret
+          # still holds the un-revoked key would sign and publish happily,
+          # while every user importing KEYS gets the revocation warning the
+          # install guide tells them to treat as a failure.
+          # show-only inspects KEYS without importing it into the keyring.
+          VALIDITY=$(gpg --with-colons --import-options show-only --import KEYS \
+            | awk -F: -v want="$SIGNING_FPR" '/^pub:/{v=$2} /^fpr:/{if ($10==want) {print v; exit}}')
+          if [ -z "$VALIDITY" ]; then
+            echo "Signing key $SIGNING_FPR is not published in KEYS," >&2
+            echo "so users could not import the key needed to verify it." >&2
+            exit 1
+          fi
+          case "$VALIDITY" in
+            r) echo "KEYS marks $SIGNING_FPR as REVOKED — rotate before releasing." >&2; exit 1 ;;
+            e) echo "KEYS marks $SIGNING_FPR as EXPIRED — rotate before releasing." >&2; exit 1 ;;
+          esac
+          echo "Signing key $SIGNING_FPR matches the docs, is published in KEYS, and is usable."
       - name: Sign release assets
         if: env.ENABLE_GPG == 'true'
         env:
@@ -749,17 +860,33 @@ jobs:
           set -euo pipefail
           TAG="srelens-v${{ needs.version.outputs.version }}"
           KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
+          if [ -z "$KEYID" ]; then
+            echo "GPG_PRIVATE_KEY is set but no secret key was imported." >&2
+            exit 1
+          fi
+          echo "Signing with key $KEYID"
           mkdir -p _assets && cd _assets
           gh release download "$TAG" --repo "${{ github.repository }}" --clobber
           shopt -s nullglob
+          signed=0
           for f in *; do
-            case "$f" in *.asc) continue ;; esac
+            # Skip our own output, and the minisign updater signatures — those
+            # are verified by the updater's own key, and a .sig.asc is noise on
+            # the release page.
+            case "$f" in *.asc | *.sig) continue ;; esac
             gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
                 --local-user "$KEYID" --armor --detach-sign --output "$f.asc" "$f"
+            signed=$((signed + 1))
           done
-          if ls *.asc >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "${{ github.repository }}" *.asc --clobber
+          # A configured key that signs nothing means the download or the skip
+          # rules are wrong; failing here keeps the release a draft rather than
+          # publishing one that silently claims to be signed.
+          if [ "$signed" -eq 0 ]; then
+            echo "No assets were signed — nothing matched on $TAG." >&2
+            exit 1
           fi
+          echo "Signed $signed asset(s)."
+          gh release upload "$TAG" --repo "${{ github.repository }}" *.asc --clobber
 
   # Stable only (dev never drafts — see releaseDraft above). Flip the draft once
   # the whole pipeline is green: every matrix leg built and passed its asserts,
