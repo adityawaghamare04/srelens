@@ -39,8 +39,8 @@ vi.mock("../lib/clusters", () => ({
   listContexts: () =>
     Promise.resolve({
       contexts: [
-        { name: "prod-eu", cluster: "production", server: "https://prod.example", isCurrent: true },
-        { name: "staging", cluster: "staging", server: "https://staging.example", isCurrent: false },
+        { name: "prod-eu", stableId: "/k/prod-eu.yaml#prod-eu", cluster: "production", server: "https://prod.example", isCurrent: true },
+        { name: "staging", stableId: "/k/staging.yaml#staging", cluster: "staging", server: "https://staging.example", isCurrent: false },
       ],
     }),
 }));
