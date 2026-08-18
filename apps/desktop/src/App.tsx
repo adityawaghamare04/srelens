@@ -57,6 +57,15 @@ import {
 import { applyUiScale, getUiScale, setUiScale, stepUiScale, uiScaleShortcut } from "./lib/uiScale";
 import { dedupeDeepLinkTargets, parseDeepLink, type DeepLinkTarget } from "./lib/deepLink";
 import { applyViewPatch, type TabViewState } from "./lib/tabView";
+import {
+  mergeFromNames,
+  mergeOrderFromNames,
+  migrateOrder,
+  migrateRecordKeys,
+  projectOrderToNames,
+  projectToNames,
+  resolveStoredKey,
+} from "./lib/contextIdentity";
 import { invokeCommand } from "./transport/transport";
 import {
   loadOpenTabs,
@@ -110,9 +119,12 @@ export function App() {
   );
   const [layout, setLayout] = useState(loadWorkspaceLayout);
   const [sidebarWidth, setSidebarWidth] = useState(layout.leftSidebarWidth);
-  const [contextProfiles, setContextProfiles] = useState(loadContextProfiles);
+  // Stored by stable id, rendered by display name (#265). A context's name
+  // changes the moment another kubeconfig declares the same one, so keying
+  // durable state on it loses everything the user configured.
+  const [contextProfilesById, setContextProfilesById] = useState(loadContextProfiles);
   const [kubeconfigFiles, setKubeconfigFiles] = useState(loadKubeconfigFiles);
-  const [contextOrder, setContextOrder] = useState(loadContextOrder);
+  const [contextOrderById, setContextOrderById] = useState(loadContextOrder);
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Bumped after a palette action mutates a resource, so the active
@@ -120,7 +132,7 @@ export function App() {
   // remount-via-key pattern below).
   const [viewReloadNonce, setViewReloadNonce] = useState(0);
   // Last-used namespace per cluster (persisted across restarts).
-  const [clusterNs, setClusterNs] = useState<Record<string, string>>(loadClusterNamespaces);
+  const [clusterNsById, setClusterNsById] = useState<Record<string, string>>(loadClusterNamespaces);
   // Global fallback namespace for clusters with no remembered selection.
   const [defaultNs, setDefaultNs] = useState(getDefaultNamespace);
   // Start the id counter past any restored tab so ids are never reused.
@@ -145,6 +157,51 @@ export function App() {
   // resolution after launch.
   const sessionPruneReported = useRef(false);
 
+  // Durable per-context state lives under stable ids; everything below this
+  // line works in display names, which is what the UI shows (#265).
+  const knownContexts = contexts ?? [];
+  const stableIdOf = (cluster: string) =>
+    knownContexts.find((context) => context.name === cluster)?.stableId;
+  const contextProfiles = projectToNames(contextProfilesById, knownContexts);
+  const contextOrder = projectOrderToNames(contextOrderById, knownContexts);
+  const clusterNs = projectToNames(clusterNsById, knownContexts);
+
+  /** Remember a cluster's namespace against its identity, not its name. */
+  function rememberNamespace(cluster: string, ns: string) {
+    const id = stableIdOf(cluster);
+    if (!id) return;
+    setClusterNsById((current) => {
+      const next = { ...current, [id]: ns };
+      saveClusterNamespaces(next);
+      return next;
+    });
+  }
+
+  // One-time rekey of settings written before stable ids existed (#265).
+  // Runs on the first successful context resolution, when display names still
+  // match what those settings were saved under.
+  const keysMigrated = useRef(false);
+  useEffect(() => {
+    if (keysMigrated.current || !contexts || contexts.length === 0) return;
+    keysMigrated.current = true;
+
+    const profiles = migrateRecordKeys(contextProfilesById, contexts);
+    if (profiles.changed) {
+      setContextProfilesById(profiles.migrated);
+      saveContextProfiles(profiles.migrated);
+    }
+    const namespaces = migrateRecordKeys(clusterNsById, contexts);
+    if (namespaces.changed) {
+      setClusterNsById(namespaces.migrated);
+      saveClusterNamespaces(namespaces.migrated);
+    }
+    const order = migrateOrder(contextOrderById, contexts);
+    if (order.changed) {
+      setContextOrderById(order.migrated);
+      saveContextOrder(order.migrated);
+    }
+  }, [contexts]);
+
   const refreshContexts = () => {
     // Web has no local kubeconfig files to merge in — the server resolves
     // contexts server-side from the caller's uploaded kubeconfigs instead.
@@ -155,6 +212,16 @@ export function App() {
       // Auto close any tabs of clusters/contexts that no longer exist!
       if (o.contexts) {
         const names = o.contexts.map((c) => c.name);
+        // A collision renames an existing context, so a tab pointing at the
+        // old name would otherwise be pruned as "context removed" — closing
+        // the user's tabs because an unrelated kubeconfig was added (#265).
+        setTabs((ts) =>
+          ts.map((t) => {
+            if (!t.cluster || names.includes(t.cluster)) return t;
+            const owner = resolveStoredKey(t.cluster, o.contexts!);
+            return owner ? { ...t, cluster: owner.name } : t;
+          }),
+        );
         // Computed from the ref rather than inside the updater: the active id
         // has to be reconciled alongside, and state updaters must stay free
         // of side effects (React re-invokes them in development).
@@ -358,9 +425,15 @@ export function App() {
       changeContextOrder(nextOrder);
 
       // Clean up namespace preference
-      const nextNs = { ...clusterNs };
-      delete nextNs[name];
-      setClusterNs(nextNs);
+      const removedId = stableIdOf(name);
+      if (removedId) {
+        setClusterNsById((current) => {
+          const next = { ...current };
+          delete next[removedId];
+          saveClusterNamespaces(next);
+          return next;
+        });
+      }
 
       // Close open tabs for this cluster
       setTabs((ts) => ts.filter((t) => t.cluster !== name));
@@ -434,7 +507,7 @@ export function App() {
   /** Update a tab's namespace filter and remember it as the cluster's default. */
   function setTabNamespace(tabId: number, cluster: string, ns: string) {
     setTabs((ts) => ts.map((t) => (t.id === tabId ? { ...t, namespace: ns } : t)));
-    setClusterNs((m) => ({ ...m, [cluster]: ns }));
+    rememberNamespace(cluster, ns);
   }
 
   /** Change the saved default namespace (settings). */
@@ -450,8 +523,11 @@ export function App() {
   }
 
   function changeContextProfiles(next: ContextProfiles) {
-    setContextProfiles(next);
-    saveContextProfiles(next);
+    // Merged, not replaced: the name-keyed view only holds connected
+    // contexts, so replacing would delete every offline cluster's identity.
+    const merged = mergeFromNames(contextProfilesById, next, contexts ?? []);
+    setContextProfilesById(merged);
+    saveContextProfiles(merged);
   }
 
   function changeKubeconfigFiles(next: string[]) {
@@ -460,8 +536,9 @@ export function App() {
   }
 
   function changeContextOrder(next: string[]) {
-    setContextOrder(next);
-    saveContextOrder(next);
+    const merged = mergeOrderFromNames(contextOrderById, next, contexts ?? []);
+    setContextOrderById(merged);
+    saveContextOrder(merged);
   }
 
   useEffect(() => {
@@ -729,7 +806,7 @@ export function App() {
       setTabs((ts) => [...ts, { id, cluster, kind, focus, namespace: ns }]);
       setActiveTabId(id);
     }
-    setClusterNs((m) => ({ ...m, [cluster]: ns }));
+    rememberNamespace(cluster, ns);
   }
 
   /** Open a resource's kind view and deep-link to its detail (from search). */

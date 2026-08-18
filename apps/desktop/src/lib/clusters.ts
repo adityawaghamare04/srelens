@@ -2,6 +2,10 @@ import { invokeCapability, type Invoker } from "../transport/transport";
 
 export interface ClusterContext {
   name: string;
+  /** Identity that survives a rename (#265). The display `name` gains a
+   *  `file/` prefix as soon as another kubeconfig declares the same context
+   *  name, so anything persisted per context must key on this instead. */
+  stableId: string;
   cluster: string;
   server: string;
   isCurrent: boolean;

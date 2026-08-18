@@ -39,6 +39,19 @@ pub struct ResolvedContext {
     pub auth_provider: Option<String>,
 }
 
+impl ResolvedContext {
+    /// An identity that survives a rename.
+    ///
+    /// `display_name` is not identity: it gains a `file/` prefix the moment
+    /// another kubeconfig declares the same context name, so a context the
+    /// user never touched can be renamed by adding an unrelated file — taking
+    /// every per-context setting keyed by that name with it (#265). The
+    /// declaring file plus the name inside that file does not move.
+    pub fn stable_id(&self) -> String {
+        format!("{}#{}", self.source.display(), self.original_name)
+    }
+}
+
 /// A parsed kubeconfig paired with the file it came from.
 pub struct SourceConfig {
     pub source: PathBuf,
@@ -173,6 +186,31 @@ mod tests {
             source: PathBuf::from(source),
             config: Kubeconfig::from_yaml(yaml).unwrap(),
         }
+    }
+
+    #[test]
+    fn stable_id_survives_the_rename_a_new_file_causes() {
+        // The #265 case: a second file declaring the same context name renames
+        // the FIRST one, which is how per-context settings got orphaned.
+        let alone = resolve_from(&[cfg("/k/prod.yaml", PROD)]);
+        assert_eq!(alone[0].display_name, "default", "no clash, no prefix");
+        let id_before = alone[0].stable_id();
+
+        let clashing = resolve_from(&[cfg("/k/prod.yaml", PROD), cfg("/k/stage.yaml", STAGE)]);
+        let prod = clashing
+            .iter()
+            .find(|c| c.source == PathBuf::from("/k/prod.yaml"))
+            .expect("prod context still resolves");
+
+        // The user-facing name changed out from under the user…
+        assert_ne!(prod.display_name, "default", "display name gains a prefix");
+        // …but identity did not, which is what settings must key on.
+        assert_eq!(prod.stable_id(), id_before, "stable id must not move");
+
+        // And the two colliding contexts remain distinguishable.
+        let ids: Vec<String> = clashing.iter().map(|c| c.stable_id()).collect();
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1], "each file's context has its own identity");
     }
 
     const PROD: &str = "apiVersion: v1\nkind: Config\ncurrent-context: default\nclusters:\n  - name: c\n    cluster: { server: https://prod:6443 }\nusers:\n  - name: u\n    user: {}\ncontexts:\n  - name: default\n    context: { cluster: c, user: u }\n";

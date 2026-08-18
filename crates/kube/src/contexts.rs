@@ -22,6 +22,12 @@ pub struct ListContextsIn {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ContextDto {
     pub name: String,
+    /// Identity that survives a rename: the declaring file plus the context's
+    /// name within it. `name` is presentation only — it gains a `file/` prefix
+    /// as soon as another kubeconfig declares the same context name, so
+    /// anything the app remembers per context must key on this instead (#265).
+    #[serde(rename = "stableId")]
+    pub stable_id: String,
     pub cluster: String,
     pub server: String,
     /// The context's default namespace from the kubeconfig
@@ -135,6 +141,7 @@ pub fn list_contexts_capability(
                     );
                     ContextDto {
                         is_current: rc.is_current,
+                        stable_id: rc.stable_id(),
                         name: rc.display_name,
                         cluster: rc.cluster,
                         server: rc.server,
