@@ -829,7 +829,16 @@ export function App() {
   function openNewResource(initialKind?: string) {
     if (!activeCluster) return;
     const id = tabIdRef.current++;
-    setTabs((ts) => [...ts, { id, cluster: activeCluster, kind: "newresource", create: { initialKind } }]);
+    setTabs((ts) => [
+      ...ts,
+      {
+        id,
+        cluster: activeCluster,
+        clusterId: activeCluster ? stableIdOf(activeCluster) : undefined,
+        kind: "newresource",
+        create: { initialKind },
+      },
+    ]);
     setActiveTabId(id);
   }
 
@@ -849,7 +858,16 @@ export function App() {
       return;
     }
     const id = tabIdRef.current++;
-    setTabs((ts) => [...ts, { id, cluster: activeCluster, kind: "editresource", edit: { kind, namespace, name } }]);
+    setTabs((ts) => [
+      ...ts,
+      {
+        id,
+        cluster: activeCluster,
+        clusterId: activeCluster ? stableIdOf(activeCluster) : undefined,
+        kind: "editresource",
+        edit: { kind, namespace, name },
+      },
+    ]);
     setActiveTabId(id);
   }
 
