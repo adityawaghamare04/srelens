@@ -68,9 +68,14 @@ look.
 **Kubeconfig sources.** Your default kubeconfig / `KUBECONFIG` is loaded first;
 additional files merge in order. Use **Add files** to pick more kubeconfig files,
 or **Paste** to paste raw YAML (with an optional name) — pasted configs are saved
-into the srelens application directory. Each added file appears as a chip you can
-remove. srelens watches these files and refreshes automatically when they change
-on disk.
+into srelens's own `kubeconfigs` folder in the application directory. Each added
+file appears as a chip you can remove.
+
+srelens watches all of these and refreshes automatically — both when a file
+changes on disk and when one is **created or deleted**. That includes its own
+`kubeconfigs` folder, so a config you drop in there by hand is picked up without
+restarting, and one you delete disappears the same way. Only the app's folder is
+scanned like this; files you add from elsewhere are tracked individually.
 
 **Context identity.** Select a context to give it a recognisable identity without
 touching your kubeconfig:

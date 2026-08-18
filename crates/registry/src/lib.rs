@@ -31,18 +31,28 @@ pub fn capability_catalog() -> Vec<CatalogEntry> {
     catalog_of(&build_registry())
 }
 
-/// Resolve kubeconfig paths: every `$KUBECONFIG` entry, else `$HOME/.kube/config`.
+pub use srelens_kube::connect::{default_kubeconfig_dir, managed_kubeconfig_files};
+
+/// Resolve kubeconfig paths: every `$KUBECONFIG` entry, else `$HOME/.kube/config`,
+/// plus anything in the app's own kubeconfig folder.
 pub fn default_kubeconfig_paths() -> Vec<PathBuf> {
-    if let Some(value) = std::env::var_os("KUBECONFIG") {
-        let paths = std::env::split_paths(&value)
+    let mut paths = if let Some(value) = std::env::var_os("KUBECONFIG") {
+        std::env::split_paths(&value)
             .filter(|path| !path.as_os_str().is_empty())
-            .collect::<Vec<_>>();
-        if !paths.is_empty() {
-            return paths;
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    if paths.is_empty() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        paths.push(PathBuf::from(home).join(".kube").join("config"));
+    }
+    for managed in srelens_kube::connect::managed_kubeconfig_files() {
+        if !paths.contains(&managed) {
+            paths.push(managed);
         }
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    vec![PathBuf::from(home).join(".kube").join("config")]
+    paths
 }
 
 #[cfg(test)]
@@ -172,6 +182,7 @@ pub fn build_registry_with_paths_and_settings(
     reg.register(srelens_kube::contexts::list_contexts_capability(
         cache.clone(),
         kubeconfig_paths.clone(),
+        srelens_kube::connect::default_kubeconfig_dir(),
     ));
     reg.register(srelens_kube::contexts::delete_context_capability(
         cache.clone(),
