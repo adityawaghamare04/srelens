@@ -401,6 +401,10 @@ pub(crate) fn handle_subscription(
     wake: &tokio::sync::mpsc::Sender<()>,
     req: &Value,
     method: &str,
+    // Both transports route subscriptions through here, so the caller's own
+    // transport has to travel with them: an audit record naming the wrong
+    // one misattributes the action, which is the whole point of the log.
+    transport: crate::Transport,
 ) -> Option<Value> {
     let id = req.get("id").cloned()?;
     let uri_str = req
@@ -413,7 +417,7 @@ pub(crate) fn handle_subscription(
         Ok(u) => u,
         Err(message) => {
             server.audit().record(crate::audit::AuditRecord {
-                transport: crate::Transport::Stdio,
+                transport,
                 tool: method.to_string(),
                 args: crate::audit::redact(&json!({"uri": uri_str}), false),
                 decision: "auto",
@@ -429,7 +433,7 @@ pub(crate) fn handle_subscription(
     if method == "resources/unsubscribe" {
         subs.remove(&canonical);
         server.audit().record(crate::audit::AuditRecord {
-            transport: crate::Transport::Stdio,
+            transport,
             tool: method.to_string(),
             args: crate::audit::redact(&json!({"uri": uri_str}), false),
             decision: "auto",
@@ -441,7 +445,7 @@ pub(crate) fn handle_subscription(
 
     if let Err(message) = crate::resources::is_subscribable(&uri) {
         server.audit().record(crate::audit::AuditRecord {
-            transport: crate::Transport::Stdio,
+            transport,
             tool: method.to_string(),
             args: crate::audit::redact(&json!({"uri": uri_str}), false),
             decision: "auto",
@@ -460,7 +464,7 @@ pub(crate) fn handle_subscription(
     // eventual read agree on what's addressable.
     if let Err(message) = crate::resources::plan_read(&uri, server.kind_resolver().as_ref()) {
         server.audit().record(crate::audit::AuditRecord {
-            transport: crate::Transport::Stdio,
+            transport,
             tool: method.to_string(),
             args: crate::audit::redact(&json!({"uri": uri_str}), false),
             decision: "auto",
@@ -538,7 +542,7 @@ pub(crate) fn handle_subscription(
         Ok(h) => h,
         Err(message) => {
             server.audit().record(crate::audit::AuditRecord {
-                transport: crate::Transport::Stdio,
+                transport,
                 tool: method.to_string(),
                 args: crate::audit::redact(&json!({"uri": uri_str}), false),
                 decision: "auto",
@@ -558,7 +562,7 @@ pub(crate) fn handle_subscription(
         handle.abort();
         let message = format!("the watch ended immediately: {reason}");
         server.audit().record(crate::audit::AuditRecord {
-            transport: crate::Transport::Stdio,
+            transport,
             tool: method.to_string(),
             args: crate::audit::redact(&json!({"uri": uri_str}), false),
             decision: "auto",
@@ -571,7 +575,7 @@ pub(crate) fn handle_subscription(
         Ok(generation) => generation,
         Err(message) => {
             server.audit().record(crate::audit::AuditRecord {
-                transport: crate::Transport::Stdio,
+                transport,
                 tool: method.to_string(),
                 args: crate::audit::redact(&json!({"uri": uri_str}), false),
                 decision: "auto",
@@ -593,7 +597,7 @@ pub(crate) fn handle_subscription(
         subs.remove_if(&canonical, generation);
         let message = format!("the watch ended immediately: {reason}");
         server.audit().record(crate::audit::AuditRecord {
-            transport: crate::Transport::Stdio,
+            transport,
             tool: method.to_string(),
             args: crate::audit::redact(&json!({"uri": uri_str}), false),
             decision: "auto",
@@ -603,7 +607,7 @@ pub(crate) fn handle_subscription(
         return Some(err(id, -32603, &message));
     }
     server.audit().record(crate::audit::AuditRecord {
-        transport: crate::Transport::Stdio,
+        transport,
         tool: method.to_string(),
         args: crate::audit::redact(&json!({"uri": uri_str}), false),
         decision: "auto",
@@ -700,7 +704,7 @@ where
                 // HTTP transport, which has no channel to push notifications and
                 // must keep answering -32601.
                 let resp = if method == "resources/subscribe" || method == "resources/unsubscribe" {
-                    handle_subscription(server, subs, dirty, wake_tx, &req, method)
+                    handle_subscription(server, subs, dirty, wake_tx, &req, method, crate::Transport::Stdio)
                 } else {
                     handle_request(server, &req, crate::Transport::Stdio).await
                 };
@@ -1895,7 +1899,7 @@ mod tests {
         let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         let message = resp["error"]["message"].as_str().unwrap_or_default();
         assert!(message.contains("ended immediately"), "got: {resp}");
@@ -1942,7 +1946,7 @@ mod tests {
         let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(resp.get("error").is_none(), "the live subscribe succeeds: {resp}");
 
@@ -1997,13 +2001,13 @@ mod tests {
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
 
         let first =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(first.get("error").is_none(), "the first subscribe succeeds: {first}");
 
         // The re-subscribe's replacement watch is stillborn.
         let second =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(
             second["error"]["message"].as_str().unwrap_or_default().contains("ended immediately"),
@@ -2056,7 +2060,7 @@ mod tests {
         // Subscribe twice: the second replaces the first in the registry.
         for _ in 0..2 {
             let resp =
-                handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+                handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                     .unwrap();
             assert!(resp.get("error").is_none(), "subscribe succeeds: {resp}");
         }
@@ -2363,7 +2367,7 @@ mod tests {
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
 
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(resp.get("error").is_none(), "the subscribe succeeds: {resp}");
 
@@ -2391,7 +2395,7 @@ mod tests {
             "params":{"uri":"k8s://catalog"}});
 
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert_eq!(resp["error"]["code"], -32602, "got {resp}");
 
@@ -2418,7 +2422,7 @@ mod tests {
             "params":{"uri":"k8s://c/ns/Secret/shared"}});
 
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert_eq!(resp["error"]["code"], -32602, "got {resp}");
 
@@ -2467,7 +2471,7 @@ mod tests {
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
 
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert_eq!(resp["error"]["code"], -32602, "got {resp}");
 
@@ -2495,7 +2499,7 @@ mod tests {
             "params":{"uri":"k8s://c/ns/Pod/one-too-many"}});
 
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert_eq!(resp["error"]["code"], -32602, "got {resp}");
 
@@ -2517,7 +2521,7 @@ mod tests {
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
 
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/unsubscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/unsubscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(resp.get("error").is_none(), "unsubscribe succeeds: {resp}");
 
