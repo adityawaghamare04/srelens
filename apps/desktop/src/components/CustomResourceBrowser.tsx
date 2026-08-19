@@ -80,6 +80,15 @@ export function CustomResourceBrowser({
           },
         ]
       : []),
+    // Whatever the CRD asks to have shown, between the identity columns and
+    // Age — the order kubectl uses. `columns` is positional, so index by the
+    // CRD's declaration order rather than by name (headings need not be unique).
+    ...(crd.printerColumns ?? []).map((column, index) => ({
+      key: `printer:${index}`,
+      header: column.name,
+      getValue: (r: CustomRow) => r.columns?.[index] ?? "",
+      render: (r: CustomRow) => <span>{r.columns?.[index] ?? ""}</span>,
+    })),
     { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => <span className="text-muted-foreground">{r.age}</span> },
   ];
 

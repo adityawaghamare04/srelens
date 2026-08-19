@@ -44,6 +44,35 @@ describe("CustomResourceBrowser", () => {
     expect(screen.getByText("Widget")).toBeDefined();
   });
 
+  it("renders the columns the CRD asks for, between the name and Age (#267)", async () => {
+    const withColumns = {
+      ...crd,
+      printerColumns: [
+        { name: "Health", jsonPath: ".status.health", type: "string" },
+        { name: "Nodes", jsonPath: ".spec.nodes", type: "integer" },
+      ],
+    };
+    listCustomResourceMock.mockResolvedValue({
+      items: [{ name: "demo-widget", namespace: "default", age: "1m", columns: ["GREEN", "3"] }],
+    });
+    render(<CustomResourceBrowser context="kind-dev" crd={withColumns} />);
+    await waitFor(() => expect(screen.getByText("demo-widget")).toBeDefined());
+    // Headings from the CRD, and the resolved values on the row.
+    expect(screen.getByText("Health")).toBeDefined();
+    expect(screen.getByText("Nodes")).toBeDefined();
+    expect(screen.getByText("GREEN")).toBeDefined();
+    expect(screen.getByText("3")).toBeDefined();
+  });
+
+  it("still lists a CRD that declares no printer columns (#267)", async () => {
+    listCustomResourceMock.mockResolvedValue({
+      items: [{ name: "demo-widget", namespace: "default", age: "1m" }],
+    });
+    render(<CustomResourceBrowser context="kind-dev" crd={crd} />);
+    await waitFor(() => expect(screen.getByText("demo-widget")).toBeDefined());
+    expect(screen.getByText("Age")).toBeDefined();
+  });
+
   it("shows an error when listing fails", async () => {
     listCustomResourceMock.mockResolvedValue({ error: "the server could not find the requested resource" });
     render(<CustomResourceBrowser context="kind-dev" crd={crd} />);
