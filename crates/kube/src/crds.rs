@@ -204,14 +204,25 @@ fn unquote(text: &str) -> &str {
     text.trim_matches(|c| c == '\'' || c == '"')
 }
 
-/// Put a DynamicObject back together as one JSON value. `kube` splits typed
-/// metadata out of `data`, but printer columns address the whole resource, so
-/// `.metadata.labels[...]` has to resolve like any other path.
+/// Put a DynamicObject back together as one JSON value.
+///
+/// `kube` splits an object across three places -- `types` (apiVersion, kind),
+/// typed `metadata`, and everything else in `data` -- but a printer column
+/// addresses the resource as the API serves it, so all three have to be
+/// reunited or paths like `.metadata.labels[...]` and `.kind` resolve empty.
 fn whole_object(object: &DynamicObject) -> serde_json::Value {
     let mut value = object.data.clone();
-    if let (Some(map), Ok(metadata)) = (value.as_object_mut(), serde_json::to_value(&object.metadata))
-    {
+    let Some(map) = value.as_object_mut() else {
+        return value;
+    };
+    if let Ok(metadata) = serde_json::to_value(&object.metadata) {
         map.insert("metadata".to_string(), metadata);
+    }
+    // TypeMeta serializes flat, as apiVersion + kind beside the other fields.
+    if let Some(types) = object.types.as_ref() {
+        if let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(types) {
+            map.extend(fields);
+        }
     }
     value
 }
@@ -631,6 +642,25 @@ mod tests {
         let rendered: Vec<String> =
             columns.iter().map(|c| render_column(&release, c)).collect();
         assert_eq!(rendered, vec!["True", "Release reconciliation succeeded"]);
+    }
+
+    #[test]
+    fn type_paths_resolve_even_though_kube_splits_them_out_too() {
+        // kube keeps apiVersion/kind in `types`, separate from both `data` and
+        // `metadata`, so a column addressing them needs all three put back.
+        let object: DynamicObject = serde_json::from_value(serde_json::json!({
+            "apiVersion": "db.example.com/v1",
+            "kind": "Cluster",
+            "metadata": {"name": "c1"},
+            "spec": {"version": "4.1.2"},
+        }))
+        .expect("dynamic object");
+        let whole = whole_object(&object);
+        assert_eq!(resolve_json_path(&whole, ".kind"), "Cluster");
+        assert_eq!(resolve_json_path(&whole, ".apiVersion"), "db.example.com/v1");
+        // The other two sources still resolve.
+        assert_eq!(resolve_json_path(&whole, ".metadata.name"), "c1");
+        assert_eq!(resolve_json_path(&whole, ".spec.version"), "4.1.2");
     }
 
     #[test]
