@@ -42,6 +42,93 @@ describe("Table virtualization", () => {
     expect(screen.getByText("row-0")).toBeDefined();
     expect(screen.queryByText("row-900")).toBeNull(); // far off-screen, not rendered
   });
+
+  /** Simulate real layout: 20px rows, and header cells with natural widths. */
+  function mockLayout(headWidth = 140) {
+    vi.spyOn(HTMLTableRowElement.prototype, "getBoundingClientRect").mockReturnValue({
+      height: 20,
+    } as DOMRect);
+    vi.spyOn(HTMLTableCellElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: headWidth,
+    } as DOMRect);
+  }
+
+  function renderScrollable(data: { name: string; phase: string }[]) {
+    const utils = render(
+      <div data-testid="scroll" style={{ overflowY: "auto" }}>
+        <Table columns={bigColumns} data={data} getRowKey={(r) => r.name} />
+      </div>,
+    );
+    const sp = screen.getByTestId("scroll");
+    Object.defineProperty(sp, "clientHeight", { value: 200, configurable: true });
+    Object.defineProperty(sp, "scrollTop", { value: 0, writable: true, configurable: true });
+    fireEvent.scroll(sp);
+    return { ...utils, sp };
+  }
+
+  const colWidths = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("colgroup col")).map(
+      (col) => (col as HTMLTableColElement).style.width,
+    );
+
+  it("pins column widths once a long list virtualizes (#298)", () => {
+    mockLayout();
+    const { container } = renderScrollable(bigData);
+    // Without pinned widths the browser re-derives them from whichever rows are
+    // currently rendered, so the columns shift on every scroll.
+    expect(colWidths(container).every((w) => w !== "")).toBe(true);
+    expect(container.querySelector("table")?.className).toContain("fl-data-table--resized");
+  });
+
+  it("keeps those widths identical across scrolls (#298)", () => {
+    mockLayout();
+    const { container, sp } = renderScrollable(bigData);
+    const before = colWidths(container);
+    expect(before.every((w) => w !== "")).toBe(true); // guard: not vacuously equal
+    Object.defineProperty(sp, "scrollTop", { value: 4000, writable: true, configurable: true });
+    fireEvent.scroll(sp);
+    expect(screen.queryByText("row-0")).toBeNull(); // the rendered window really moved
+    expect(colWidths(container)).toEqual(before);
+  });
+
+  it("pins short lists too, so every table behaves the same way (#298)", () => {
+    // CRDs, Services and most lists sit under the virtualization threshold.
+    // They must not size differently from the long ones.
+    mockLayout();
+    const { container } = renderScrollable(bigData.slice(0, 10));
+    expect(colWidths(container).every((w) => w !== "")).toBe(true);
+    expect(container.querySelector("table")?.className).toContain("fl-data-table--resized");
+  });
+
+  it("keeps widths pinned when filtering drops a list below the threshold (#298)", () => {
+    // Narrowing a virtualized list past the threshold must not hand it back to
+    // automatic layout, or the columns snap as the user types.
+    mockLayout();
+    const { container, rerender } = render(
+      <div data-testid="scroll" style={{ overflowY: "auto" }}>
+        <Table columns={bigColumns} data={bigData} getRowKey={(r) => r.name} />
+      </div>,
+    );
+    const sp = screen.getByTestId("scroll");
+    Object.defineProperty(sp, "clientHeight", { value: 200, configurable: true });
+    Object.defineProperty(sp, "scrollTop", { value: 0, writable: true, configurable: true });
+    fireEvent.scroll(sp);
+    const before = colWidths(container);
+    expect(before.every((w) => w !== "")).toBe(true);
+
+    rerender(
+      <div data-testid="scroll" style={{ overflowY: "auto" }}>
+        <Table columns={bigColumns} data={bigData.slice(0, 5)} getRowKey={(r) => r.name} />
+      </div>,
+    );
+    expect(colWidths(container)).toEqual(before);
+  });
+
+  it("does not pin an empty table, so widths are measured from real rows", () => {
+    mockLayout();
+    const { container } = renderScrollable([]);
+    expect(container.querySelector("colgroup")).toBeNull(); // empty state, no table
+  });
 });
 
 describe("computeVisibleRange", () => {
@@ -219,8 +306,11 @@ describe("Table", () => {
 
     fireEvent.keyDown(handle, { key: "ArrowRight" });
     expect(header?.closest("table")?.style.width).toBe("256px");
+    // Reset drops the user's widths and the table re-measures its natural ones
+    // (2 columns x the 120px jsdom fallback) rather than falling back to
+    // automatic layout, which no table uses any more.
     fireEvent.doubleClick(handle);
-    expect(header?.closest("table")?.style.width).toBe("");
+    expect(header?.closest("table")?.style.width).toBe("240px");
   });
 });
 

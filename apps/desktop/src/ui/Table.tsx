@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Filter } from "lucide-react";
 import {
   Table as ShadTable,
@@ -58,6 +58,9 @@ export interface TableProps<T> {
   sort?: TableSort | null;
   onSortChange?: (sort: TableSort | null) => void;
 }
+
+/** Width of the leading bulk-selection column; mirrored in styles.css. */
+const CHECKBOX_COLUMN_WIDTH = 36;
 
 function getColumnValue<T>(row: T, column: Column<T>): unknown {
   return column.getValue ? column.getValue(row) : (row as Record<string, unknown>)[column.key];
@@ -132,6 +135,11 @@ export function Table<T>({
   // Anchor for shift-click range selection (a key in sorted/visible order).
   const selectionAnchor = useRef<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  // Whether `columnWidths` was measured for the user (#298) rather than chosen
+  // by them. Auto-sized widths re-measure when the table is resized; widths the
+  // user dragged are theirs to keep.
+  const autoSized = useRef(false);
+  const containerWidth = useRef(0);
   const columnSignature = columns.map((column) => column.key).join("|");
   const rootRef = useRef<HTMLDivElement>(null);
   const [metrics, setMetrics] = useState({ scrollTop: 0, viewportHeight: 0, rowHeight: 0 });
@@ -194,14 +202,12 @@ export function Table<T>({
     else setInternalSort(next);
   };
 
-  const startColumnResize = (event: React.PointerEvent<HTMLDivElement>, column: Column<T>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const table = event.currentTarget.closest("table");
+  /** Current on-screen width of every column, for pinning into `columnWidths`. */
+  const measureColumns = (table: Element | null | undefined): Record<string, number> => {
     const headers = table?.querySelectorAll<HTMLTableCellElement>("thead tr:first-child th");
     // The checkbox column (when present) is th[0], so data columns are offset.
     const headOffset = selection ? 1 : 0;
-    const measured = Object.fromEntries(
+    return Object.fromEntries(
       columns.map((candidate, index) => [
         candidate.key,
         Math.round(
@@ -211,6 +217,13 @@ export function Table<T>({
         ),
       ]),
     );
+  };
+
+  const startColumnResize = (event: React.PointerEvent<HTMLDivElement>, column: Column<T>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const measured = measureColumns(event.currentTarget.closest("table"));
+    autoSized.current = false;
     const startWidth = measured[column.key];
     const startX = event.clientX;
     setColumnWidths(measured);
@@ -238,20 +251,8 @@ export function Table<T>({
   ) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
-    const table = event.currentTarget.closest("table");
-    const headers = table?.querySelectorAll<HTMLTableCellElement>("thead tr:first-child th");
-    // The checkbox column (when present) is th[0], so data columns are offset.
-    const headOffset = selection ? 1 : 0;
-    const measured = Object.fromEntries(
-      columns.map((candidate, index) => [
-        candidate.key,
-        Math.round(
-          headers?.[index + headOffset]?.getBoundingClientRect().width ||
-            columnWidths[candidate.key] ||
-            120,
-        ),
-      ]),
-    );
+    const measured = measureColumns(event.currentTarget.closest("table"));
+    autoSized.current = false;
     const delta = event.key === "ArrowRight" ? 16 : -16;
     setColumnWidths((current) => {
       const baseline = Object.keys(current).length ? current : measured;
@@ -262,8 +263,13 @@ export function Table<T>({
     });
   };
 
+  // The checkbox column is fixed-width and never resizable, but it still takes
+  // up space: leaving it out made the declared table width narrower than the
+  // colgroup asks for, so fixed layout had to steal the difference back from
+  // the data columns.
   const tableWidth = Object.keys(columnWidths).length
-    ? Object.values(columnWidths).reduce((total, width) => total + width, 0)
+    ? Object.values(columnWidths).reduce((total, width) => total + width, 0) +
+      (selection ? CHECKBOX_COLUMN_WIDTH : 0)
     : undefined;
 
   // Virtualize long lists: render only the rows near the viewport plus spacer
@@ -315,7 +321,50 @@ export function Table<T>({
   const topPad = virtualize ? range.start * metrics.rowHeight : 0;
   const bottomPad = virtualize ? (visibleData.length - range.end) * metrics.rowHeight : 0;
 
-  if (data.length === 0) {
+  const isEmpty = data.length === 0;
+
+  // Pin the natural column widths once the table has rows to measure.
+  //
+  // Automatic table layout sizes columns from the rows *currently rendered*.
+  // Virtualization swaps that set on every scroll, so a long list's columns
+  // visibly shifted as the user scrolled (#298). Measuring in a layout effect
+  // keeps it off-screen: the widths are read and applied before paint.
+  //
+  // This deliberately applies to every table, not just the ones long enough to
+  // virtualize. Pinning only above the threshold made short lists -- CRDs,
+  // Services, most views -- size by a different rule from long ones, and left a
+  // list that was filtered down past the threshold stranded with widths it
+  // could neither keep consistently nor recompute. Sizing every table the same
+  // way is both uniform and simpler.
+  useLayoutEffect(() => {
+    if (isEmpty || Object.keys(columnWidths).length > 0) return;
+    const table = rootRef.current?.querySelector("table");
+    // Nothing to measure until a real row exists: a table showing only the
+    // "no matching items" placeholder would freeze the placeholder's widths.
+    if (!table?.querySelector("tbody tr.fl-data-table__row")) return;
+    setColumnWidths(measureColumns(table));
+    autoSized.current = true;
+    // measureColumns reads `columns`/`selection`, which `columnSignature` tracks.
+  }, [isEmpty, visibleData.length, columnWidths, columnSignature]);
+
+  // Pinned widths would otherwise survive a window resize, so an auto-sized
+  // table would stop tracking the space available to it. Drop the measurement
+  // when the container's width changes and the effect above re-takes it at the
+  // new size. Widths the user dragged are left alone.
+  useEffect(() => {
+    if (isEmpty) return;
+    const container = rootRef.current?.querySelector<HTMLElement>('[data-slot="table-container"]');
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (container.clientWidth === containerWidth.current) return;
+      containerWidth.current = container.clientWidth;
+      if (autoSized.current) setColumnWidths({});
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [isEmpty]);
+
+  if (isEmpty) {
     return <EmptyState title={emptyText} description={emptyHint} />;
   }
   return (
@@ -329,7 +378,7 @@ export function Table<T>({
       style={tableWidth ? { width: tableWidth, minWidth: "100%" } : undefined}
     >
       <colgroup>
-        {selection && <col style={{ width: 36 }} />}
+        {selection && <col style={{ width: CHECKBOX_COLUMN_WIDTH }} />}
         {columns.map((column) => (
           <col
             key={column.key}
