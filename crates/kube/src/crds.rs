@@ -216,6 +216,15 @@ fn whole_object(object: &DynamicObject) -> serde_json::Value {
     value
 }
 
+/// The raw value behind a cell, where rendering it would lose ordering.
+fn column_sort_key(object: &serde_json::Value, column: &PrinterColumn) -> String {
+    if column.column_type == "date" {
+        resolve_json_path(object, &column.json_path)
+    } else {
+        String::new()
+    }
+}
+
 /// Render one cell, humanizing `type: date` columns the way ages are shown
 /// elsewhere so a raw RFC 3339 timestamp never reaches the table.
 fn render_column(object: &serde_json::Value, column: &PrinterColumn) -> String {
@@ -306,6 +315,10 @@ pub struct CustomRow {
     /// Values for the requested printer columns, in the order they were asked
     /// for. Empty when none were requested.
     pub columns: Vec<String>,
+    /// Unrendered values for the columns whose display text loses ordering
+    /// information -- `type: date`, where timestamps 65 and 115 minutes old both
+    /// render "1h" and would otherwise tie. Empty where the text sorts fine.
+    pub sort_keys: Vec<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -354,17 +367,21 @@ pub fn list_custom_resource_capability(cache: Arc<ClientCache>) -> Capability {
                     .items
                     .into_iter()
                     .map(|o| {
-                        let values = if columns.is_empty() {
-                            Vec::new()
+                        let (values, sort_keys) = if columns.is_empty() {
+                            (Vec::new(), Vec::new())
                         } else {
                             let object = whole_object(&o);
-                            columns.iter().map(|c| render_column(&object, c)).collect()
+                            columns
+                                .iter()
+                                .map(|c| (render_column(&object, c), column_sort_key(&object, c)))
+                                .unzip()
                         };
                         CustomRow {
                             name: o.metadata.name.clone().unwrap_or_default(),
                             namespace: o.metadata.namespace.clone().unwrap_or_default(),
                             age: crate::humanize_age(o.metadata.creation_timestamp.as_ref()),
                             columns: values,
+                            sort_keys,
                         }
                     })
                     .collect();
@@ -530,6 +547,28 @@ mod tests {
         // Compact age (e.g. "6y"), never the raw RFC 3339 string.
         assert!(!rendered.contains("2020-01-01"), "got {rendered}");
         assert!(rendered.ends_with('y'), "got {rendered}");
+    }
+
+    #[test]
+    fn date_columns_carry_the_raw_timestamp_for_sorting() {
+        let object = serde_json::json!({
+            "status": {"since": "2020-01-01T00:00:00Z", "health": "GREEN"}
+        });
+        let date = PrinterColumn {
+            name: "Since".into(),
+            json_path: ".status.since".into(),
+            column_type: "date".into(),
+        };
+        let text = PrinterColumn {
+            name: "Health".into(),
+            json_path: ".status.health".into(),
+            column_type: "string".into(),
+        };
+        // Two timestamps inside the same displayed unit render alike, so the
+        // raw value has to travel alongside for the table to order them.
+        assert_eq!(column_sort_key(&object, &date), "2020-01-01T00:00:00Z");
+        // Text columns already sort by what is shown; no second value needed.
+        assert_eq!(column_sort_key(&object, &text), "");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { printerColumnKeys, printerSortValue } from "./crds";
+import { ageSeconds } from "./age";
 
 const col = (name: string, jsonPath: string, type = "string") => ({ name, jsonPath, type });
 
@@ -39,6 +40,27 @@ describe("printerSortValue", () => {
     // "10d" vs "2h": text collation puts 10d first by leading digit.
     expect(printerSortValue("date", "2h")).toBeLessThan(printerSortValue("date", "10d") as number);
     expect(printerSortValue("date", "300d")).toBeLessThan(printerSortValue("date", "1y") as number);
+  });
+
+  it("separates dates that render as the same age (#267 review)", () => {
+    // 65 and 115 minutes old both display "1h"; only the raw value can order them.
+    const now = Date.parse("2026-01-01T12:00:00Z");
+    const older = printerSortValue("date", "1h", "2026-01-01T10:05:00Z", now) as number;
+    const newer = printerSortValue("date", "1h", "2026-01-01T10:55:00Z", now) as number;
+    expect(older).toBeGreaterThan(newer); // larger = older, as ageSeconds orders
+  });
+
+  it("sorts raw timestamps in the same direction as compact ages", () => {
+    // A mixed list must not reverse when some rows carry a raw value.
+    const now = Date.parse("2026-01-01T12:00:00Z");
+    const raw = printerSortValue("date", "2h", "2026-01-01T10:00:00Z", now) as number;
+    expect(raw).toBeGreaterThan(ageSeconds("1h"));
+    expect(raw).toBeLessThan(ageSeconds("10d"));
+  });
+
+  it("falls back to the rendered age when no raw value is present", () => {
+    expect(printerSortValue("date", "2h", "")).toBe(ageSeconds("2h"));
+    expect(printerSortValue("date", "2h", "not a date")).toBe(ageSeconds("2h"));
   });
 
   it("groups unset and unparseable values below real ones", () => {

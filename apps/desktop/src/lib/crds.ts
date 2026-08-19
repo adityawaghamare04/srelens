@@ -31,6 +31,8 @@ export interface CustomRow {
   age: string;
   /** Values for the CRD's printer columns, in declaration order. */
   columns?: string[];
+  /** Raw values for columns whose rendered text does not sort correctly. */
+  sortKeys?: string[];
 }
 
 /**
@@ -59,7 +61,12 @@ export function printerColumnKeys(columns: PrinterColumn[]): string[] {
  * decimal numbers, and `date` columns have already been rendered as compact
  * ages ("2h", "10d") whose text does not order chronologically.
  */
-export function printerSortValue(type: string, value: string): number | string {
+export function printerSortValue(
+  type: string,
+  value: string,
+  sortKey = "",
+  now: number = Date.now(),
+): number | string {
   if (type === "integer" || type === "number") {
     const text = value.trim();
     // Unset or unparseable values group below every real number. Check for
@@ -69,7 +76,15 @@ export function printerSortValue(type: string, value: string): number | string {
     const parsed = Number(text);
     return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
   }
-  if (type === "date") return ageSeconds(value);
+  if (type === "date") {
+    // Prefer the raw timestamp: two rows inside the same displayed unit both
+    // render "1h" and would otherwise tie. Convert it to an age rather than
+    // using the epoch value directly, so it sorts in the same direction as
+    // `ageSeconds` — larger means older, for both this and the Age column.
+    const parsed = sortKey ? Date.parse(sortKey) : NaN;
+    if (Number.isFinite(parsed)) return (now - parsed) / 1000;
+    return ageSeconds(value);
+  }
   return value;
 }
 

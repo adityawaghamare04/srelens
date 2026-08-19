@@ -100,7 +100,8 @@ export function CustomResourceBrowser({
       key: printerKeys[index],
       header: column.name,
       getValue: (r: CustomRow) => r.columns?.[index] ?? "",
-      getSortValue: (r: CustomRow) => printerSortValue(column.type, r.columns?.[index] ?? ""),
+      getSortValue: (r: CustomRow) =>
+        printerSortValue(column.type, r.columns?.[index] ?? "", r.sortKeys?.[index] ?? ""),
       render: (r: CustomRow) => <span>{r.columns?.[index] ?? ""}</span>,
     })),
     { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => <span className="text-muted-foreground">{r.age}</span> },
