@@ -508,6 +508,20 @@ pub fn test_cluster_connection_capability() -> Capability {
 mod tests {
     use super::*;
 
+    /// kube's `rustls-tls` feature no longer selects a crypto provider on its
+    /// own -- kube 4 split `ring` and `aws-lc-rs` out into separate features.
+    /// Without one of them rustls cannot resolve a process-level provider and
+    /// `Client::try_from` panics the first time it builds a TLS config.
+    ///
+    /// This only bites when the crate is built on its own: a workspace build
+    /// unifies `ring` in from a sibling crate and hides it. CI runs the
+    /// kind-bound suites as `cargo test -p srelens-kube`, so guard that.
+    #[tokio::test]
+    async fn building_a_client_selects_a_rustls_crypto_provider() {
+        let config = kube::Config::new("https://127.0.0.1:6443".parse().expect("uri"));
+        Client::try_from(config).expect("client builds without a rustls provider panic");
+    }
+
     fn tmp_dir(label: &str) -> PathBuf {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
