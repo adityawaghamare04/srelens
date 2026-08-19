@@ -401,6 +401,10 @@ pub(crate) fn handle_subscription(
     wake: &tokio::sync::mpsc::Sender<()>,
     req: &Value,
     method: &str,
+    // Both transports route subscriptions through here, so the caller's own
+    // transport has to travel with them: an audit record naming the wrong
+    // one misattributes the action, which is the whole point of the log.
+    transport: crate::Transport,
 ) -> Option<Value> {
     let id = req.get("id").cloned()?;
     let uri_str = req
@@ -411,17 +415,43 @@ pub(crate) fn handle_subscription(
 
     let uri = match crate::resources::ResourceUri::parse(uri_str) {
         Ok(u) => u,
-        Err(message) => return Some(err(id, -32602, &message)),
+        Err(message) => {
+            server.audit().record(crate::audit::AuditRecord {
+                transport,
+                tool: method.to_string(),
+                args: crate::audit::redact(&json!({"uri": uri_str}), false),
+                decision: "auto",
+                outcome: "error",
+                error: Some(message.clone()),
+            });
+            return Some(err(id, -32602, &message));
+        }
     };
     // Canonical form, so two spellings of one object cannot make two watches.
     let canonical = uri.to_string();
 
     if method == "resources/unsubscribe" {
         subs.remove(&canonical);
+        server.audit().record(crate::audit::AuditRecord {
+            transport,
+            tool: method.to_string(),
+            args: crate::audit::redact(&json!({"uri": uri_str}), false),
+            decision: "auto",
+            outcome: "ok",
+            error: None,
+        });
         return Some(ok(id, json!({})));
     }
 
     if let Err(message) = crate::resources::is_subscribable(&uri) {
+        server.audit().record(crate::audit::AuditRecord {
+            transport,
+            tool: method.to_string(),
+            args: crate::audit::redact(&json!({"uri": uri_str}), false),
+            decision: "auto",
+            outcome: "error",
+            error: Some(message.clone()),
+        });
         return Some(err(id, -32602, &message));
     }
     // `plan_read` is entirely offline: it validates the URI's shape, scope,
@@ -433,6 +463,14 @@ pub(crate) fn handle_subscription(
     // resolver `plan_read` and the real read path both use, so this and the
     // eventual read agree on what's addressable.
     if let Err(message) = crate::resources::plan_read(&uri, server.kind_resolver().as_ref()) {
+        server.audit().record(crate::audit::AuditRecord {
+            transport,
+            tool: method.to_string(),
+            args: crate::audit::redact(&json!({"uri": uri_str}), false),
+            decision: "auto",
+            outcome: "error",
+            error: Some(message.clone()),
+        });
         return Some(err(id, -32602, &message));
     }
 
@@ -502,7 +540,17 @@ pub(crate) fn handle_subscription(
 
     let handle = match server.watcher().watch(&uri, on_change, on_dead) {
         Ok(h) => h,
-        Err(message) => return Some(err(id, -32602, &message)),
+        Err(message) => {
+            server.audit().record(crate::audit::AuditRecord {
+                transport,
+                tool: method.to_string(),
+                args: crate::audit::redact(&json!({"uri": uri_str}), false),
+                decision: "auto",
+                outcome: "error",
+                error: Some(message.clone()),
+            });
+            return Some(err(id, -32602, &message));
+        }
     };
     // Death BEFORE commitment: check before `insert`, because on a
     // re-subscribe `insert` replaces AND ABORTS the prior still-live watch —
@@ -512,11 +560,30 @@ pub(crate) fn handle_subscription(
     // here since it never reaches the registry's ownership.
     if let Some(reason) = dead.lock().unwrap_or_else(|e| e.into_inner()).take() {
         handle.abort();
-        return Some(err(id, -32603, &format!("the watch ended immediately: {reason}")));
+        let message = format!("the watch ended immediately: {reason}");
+        server.audit().record(crate::audit::AuditRecord {
+            transport,
+            tool: method.to_string(),
+            args: crate::audit::redact(&json!({"uri": uri_str}), false),
+            decision: "auto",
+            outcome: "error",
+            error: Some(message.clone()),
+        });
+        return Some(err(id, -32603, &message));
     }
     let generation = match subs.insert(canonical.clone(), handle) {
         Ok(generation) => generation,
-        Err(message) => return Some(err(id, -32602, &message)),
+        Err(message) => {
+            server.audit().record(crate::audit::AuditRecord {
+                transport,
+                tool: method.to_string(),
+                args: crate::audit::redact(&json!({"uri": uri_str}), false),
+                decision: "auto",
+                outcome: "error",
+                error: Some(message.clone()),
+            });
+            return Some(err(id, -32602, &message));
+        }
     };
     *my_generation.lock().unwrap_or_else(|e| e.into_inner()) = Some(generation);
     if let Some(reason) = dead.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -528,8 +595,25 @@ pub(crate) fn handle_subscription(
         // cost of `watch` being synchronous; the client still learns the
         // truth from the error response.
         subs.remove_if(&canonical, generation);
-        return Some(err(id, -32603, &format!("the watch ended immediately: {reason}")));
+        let message = format!("the watch ended immediately: {reason}");
+        server.audit().record(crate::audit::AuditRecord {
+            transport,
+            tool: method.to_string(),
+            args: crate::audit::redact(&json!({"uri": uri_str}), false),
+            decision: "auto",
+            outcome: "error",
+            error: Some(message.clone()),
+        });
+        return Some(err(id, -32603, &message));
     }
+    server.audit().record(crate::audit::AuditRecord {
+        transport,
+        tool: method.to_string(),
+        args: crate::audit::redact(&json!({"uri": uri_str}), false),
+        decision: "auto",
+        outcome: "ok",
+        error: None,
+    });
     Some(ok(id, json!({})))
 }
 
@@ -620,7 +704,7 @@ where
                 // HTTP transport, which has no channel to push notifications and
                 // must keep answering -32601.
                 let resp = if method == "resources/subscribe" || method == "resources/unsubscribe" {
-                    handle_subscription(server, subs, dirty, wake_tx, &req, method)
+                    handle_subscription(server, subs, dirty, wake_tx, &req, method, crate::Transport::Stdio)
                 } else {
                     handle_request(server, &req, crate::Transport::Stdio).await
                 };
@@ -1815,7 +1899,7 @@ mod tests {
         let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         let message = resp["error"]["message"].as_str().unwrap_or_default();
         assert!(message.contains("ended immediately"), "got: {resp}");
@@ -1862,7 +1946,7 @@ mod tests {
         let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
         let resp =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(resp.get("error").is_none(), "the live subscribe succeeds: {resp}");
 
@@ -1917,13 +2001,13 @@ mod tests {
             "params":{"uri":"k8s://c/ns/Pod/web-0"}});
 
         let first =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(first.get("error").is_none(), "the first subscribe succeeds: {first}");
 
         // The re-subscribe's replacement watch is stillborn.
         let second =
-            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                 .unwrap();
         assert!(
             second["error"]["message"].as_str().unwrap_or_default().contains("ended immediately"),
@@ -1976,7 +2060,7 @@ mod tests {
         // Subscribe twice: the second replaces the first in the registry.
         for _ in 0..2 {
             let resp =
-                handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe")
+                handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
                     .unwrap();
             assert!(resp.get("error").is_none(), "subscribe succeeds: {resp}");
         }
@@ -2241,5 +2325,213 @@ mod tests {
             v["error"]["message"].as_str().unwrap().contains("no cluster watcher"),
             "the message must explain no watcher is wired, got {text}"
         );
+    }
+
+    // --- Issue #198: subscribe/unsubscribe write an audit record. ----------
+    //
+    // Every other capability-backed path (tools/call, resources/read) is
+    // audited, but the subscription methods never were — an agent could hold
+    // up to `MAX_SUBSCRIPTIONS` concurrent watches with nothing left in the
+    // log. Subscribe is stdio-only (the HTTP transport advertises
+    // `subscribe: false`), so every record here is `Transport::Stdio`, and it
+    // is not consent-gated, so `decision` is always `"auto"` (mirroring the
+    // resources/read auto path). The URI goes through `redact` for consistency
+    // even though Secrets are not addressable, so it is not sensitive. `tool`
+    // holds the method name.
+
+    /// Full-record spy: unlike the lighter `(tool, decision, outcome)` spies
+    /// above, keeps the whole `AuditRecord` so the redacted `args` and the
+    /// `error` message are assertable.
+    #[derive(Default)]
+    struct AuditSpy(std::sync::Mutex<Vec<crate::audit::AuditRecord>>);
+    impl crate::audit::AuditSink for AuditSpy {
+        fn record(&self, rec: crate::audit::AuditRecord) {
+            self.0.lock().unwrap().push(rec);
+        }
+    }
+
+    /// A subscribe-capable server (kinds resolver + live stub watcher) whose
+    /// audit records land in `spy`.
+    fn audited_subscribe_server(spy: &Arc<AuditSpy>) -> Arc<McpServer> {
+        Arc::new(server_with_kinds().with_audit(spy.clone()))
+    }
+
+    #[tokio::test]
+    async fn a_successful_subscribe_is_audited() {
+        let spy = Arc::new(AuditSpy::default());
+        let server = audited_subscribe_server(&spy);
+        let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
+        let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let (wake_tx, _wake_rx) = tokio::sync::mpsc::channel(1);
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
+            "params":{"uri":"k8s://c/ns/Pod/web-0"}});
+
+        let resp =
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
+                .unwrap();
+        assert!(resp.get("error").is_none(), "the subscribe succeeds: {resp}");
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].transport, crate::Transport::Stdio);
+        assert_eq!(seen[0].tool, "resources/subscribe");
+        assert_eq!(seen[0].decision, "auto");
+        assert_eq!(seen[0].outcome, "ok");
+        assert_eq!(seen[0].args, json!({"uri": "k8s://c/ns/Pod/web-0"}));
+        assert!(seen[0].error.is_none(), "a success carries no error");
+    }
+
+    /// The issue's point is to record the OUTCOME, not just the attempt — a
+    /// rejected subscribe is as interesting as a successful one. Here the
+    /// rejection is `is_subscribable`: `k8s://catalog` is static.
+    #[tokio::test]
+    async fn a_subscribe_rejected_for_a_non_subscribable_uri_is_audited_as_an_error() {
+        let spy = Arc::new(AuditSpy::default());
+        let server = audited_subscribe_server(&spy);
+        let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
+        let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let (wake_tx, _wake_rx) = tokio::sync::mpsc::channel(1);
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
+            "params":{"uri":"k8s://catalog"}});
+
+        let resp =
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
+                .unwrap();
+        assert_eq!(resp["error"]["code"], -32602, "got {resp}");
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].tool, "resources/subscribe");
+        assert_eq!(seen[0].decision, "auto");
+        assert_eq!(seen[0].outcome, "error");
+        assert_eq!(seen[0].args, json!({"uri": "k8s://catalog"}));
+        let message = seen[0].error.as_deref().unwrap_or_default();
+        assert!(message.contains("static"), "the reason must survive, got: {message}");
+    }
+
+    /// A second rejection branch: `plan_read` refuses Secrets before any watch
+    /// starts, so the audit must say so rather than pretending success.
+    #[tokio::test]
+    async fn a_subscribe_rejected_for_an_unaddressable_secret_is_audited_as_an_error() {
+        let spy = Arc::new(AuditSpy::default());
+        let server = audited_subscribe_server(&spy);
+        let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
+        let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let (wake_tx, _wake_rx) = tokio::sync::mpsc::channel(1);
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
+            "params":{"uri":"k8s://c/ns/Secret/shared"}});
+
+        let resp =
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
+                .unwrap();
+        assert_eq!(resp["error"]["code"], -32602, "got {resp}");
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].outcome, "error");
+        let message = seen[0].error.as_deref().unwrap_or_default();
+        assert!(
+            message.contains("not addressable"),
+            "the Secret refusal must survive, got: {message}"
+        );
+    }
+
+    /// A third rejection branch the issue names explicitly: the watcher itself
+    /// refuses (unknown context, RBAC Forbidden, stream failure at setup).
+    #[tokio::test]
+    async fn a_subscribe_whose_watch_errors_is_audited_as_an_error() {
+        struct RefusingWatcher;
+        impl crate::resources::ObjectWatcher for RefusingWatcher {
+            fn watch(
+                &self,
+                _uri: &crate::resources::ResourceUri,
+                _on_change: Box<dyn FnMut() + Send>,
+                _on_dead: Box<dyn FnOnce(String) + Send>,
+            ) -> Result<tokio::task::AbortHandle, String> {
+                Err("the cluster refused to watch".to_string())
+            }
+        }
+        struct Kinds;
+        impl crate::resources::KindResolver for Kinds {
+            fn scope(&self, kind: &str) -> Option<crate::resources::KindScope> {
+                (kind == "Pod").then_some(crate::resources::KindScope::Namespaced)
+            }
+        }
+        let spy = Arc::new(AuditSpy::default());
+        let server = Arc::new(
+            server_with_ping()
+                .with_kind_resolver(Arc::new(Kinds))
+                .with_watcher(Arc::new(RefusingWatcher))
+                .with_audit(spy.clone()),
+        );
+        let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
+        let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let (wake_tx, _wake_rx) = tokio::sync::mpsc::channel(1);
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
+            "params":{"uri":"k8s://c/ns/Pod/web-0"}});
+
+        let resp =
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
+                .unwrap();
+        assert_eq!(resp["error"]["code"], -32602, "got {resp}");
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].outcome, "error");
+        let message = seen[0].error.as_deref().unwrap_or_default();
+        assert!(message.contains("refused"), "the reason must survive, got: {message}");
+    }
+
+    /// The fourth rejection branch the issue names: the 32-watch cap. The
+    /// registry is pre-filled so the subscribe fails its `insert`.
+    #[tokio::test]
+    async fn a_subscribe_rejected_for_the_watch_cap_is_audited_as_an_error() {
+        let spy = Arc::new(AuditSpy::default());
+        let server = audited_subscribe_server(&spy);
+        let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
+        for i in 0..crate::subscriptions::MAX_SUBSCRIPTIONS {
+            let handle = tokio::spawn(async { std::future::pending::<()>().await }).abort_handle();
+            subs.insert(format!("k8s://c/ns/Pod/p{i}"), handle).unwrap();
+        }
+        let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let (wake_tx, _wake_rx) = tokio::sync::mpsc::channel(1);
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/subscribe",
+            "params":{"uri":"k8s://c/ns/Pod/one-too-many"}});
+
+        let resp =
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/subscribe", crate::Transport::Stdio)
+                .unwrap();
+        assert_eq!(resp["error"]["code"], -32602, "got {resp}");
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].outcome, "error");
+        let message = seen[0].error.as_deref().unwrap_or_default();
+        assert!(message.contains("too many"), "the reason must survive, got: {message}");
+    }
+
+    #[tokio::test]
+    async fn an_unsubscribe_is_audited() {
+        let spy = Arc::new(AuditSpy::default());
+        let server = audited_subscribe_server(&spy);
+        let subs = Arc::new(crate::subscriptions::SubscriptionRegistry::new());
+        let dirty = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let (wake_tx, _wake_rx) = tokio::sync::mpsc::channel(1);
+        let req = json!({"jsonrpc":"2.0","id":1,"method":"resources/unsubscribe",
+            "params":{"uri":"k8s://c/ns/Pod/web-0"}});
+
+        let resp =
+            handle_subscription(&server, &subs, &dirty, &wake_tx, &req, "resources/unsubscribe", crate::Transport::Stdio)
+                .unwrap();
+        assert!(resp.get("error").is_none(), "unsubscribe succeeds: {resp}");
+
+        let seen = spy.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "expected one audit record, got {seen:?}");
+        assert_eq!(seen[0].transport, crate::Transport::Stdio);
+        assert_eq!(seen[0].tool, "resources/unsubscribe");
+        assert_eq!(seen[0].decision, "auto");
+        assert_eq!(seen[0].outcome, "ok");
+        assert_eq!(seen[0].args, json!({"uri": "k8s://c/ns/Pod/web-0"}));
+        assert!(seen[0].error.is_none(), "an unsubscribe carries no error");
     }
 }

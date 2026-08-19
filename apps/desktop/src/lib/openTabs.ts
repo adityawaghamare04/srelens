@@ -157,6 +157,34 @@ export function reconcileActiveTab(tabs: ViewTab[], activeTabId: number | null):
  * Only ever called with a SUCCESSFUL discovery result: an unreachable cluster
  * must not be read as "this CRD is gone" and silently delete the workspace.
  */
+/**
+ * Whether two printer-column lists describe the same columns.
+ *
+ * A persisted tab keeps whatever ref it was serialized with, so a tab restored
+ * from before printer columns existed has none at all, and an operator can
+ * change `additionalPrinterColumns` without touching the CRD version. Neither
+ * shows up in the GVK, so the columns have to be compared directly or the tab
+ * keeps rendering by a definition the cluster has moved on from.
+ *
+ * Compared field by field rather than by reference: the ref feeds a fetch
+ * effect, and handing back a fresh object on every reconcile would refetch
+ * forever.
+ */
+function samePrinterColumns(
+  live: CrdRef["printerColumns"],
+  saved: CrdRef["printerColumns"],
+): boolean {
+  const a = live ?? [];
+  const b = saved ?? [];
+  if (a.length !== b.length) return false;
+  return a.every(
+    (column, index) =>
+      column.name === b[index].name &&
+      column.jsonPath === b[index].jsonPath &&
+      column.type === b[index].type,
+  );
+}
+
 export function reconcileCrdTabs(
   tabs: ViewTab[],
   context: string,
@@ -175,7 +203,10 @@ export function reconcileCrdTabs(
       dropped += 1;
       continue;
     }
-    const stale = live.version !== t.crd.version || live.plural !== t.crd.plural;
+    const stale =
+      live.version !== t.crd.version ||
+      live.plural !== t.crd.plural ||
+      !samePrinterColumns(live.printerColumns, t.crd.printerColumns);
     kept.push(stale ? { ...t, crd: live } : t);
   }
   return { tabs: kept, dropped };

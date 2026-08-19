@@ -359,7 +359,12 @@ async fn rpc(
         // never deliver.
         let sessions = st.push.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get(&session) {
-            Some(c) => handle_subscription(&st.server, &c.subs, &c.dirty, &c.wake, &req, method),
+            Some(c) => {
+                handle_subscription(
+                    &st.server, &c.subs, &c.dirty, &c.wake, &req, method,
+                    crate::Transport::Http,
+                )
+            }
             None => req.get("id").cloned().map(|id| {
                 json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32002, "message":
                     "no notification stream is connected for this session: open GET /mcp \
@@ -666,6 +671,35 @@ mod tests {
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_subscription_over_http_is_audited_as_http() {
+        // The audit log is how an operator attributes an action to a caller, so
+        // a networked subscribe recorded as stdio is worse than not logging it.
+        #[derive(Default)]
+        struct Spy(Mutex<Vec<(String, crate::Transport)>>);
+        impl crate::audit::AuditSink for Spy {
+            fn record(&self, rec: crate::audit::AuditRecord) {
+                self.0.lock().unwrap().push((rec.tool, rec.transport));
+            }
+        }
+        let spy = Arc::new(Spy::default());
+        let joins = Arc::new(Mutex::new(Vec::new()));
+        let app = router(subscribable_server(joins).with_audit(spy.clone()));
+
+        // A stream must exist for the subscribe to reach the handler at all.
+        let stream_resp = app.clone().oneshot(sse_get()).await.unwrap();
+        assert_eq!(stream_resp.status(), StatusCode::OK);
+        let _ = app.clone().oneshot(subscribe_post("k8s://c/ns/Pod/web-0")).await.unwrap();
+
+        let seen = spy.0.lock().unwrap().clone();
+        let subscribes: Vec<_> =
+            seen.iter().filter(|(tool, _)| tool == "resources/subscribe").collect();
+        assert!(!subscribes.is_empty(), "the subscribe must be audited: {seen:?}");
+        for (tool, transport) in subscribes {
+            assert_eq!(*transport, crate::Transport::Http, "{tool} attributed to the wrong transport");
+        }
     }
 
     #[tokio::test]

@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { listCustomResource, type CrdRef, type CustomRow } from "../lib/crds";
+import {
+  listCustomResource,
+  printerColumnKeys,
+  printerSortValue,
+  type CrdRef,
+  type CustomRow,
+} from "../lib/crds";
 import { listNamespaces } from "../lib/workloads";
 import { YamlView } from "./YamlView";
 import { Table, filterTableData, Select, Button, ColumnPicker, useColumnVisibility, Spinner, Drawer, TextInput, type Column } from "../ui";
@@ -69,6 +75,11 @@ export function CustomResourceBrowser({
     };
   }, [context, crd, namespace, reloadKey]);
 
+  const printerKeys = useMemo(
+    () => printerColumnKeys(crd.printerColumns ?? []),
+    [crd.printerColumns],
+  );
+
   const columns: Column<CustomRow>[] = [
     { key: "name", header: crd.kind, render: (r) => <strong>{r.name}</strong> },
     ...(crd.namespaced
@@ -80,6 +91,19 @@ export function CustomResourceBrowser({
           },
         ]
       : []),
+    // Whatever the CRD asks to have shown, between the identity columns and
+    // Age — the order kubectl uses. `columns` is positional, so index by the
+    // CRD's declaration order rather than by name (headings need not be unique).
+    // Values stay positional -- the backend returns them in declaration order --
+    // but the key must not be, since it outlives any one CRD revision.
+    ...(crd.printerColumns ?? []).map((column, index) => ({
+      key: printerKeys[index],
+      header: column.name,
+      getValue: (r: CustomRow) => r.columns?.[index] ?? "",
+      getSortValue: (r: CustomRow) =>
+        printerSortValue(column.type, r.columns?.[index] ?? "", r.sortKeys?.[index] ?? ""),
+      render: (r: CustomRow) => <span>{r.columns?.[index] ?? ""}</span>,
+    })),
     { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => <span className="text-muted-foreground">{r.age}</span> },
   ];
 
