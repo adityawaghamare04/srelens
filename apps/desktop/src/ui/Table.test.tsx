@@ -42,6 +42,62 @@ describe("Table virtualization", () => {
     expect(screen.getByText("row-0")).toBeDefined();
     expect(screen.queryByText("row-900")).toBeNull(); // far off-screen, not rendered
   });
+
+  /** Simulate real layout: 20px rows, and header cells with natural widths. */
+  function mockLayout(headWidth = 140) {
+    vi.spyOn(HTMLTableRowElement.prototype, "getBoundingClientRect").mockReturnValue({
+      height: 20,
+    } as DOMRect);
+    vi.spyOn(HTMLTableCellElement.prototype, "getBoundingClientRect").mockReturnValue({
+      width: headWidth,
+    } as DOMRect);
+  }
+
+  function renderScrollable(data: { name: string; phase: string }[]) {
+    const utils = render(
+      <div data-testid="scroll" style={{ overflowY: "auto" }}>
+        <Table columns={bigColumns} data={data} getRowKey={(r) => r.name} />
+      </div>,
+    );
+    const sp = screen.getByTestId("scroll");
+    Object.defineProperty(sp, "clientHeight", { value: 200, configurable: true });
+    Object.defineProperty(sp, "scrollTop", { value: 0, writable: true, configurable: true });
+    fireEvent.scroll(sp);
+    return { ...utils, sp };
+  }
+
+  const colWidths = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("colgroup col")).map(
+      (col) => (col as HTMLTableColElement).style.width,
+    );
+
+  it("pins column widths once a long list virtualizes (#298)", () => {
+    mockLayout();
+    const { container } = renderScrollable(bigData);
+    // Without pinned widths the browser re-derives them from whichever rows are
+    // currently rendered, so the columns shift on every scroll.
+    expect(colWidths(container).every((w) => w !== "")).toBe(true);
+    expect(container.querySelector("table")?.className).toContain("fl-data-table--resized");
+  });
+
+  it("keeps those widths identical across scrolls (#298)", () => {
+    mockLayout();
+    const { container, sp } = renderScrollable(bigData);
+    const before = colWidths(container);
+    expect(before.every((w) => w !== "")).toBe(true); // guard: not vacuously equal
+    Object.defineProperty(sp, "scrollTop", { value: 4000, writable: true, configurable: true });
+    fireEvent.scroll(sp);
+    expect(screen.queryByText("row-0")).toBeNull(); // the rendered window really moved
+    expect(colWidths(container)).toEqual(before);
+  });
+
+  it("leaves short lists auto-sized so they still adapt to content (#298)", () => {
+    mockLayout();
+    const shortData = bigData.slice(0, 10);
+    const { container } = renderScrollable(shortData);
+    expect(colWidths(container).every((w) => w === "")).toBe(true);
+    expect(container.querySelector("table")?.className).not.toContain("fl-data-table--resized");
+  });
 });
 
 describe("computeVisibleRange", () => {
