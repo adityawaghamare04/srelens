@@ -7,9 +7,19 @@ on:
   pull_request:
     branches: [dev, main]
 
+# Pull requests share a per-ref group and cancel each other: a superseded run
+# tests a commit nobody will merge, so killing it saves minutes and loses
+# nothing.
+#
+# Pushes get a group of their OWN, keyed on the commit. Grouping them per-ref
+# was what made the badge read "failing" — every merge to dev is a push to the
+# same ref, so each one cancelled the run before it, and those merge commits
+# were never tested. Turning off cancel-in-progress alone does NOT fix that:
+# a group holds one pending run, so a third push still evicts the queued
+# second one. Only a unique group per commit lets every merge run.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

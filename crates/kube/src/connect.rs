@@ -173,16 +173,17 @@ fn standalone_context_yaml(mut config: Kubeconfig, context: &str) -> Result<Stri
         .context
         .clone()
         .ok_or_else(|| format!("context '{context}' has no cluster/user"))?;
+    let inner_user = inner.user.clone().unwrap_or_default();
     // A split config might not carry this context's cluster/user in this file.
     if !config.clusters.iter().any(|c| c.name == inner.cluster)
-        || !config.auth_infos.iter().any(|a| a.name == inner.user)
+        || !config.auth_infos.iter().any(|a| a.name == inner_user)
     {
         return Err(format!("context '{context}' is missing its cluster or user here"));
     }
 
     config.contexts.retain(|c| c.name == context);
     config.clusters.retain(|c| c.name == inner.cluster);
-    config.auth_infos.retain(|a| a.name == inner.user);
+    config.auth_infos.retain(|a| a.name == inner_user);
     config.current_context = Some(context.to_string());
     if config.kind.is_none() {
         config.kind = Some("Config".to_string());
@@ -284,7 +285,7 @@ fn set_context_bearer(kc: &mut Kubeconfig, in_config_ctx: &str, bearer: &str) {
         .iter()
         .find(|c| c.name == in_config_ctx)
         .and_then(|c| c.context.as_ref())
-        .map(|c| c.user.clone());
+        .map(|c| c.user.clone().unwrap_or_default());
     if let Some(user_name) = user_name {
         for named in kc.auth_infos.iter_mut() {
             if named.name == user_name {
@@ -442,7 +443,7 @@ async fn probe_cluster_from_yaml(yaml: &str, context: &str) -> ClusterInfoOut {
         .iter()
         .find(|c| c.name == context)
         .and_then(|c| c.context.as_ref())
-        .map(|c| c.user.clone());
+        .map(|c| c.user.clone().unwrap_or_default());
     match user_name {
         Some(user_name) => {
             for named in kc.auth_infos.iter_mut() {
@@ -506,6 +507,20 @@ pub fn test_cluster_connection_capability() -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// kube's `rustls-tls` feature no longer selects a crypto provider on its
+    /// own -- kube 4 split `ring` and `aws-lc-rs` out into separate features.
+    /// Without one of them rustls cannot resolve a process-level provider and
+    /// `Client::try_from` panics the first time it builds a TLS config.
+    ///
+    /// This only bites when the crate is built on its own: a workspace build
+    /// unifies `ring` in from a sibling crate and hides it. CI runs the
+    /// kind-bound suites as `cargo test -p srelens-kube`, so guard that.
+    #[tokio::test]
+    async fn building_a_client_selects_a_rustls_crypto_provider() {
+        let config = kube::Config::new("https://127.0.0.1:6443".parse().expect("uri"));
+        Client::try_from(config).expect("client builds without a rustls provider panic");
+    }
 
     fn tmp_dir(label: &str) -> PathBuf {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
