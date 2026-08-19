@@ -91,12 +91,43 @@ describe("Table virtualization", () => {
     expect(colWidths(container)).toEqual(before);
   });
 
-  it("leaves short lists auto-sized so they still adapt to content (#298)", () => {
+  it("pins short lists too, so every table behaves the same way (#298)", () => {
+    // CRDs, Services and most lists sit under the virtualization threshold.
+    // They must not size differently from the long ones.
     mockLayout();
-    const shortData = bigData.slice(0, 10);
-    const { container } = renderScrollable(shortData);
-    expect(colWidths(container).every((w) => w === "")).toBe(true);
-    expect(container.querySelector("table")?.className).not.toContain("fl-data-table--resized");
+    const { container } = renderScrollable(bigData.slice(0, 10));
+    expect(colWidths(container).every((w) => w !== "")).toBe(true);
+    expect(container.querySelector("table")?.className).toContain("fl-data-table--resized");
+  });
+
+  it("keeps widths pinned when filtering drops a list below the threshold (#298)", () => {
+    // Narrowing a virtualized list past the threshold must not hand it back to
+    // automatic layout, or the columns snap as the user types.
+    mockLayout();
+    const { container, rerender } = render(
+      <div data-testid="scroll" style={{ overflowY: "auto" }}>
+        <Table columns={bigColumns} data={bigData} getRowKey={(r) => r.name} />
+      </div>,
+    );
+    const sp = screen.getByTestId("scroll");
+    Object.defineProperty(sp, "clientHeight", { value: 200, configurable: true });
+    Object.defineProperty(sp, "scrollTop", { value: 0, writable: true, configurable: true });
+    fireEvent.scroll(sp);
+    const before = colWidths(container);
+    expect(before.every((w) => w !== "")).toBe(true);
+
+    rerender(
+      <div data-testid="scroll" style={{ overflowY: "auto" }}>
+        <Table columns={bigColumns} data={bigData.slice(0, 5)} getRowKey={(r) => r.name} />
+      </div>,
+    );
+    expect(colWidths(container)).toEqual(before);
+  });
+
+  it("does not pin an empty table, so widths are measured from real rows", () => {
+    mockLayout();
+    const { container } = renderScrollable([]);
+    expect(container.querySelector("colgroup")).toBeNull(); // empty state, no table
   });
 });
 
@@ -275,8 +306,11 @@ describe("Table", () => {
 
     fireEvent.keyDown(handle, { key: "ArrowRight" });
     expect(header?.closest("table")?.style.width).toBe("256px");
+    // Reset drops the user's widths and the table re-measures its natural ones
+    // (2 columns x the 120px jsdom fallback) rather than falling back to
+    // automatic layout, which no table uses any more.
     fireEvent.doubleClick(handle);
-    expect(header?.closest("table")?.style.width).toBe("");
+    expect(header?.closest("table")?.style.width).toBe("240px");
   });
 });
 

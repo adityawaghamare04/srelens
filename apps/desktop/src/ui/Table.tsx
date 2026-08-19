@@ -321,28 +321,36 @@ export function Table<T>({
   const topPad = virtualize ? range.start * metrics.rowHeight : 0;
   const bottomPad = virtualize ? (visibleData.length - range.end) * metrics.rowHeight : 0;
 
-  // Pin the natural column widths as soon as a list starts virtualizing.
-  // Automatic table layout sizes columns from the rows currently rendered, and
-  // virtualization swaps that set on every scroll, so without pinned widths the
-  // columns visibly shift as the user scrolls (#298). Measuring in a layout
-  // effect keeps it off-screen: the widths are read and applied before paint.
+  const isEmpty = data.length === 0;
+
+  // Pin the natural column widths once the table has rows to measure.
   //
-  // Short lists are deliberately left auto-sized -- they render every row, so
-  // their widths are already stable and stay adaptive to their content.
+  // Automatic table layout sizes columns from the rows *currently rendered*.
+  // Virtualization swaps that set on every scroll, so a long list's columns
+  // visibly shifted as the user scrolled (#298). Measuring in a layout effect
+  // keeps it off-screen: the widths are read and applied before paint.
+  //
+  // This deliberately applies to every table, not just the ones long enough to
+  // virtualize. Pinning only above the threshold made short lists -- CRDs,
+  // Services, most views -- size by a different rule from long ones, and left a
+  // list that was filtered down past the threshold stranded with widths it
+  // could neither keep consistently nor recompute. Sizing every table the same
+  // way is both uniform and simpler.
   useLayoutEffect(() => {
-    if (!virtualize || Object.keys(columnWidths).length > 0) return;
+    if (isEmpty || Object.keys(columnWidths).length > 0) return;
     const table = rootRef.current?.querySelector("table");
-    if (!table) return;
+    // Nothing to measure until a real row exists: a table showing only the
+    // "no matching items" placeholder would freeze the placeholder's widths.
+    if (!table?.querySelector("tbody tr.fl-data-table__row")) return;
     setColumnWidths(measureColumns(table));
     autoSized.current = true;
     // measureColumns reads `columns`/`selection`, which `columnSignature` tracks.
-  }, [virtualize, columnWidths, columnSignature]);
+  }, [isEmpty, visibleData.length, columnWidths, columnSignature]);
 
   // Pinned widths would otherwise survive a window resize, so an auto-sized
   // table would stop tracking the space available to it. Drop the measurement
   // when the container's width changes and the effect above re-takes it at the
   // new size. Widths the user dragged are left alone.
-  const isEmpty = data.length === 0;
   useEffect(() => {
     if (isEmpty) return;
     const container = rootRef.current?.querySelector<HTMLElement>('[data-slot="table-container"]');
