@@ -60,19 +60,31 @@ export function printerColumnKeys(columns: PrinterColumn[]): string[] {
  * declared. The table's collator handles plain digit strings, but not signed or
  * decimal numbers, and `date` columns have already been rendered as compact
  * ages ("2h", "10d") whose text does not order chronologically.
+ *
+ * `integer` yields a bigint, since Kubernetes integers are 64-bit and Number
+ * cannot represent them all exactly. The table compares bigints relationally.
  */
 export function printerSortValue(
   type: string,
   value: string,
   sortKey = "",
   now: number = Date.now(),
-): number | string {
+): number | string | bigint {
   if (type === "integer" || type === "number") {
     const text = value.trim();
     // Unset or unparseable values group below every real number. Check for
     // empty first: Number("") is 0, which would interleave blank cells with
     // real zeros and negatives.
     if (text === "") return Number.NEGATIVE_INFINITY;
+    if (type === "integer") {
+      // Kubernetes integers are 64-bit, and Number cannot hold them exactly:
+      // 9007199254740993 collapses onto ...992, tying two distinct rows.
+      try {
+        return BigInt(text);
+      } catch {
+        return Number.NEGATIVE_INFINITY;
+      }
+    }
     const parsed = Number(text);
     return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
   }

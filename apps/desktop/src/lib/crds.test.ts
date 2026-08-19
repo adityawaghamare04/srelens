@@ -4,6 +4,9 @@ import { ageSeconds } from "./age";
 
 const col = (name: string, jsonPath: string, type = "string") => ({ name, jsonPath, type });
 
+/** printerSortValue narrowed to bigint, for the integer cases. */
+const intKey = (text: string) => printerSortValue("integer", text) as bigint;
+
 describe("printerColumnKeys", () => {
   it("identifies a column by its definition, not its position", () => {
     // An operator upgrade that prepends a column must not change the key of the
@@ -31,9 +34,24 @@ describe("printerColumnKeys", () => {
 describe("printerSortValue", () => {
   it("orders signed and decimal numbers numerically", () => {
     // The table's collator gets both of these backwards on the rendered text.
-    expect(printerSortValue("integer", "-10")).toBeLessThan(printerSortValue("integer", "-2") as number);
+    expect(intKey("-10") < intKey("-2")).toBe(true);
     expect(printerSortValue("number", "1.15")).toBeLessThan(printerSortValue("number", "1.2") as number);
-    expect(printerSortValue("integer", "2")).toBeLessThan(printerSortValue("integer", "10") as number);
+    expect(intKey("2") < intKey("10")).toBe(true);
+  });
+
+  it("keeps 64-bit integers exact (#267 review)", () => {
+    // Number() maps both of these to 9007199254740992, tying the two rows.
+    const lo = intKey("9007199254740992");
+    const hi = intKey("9007199254740993");
+    expect(lo).not.toBe(hi);
+    expect(lo < hi).toBe(true);
+    expect(intKey("-9007199254740993") < lo).toBe(true);
+  });
+
+  it("falls back for integer text that is not an integer", () => {
+    // A decimal in an `integer` column is malformed; BigInt() would throw.
+    expect(printerSortValue("integer", "1.5")).toBe(Number.NEGATIVE_INFINITY);
+    expect(printerSortValue("integer", "n/a")).toBe(Number.NEGATIVE_INFINITY);
   });
 
   it("orders dates by duration, not by the text of the age", () => {

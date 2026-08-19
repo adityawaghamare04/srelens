@@ -131,6 +131,48 @@ describe("Table virtualization", () => {
   });
 });
 
+describe("Table sorting", () => {
+  it("orders 64-bit integers exactly, beyond Number's safe range", () => {
+    // Number() collapses these two to the same value, so a numeric sort key
+    // cannot separate them. Negative, because string collation happens to get
+    // large positives right and would hide the gap: it compares "-...993"
+    // against "-...992" by magnitude and puts them the wrong way round.
+    // The comparator must also not use arithmetic on a bigint, which throws.
+    const rows = [
+      { id: "b", n: -9007199254740992n },
+      { id: "a", n: -9007199254740993n },
+    ];
+    const cols: Column<(typeof rows)[number]>[] = [
+      { key: "id", header: "Id" },
+      { key: "n", header: "N", getSortValue: (r) => r.n },
+    ];
+    render(<Table columns={cols} data={rows} getRowKey={(r) => r.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by N" }));
+    const order = Array.from(document.querySelectorAll("tbody tr.fl-data-table__row")).map(
+      (tr) => tr.textContent?.[0],
+    );
+    expect(order).toEqual(["a", "b"]);
+  });
+
+  it("sorts rows with no value below real ones when mixing bigint and number", () => {
+    const rows = [
+      { id: "big", n: 12n as bigint | number },
+      { id: "none", n: Number.NEGATIVE_INFINITY },
+      { id: "small", n: 3n },
+    ];
+    const cols: Column<(typeof rows)[number]>[] = [
+      { key: "id", header: "Id" },
+      { key: "n", header: "N", getSortValue: (r) => r.n },
+    ];
+    render(<Table columns={cols} data={rows} getRowKey={(r) => r.id} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by N" }));
+    const order = Array.from(document.querySelectorAll("tbody tr.fl-data-table__row")).map(
+      (tr) => tr.textContent?.slice(0, 5),
+    );
+    expect(order?.[0]).toContain("none");
+  });
+});
+
 describe("computeVisibleRange", () => {
   it("returns the window of rows around the scroll position with overscan", () => {
     // rowHeight 20, viewport 100 → 5 visible rows; scrolled to row 50; overscan 3.
