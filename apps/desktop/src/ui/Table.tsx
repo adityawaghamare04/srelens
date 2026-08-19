@@ -158,7 +158,16 @@ export function Table<T>({
         const right = column.getSortValue ? column.getSortValue(b.row) : getColumnValue(b.row, column);
         let result: number;
         if (typeof left === "number" && typeof right === "number") result = left - right;
-        else result = collator.compare(String(left ?? ""), String(right ?? ""));
+        else if (typeof left === "bigint" || typeof right === "bigint") {
+          // Compare, never subtract: bigint arithmetic with a number throws,
+          // and columns mix the two (a bigint value against a -Infinity for
+          // "unset"). Relational operators are defined across both and stay
+          // exact past Number.MAX_SAFE_INTEGER, which string collation is not:
+          // it orders negatives by magnitude.
+          const l = left as bigint | number;
+          const r = right as bigint | number;
+          result = l < r ? -1 : l > r ? 1 : 0;
+        } else result = collator.compare(String(left ?? ""), String(right ?? ""));
         return result ? result * (sort.direction === "asc" ? 1 : -1) : a.index - b.index;
       })
       .map(({ row }) => row);

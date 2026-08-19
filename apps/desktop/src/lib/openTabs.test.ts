@@ -258,6 +258,31 @@ describe("reconcileCrdTabs", () => {
     expect(result.tabs[0]).toBe(tabs[0]);
     expect(result.dropped).toBe(0);
   });
+
+  const cols = [{ name: "Ready", jsonPath: ".status.ready", type: "string" }];
+
+  it("adopts printer columns a restored tab predates (#267)", () => {
+    // A tab serialized before printer columns existed carries a ref without
+    // them. Its GVK is unchanged, so nothing else marks it stale -- but keeping
+    // it would mean the columns never appear until the tab is reopened.
+    const result = reconcileCrdTabs([crdTab(1)], "prod", [crd({ printerColumns: cols })]);
+    expect(result.tabs[0].crd?.printerColumns).toEqual(cols);
+  });
+
+  it("adopts printer columns changed without a version bump (#267)", () => {
+    const stale = { ...tab({ id: 1, cluster: "prod" }), crd: crd({ printerColumns: cols }) } as Tab;
+    const renamed = [{ name: "Health", jsonPath: ".status.health", type: "string" }];
+    const result = reconcileCrdTabs([stale], "prod", [crd({ printerColumns: renamed })]);
+    expect(result.tabs[0].crd?.printerColumns).toEqual(renamed);
+  });
+
+  it("keeps tab identity when the printer columns are equal", () => {
+    // The ref feeds a fetch effect, so a fresh object each reconcile would
+    // refetch forever.
+    const tabs = [{ ...tab({ id: 1, cluster: "prod" }), crd: crd({ printerColumns: cols }) } as Tab];
+    const result = reconcileCrdTabs(tabs, "prod", [crd({ printerColumns: [{ ...cols[0] }] })]);
+    expect(result.tabs[0]).toBe(tabs[0]);
+  });
 });
 
 describe("coalesced session persistence", () => {
