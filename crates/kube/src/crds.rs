@@ -109,8 +109,8 @@ fn printer_columns(spec: &serde_json::Value) -> Vec<PrinterColumn> {
 /// CRDs use a small JSONPath subset rather than the full grammar, so this walks
 /// it directly instead of pulling in an engine. Supported segments:
 ///
-/// - `.foo` and `['foo']` / `["foo"]` — object keys (the bracket form is what
-///   label keys need, since they contain dots and slashes)
+/// - `.foo`, `.a\.b` and `['foo']` / `["foo"]` — object keys; both the escape
+///   and the bracket form let a key contain dots, as label keys do
 /// - `[0]` — array index
 /// - `[?(@.type=="Ready")]` — first array element whose field equals a literal,
 ///   which is how Flux, cert-manager and most operators surface a condition
@@ -127,8 +127,27 @@ fn resolve_json_path(value: &serde_json::Value, path: &str) -> String {
                 (Segment::bracket(&open[..close]), open[close + 1..].trim_start_matches('.'))
             }
             None => {
-                let end = rest.find(['.', '[']).unwrap_or(rest.len());
-                (Segment::Key(rest[..end].to_string()), rest[end..].trim_start_matches('.'))
+                // Scan to the next *unescaped* separator. `\.` keeps a literal dot
+                // inside the key, which is how a CRD can address a label such as
+                // `app\.kubernetes\.io/name` without bracket notation.
+                let mut key = String::new();
+                let mut end = rest.len();
+                let mut chars = rest.char_indices();
+                while let Some((index, ch)) = chars.next() {
+                    match ch {
+                        '\\' => {
+                            if let Some((_, escaped)) = chars.next() {
+                                key.push(escaped);
+                            }
+                        }
+                        '.' | '[' => {
+                            end = index;
+                            break;
+                        }
+                        _ => key.push(ch),
+                    }
+                }
+                (Segment::Key(key), rest[end..].trim_start_matches('.'))
             }
         };
         let Some(next) = segment.apply(current) else { return String::new() };
@@ -393,6 +412,15 @@ mod tests {
         // Numbers and bools render as text, not JSON-quoted.
         assert_eq!(resolve_json_path(&obj(), ".spec.nodes"), "3");
         assert_eq!(resolve_json_path(&obj(), ".spec.paused"), "false");
+    }
+
+    #[test]
+    fn resolves_backslash_escaped_dots_in_key_names() {
+        // A CRD may address a dotted label key without bracket notation.
+        assert_eq!(
+            resolve_json_path(&obj(), r".metadata.labels.app\.kubernetes\.io/name"),
+            "cassandra"
+        );
     }
 
     #[test]

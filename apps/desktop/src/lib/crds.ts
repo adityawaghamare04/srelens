@@ -1,4 +1,5 @@
 import { invokeCapability, type Invoker } from "../transport/transport";
+import { ageSeconds } from "./age";
 
 /**
  * One column a CRD asks tools to display, from its `additionalPrinterColumns`
@@ -30,6 +31,46 @@ export interface CustomRow {
   age: string;
   /** Values for the CRD's printer columns, in declaration order. */
   columns?: string[];
+}
+
+/**
+ * Stable table keys for a CRD's printer columns.
+ *
+ * These keys persist: `useColumnVisibility` stores hidden columns under them,
+ * and the tab keeps sort and filter state by key. A positional key would
+ * therefore silently change meaning when an operator upgrade inserts or
+ * reorders `additionalPrinterColumns` — a column the user hid or sorted would
+ * come back as a different one. Identify a column by what it *is* instead, and
+ * add an occurrence suffix only for genuinely duplicate definitions.
+ */
+export function printerColumnKeys(columns: PrinterColumn[]): string[] {
+  const seen = new Map<string, number>();
+  return columns.map((column) => {
+    const base = `printer:${column.name}:${column.jsonPath}`;
+    const occurrence = (seen.get(base) ?? 0) + 1;
+    seen.set(base, occurrence);
+    return occurrence === 1 ? base : `${base}#${occurrence}`;
+  });
+}
+
+/**
+ * Sort key for a printer column's rendered text, honouring the type the CRD
+ * declared. The table's collator handles plain digit strings, but not signed or
+ * decimal numbers, and `date` columns have already been rendered as compact
+ * ages ("2h", "10d") whose text does not order chronologically.
+ */
+export function printerSortValue(type: string, value: string): number | string {
+  if (type === "integer" || type === "number") {
+    const text = value.trim();
+    // Unset or unparseable values group below every real number. Check for
+    // empty first: Number("") is 0, which would interleave blank cells with
+    // real zeros and negatives.
+    if (text === "") return Number.NEGATIVE_INFINITY;
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  }
+  if (type === "date") return ageSeconds(value);
+  return value;
 }
 
 /** Discover installed CRDs in a cluster via `k8s.listCRDs`. */
