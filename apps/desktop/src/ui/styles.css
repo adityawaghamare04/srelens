@@ -3742,10 +3742,16 @@ body {
   overflow: auto;
 }
 /* Checkbox column in the data table. */
-.fl-data-table__checkbox {
+/* Scoped to beat .fl-data-table__cell / __head, which are declared later in
+   this file with the same specificity and would otherwise win. They set
+   `padding: 0 14px`, which left this 36px column an 8px content box -- the
+   checkbox overflowed it and __cell's `text-overflow: ellipsis` drew a "..."
+   next to every checkbox. A cell holding a control should never ellipsize. */
+.fl-data-table .fl-data-table__checkbox {
   width: 36px;
   text-align: center;
-  padding-right: 0;
+  padding: 0;
+  text-overflow: clip;
 }
 .fl-data-table__checkbox input {
   cursor: pointer;
