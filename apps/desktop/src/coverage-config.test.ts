@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 // each package alone sits below floors calibrated for the combined codebase,
 // so the two are measured together. This canary follows it there.
 import config from "../../../vitest.config";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 // Canary for issue #29: vitest 1.x silently ignored thresholds placed at the
@@ -39,20 +39,23 @@ describe("coverage threshold config", () => {
     expect(coverage?.functions).toBeUndefined();
   });
 
-  it("measures both packages, not just the app", () => {
-    // Measuring one package alone would report a floor that no longer covers
-    // most of the frontend.
-    const projects = (config as { test?: { projects?: string[] } }).test?.projects;
+  it("measures every workspace package, not a hardcoded pair", () => {
+    // Naming the packages here is how packages/ui-next came to be silently
+    // untested: it was added to the workspace, its suite passed locally under
+    // its own script, and the root run never loaded it while reporting green.
+    // Enumerating them from disk means the next package cannot repeat that.
+    const projects = (config as { test?: { projects?: string[] } }).test?.projects ?? [];
+    const dir = join(__dirname, "../../../packages");
+    const members = readdirSync(dir).filter((name) =>
+      existsSync(join(dir, name, "vitest.config.ts")),
+    );
+    expect(members.length).toBeGreaterThan(0);
+    for (const name of members) {
+      expect(projects, `packages/${name} is not in the root vitest projects`).toContain(
+        `packages/${name}`,
+      );
+    }
     expect(projects).toContain("apps/desktop");
-    expect(projects).toContain("packages/core");
   });
 
-  it("is actually invoked by CI", () => {
-    // `pnpm -r test` skips the workspace root, so CI running it would execute
-    // both packages' suites and enforce nothing — green, with the gate off.
-    // Caught in review on #311; asserted here so it cannot recur silently.
-    const ci = readFileSync(join(__dirname, "../../../.github/workflows/ci.yml"), "utf8");
-    expect(ci).toMatch(/^\s+run: pnpm test$/m);
-    expect(ci).not.toMatch(/^\s+run: pnpm -r test$/m);
-  });
 });

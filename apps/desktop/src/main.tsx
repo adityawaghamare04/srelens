@@ -1,13 +1,12 @@
-import "./styles/globals.css"; // Tailwind + shadcn tokens — must load first.
 import React from "react";
 import { createRoot } from "react-dom/client";
-import AppGate from "./AppGate";
 import { applyPersistedTimeout } from "@srelens/core";
 import { isTauri } from "@srelens/core/platform";
 import { initializeSettingsStorage } from "@srelens/core";
 // The service layer says what to notify; this decides how. Installed before
 // render so a toast raised during startup is not dropped on the floor.
 import { installToastNotifier } from "./ui/notifier";
+import { applyNextDesignTheme, loadDesign, switchDesign } from "./design";
 
 installToastNotifier();
 
@@ -24,6 +23,36 @@ if (!container) throw new Error("Root element #root not found");
 async function bootstrap(root: HTMLElement): Promise<void> {
   await initializeSettingsStorage();
   if (isTauri()) void applyPersistedTimeout();
+  // Both the stylesheet AND the tree are imported dynamically. Only the
+  // stylesheet is not enough: ui/index.ts imports ui/styles.css, so a
+  // statically imported AppGate drags that into the entry chunk, which
+  // index.html then links unconditionally — and the classic design's CSS would
+  // load underneath the new one. Verified against a real build.
+  if (loadDesign() === "next") {
+    // Before the stylesheet, so the first paint is already the right mode.
+    applyNextDesignTheme();
+    // Started together, awaited together: the stylesheet and the tree are
+    // independent downloads, and awaiting one before requesting the other
+    // serialised them. index.html links no stylesheet, so the window stays
+    // blank until both land — that wait is the whole startup screen.
+    const [, { NextApp }] = await Promise.all([
+      import("@srelens/ui-next/styles"),
+      import("@srelens/ui-next"),
+    ]);
+    createRoot(root).render(
+      <NextApp
+        onExit={async () => {
+          const result = await switchDesign("classic");
+          return result.ok ? null : result.reason;
+        }}
+      />,
+    );
+    return;
+  }
+  const [, { default: AppGate }] = await Promise.all([
+    import("./styles/globals.css"),
+    import("./AppGate"),
+  ]);
   createRoot(root).render(<AppGate />);
 }
 

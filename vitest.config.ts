@@ -14,12 +14,18 @@ import { defineConfig } from "vitest/config";
  */
 export default defineConfig({
   test: {
-    projects: ["apps/desktop", "packages/core"],
+    // Every workspace member with tests. A package missing here is silently
+    // untested: the root run reports green while never loading its suites.
+    projects: ["apps/desktop", "packages/core", "packages/ui-next"],
     coverage: {
       provider: "v8",
       // Never lower any of these.
       thresholds: { lines: 85, branches: 80, functions: 76 },
-      include: ["apps/desktop/src/**/*.{ts,tsx}", "packages/core/src/**/*.ts"],
+      include: [
+        "apps/desktop/src/**/*.{ts,tsx}",
+        "packages/core/src/**/*.ts",
+        "packages/ui-next/src/**/*.{ts,tsx}",
+      ],
       exclude: [
         "**/*.test.{ts,tsx}",
         "apps/desktop/src/main.tsx",
@@ -28,6 +34,7 @@ export default defineConfig({
         "apps/desktop/src/components/PodTerminal.tsx",
         "packages/core/src/index.ts",
         "packages/core/src/react.ts",
+        "packages/ui-next/src/test-setup.ts",
       ],
     },
   },

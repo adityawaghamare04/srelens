@@ -73,6 +73,7 @@ import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { McpSettingsSection } from "./McpSettingsSection";
 import { AssistantSettingsSection } from "./AssistantSettingsSection";
 import { SecuritySettingsSection } from "./SecuritySettingsSection";
+import { AppearanceSettingsSection } from "./AppearanceSettingsSection";
 import { AppLogView } from "./AppLogView";
 import { pickKubeconfigFiles, savePastedKubeconfig } from "@srelens/core";
 import { checkForUpdate, installUpdate, type UpdateMeta } from "@srelens/core";
@@ -585,6 +586,7 @@ export function SettingsView({
                   </button>
                 ))}
               </div>
+              <AppearanceSettingsSection />
             </SectionPanel>
           )}
 
