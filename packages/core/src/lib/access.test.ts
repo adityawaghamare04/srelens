@@ -4,7 +4,6 @@ import {
   canI,
   clearAccessCache,
   rbac,
-  kindToResource,
   useAccess,
   isForbidden,
   reportActionError,
@@ -40,15 +39,6 @@ describe("rbac builders", () => {
     expect(rbac.scale("apps", "deployments", "prod")).toEqual({ verb: "patch", group: "apps", resource: "deployments", subresource: "scale", namespace: "prod" });
     expect(rbac.cordon()).toEqual({ verb: "patch", resource: "nodes" });
     expect(rbac.cronjobTrigger("prod")).toEqual({ verb: "create", group: "batch", resource: "jobs", namespace: "prod" });
-  });
-});
-
-describe("kindToResource", () => {
-  it("maps known kinds to {group, resource}, null otherwise", () => {
-    expect(kindToResource("Deployment")).toEqual({ group: "apps", resource: "deployments" });
-    expect(kindToResource("Pod")).toEqual({ group: "", resource: "pods" });
-    expect(kindToResource("CronJob")).toEqual({ group: "batch", resource: "cronjobs" });
-    expect(kindToResource("Wibble")).toBeNull();
   });
 });
 

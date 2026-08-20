@@ -12,7 +12,9 @@ import {
 } from "@srelens/core";
 import { notify } from "@srelens/core";
 import { openApiSchema } from "@srelens/core";
-import { useAccess, rbac, kindToResource, reportActionError, type AccessCheck } from "@srelens/core/react";
+import { useAccess, rbac, reportActionError, type AccessCheck } from "@srelens/core/react";
+// Pure kind mapping, so it comes from the React-free entry point.
+import { kindToResource } from "@srelens/core";
 import { describeError } from "@srelens/core";
 import { Spinner, Button, ConfirmDialog } from "../ui";
 import { DiffView } from "./DiffView";

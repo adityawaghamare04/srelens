@@ -163,29 +163,3 @@ export const rbac = {
   cronjobTrigger: (namespace: string): AccessCheck => ({ verb: "create", group: "batch", resource: "jobs", namespace }),
 };
 
-/** Kind → {group, resource} for the mutating kinds (mirrors backend gvk_for). */
-export function kindToResource(kind: string): { group: string; resource: string } | null {
-  const m: Record<string, { group: string; resource: string }> = {
-    Pod: { group: "", resource: "pods" },
-    Service: { group: "", resource: "services" },
-    ConfigMap: { group: "", resource: "configmaps" },
-    Secret: { group: "", resource: "secrets" },
-    Namespace: { group: "", resource: "namespaces" },
-    Node: { group: "", resource: "nodes" },
-    PersistentVolumeClaim: { group: "", resource: "persistentvolumeclaims" },
-    ServiceAccount: { group: "", resource: "serviceaccounts" },
-    Deployment: { group: "apps", resource: "deployments" },
-    StatefulSet: { group: "apps", resource: "statefulsets" },
-    DaemonSet: { group: "apps", resource: "daemonsets" },
-    ReplicaSet: { group: "apps", resource: "replicasets" },
-    Job: { group: "batch", resource: "jobs" },
-    CronJob: { group: "batch", resource: "cronjobs" },
-    Ingress: { group: "networking.k8s.io", resource: "ingresses" },
-    NetworkPolicy: { group: "networking.k8s.io", resource: "networkpolicies" },
-    Role: { group: "rbac.authorization.k8s.io", resource: "roles" },
-    RoleBinding: { group: "rbac.authorization.k8s.io", resource: "rolebindings" },
-    ClusterRole: { group: "rbac.authorization.k8s.io", resource: "clusterroles" },
-    ClusterRoleBinding: { group: "rbac.authorization.k8s.io", resource: "clusterrolebindings" },
-  };
-  return m[kind] ?? null;
-}

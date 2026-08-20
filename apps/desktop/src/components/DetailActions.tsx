@@ -23,7 +23,9 @@ import {
   debugPod,
 } from "@srelens/core";
 import { notify } from "@srelens/core";
-import { useAccess, rbac, kindToResource, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
+import { useAccess, rbac, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
+// Pure kind mapping, so it comes from the React-free entry point.
+import { kindToResource } from "@srelens/core";
 import { getObject } from "@srelens/core";
 import {
   defaultContainer,

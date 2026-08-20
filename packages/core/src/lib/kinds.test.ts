@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "./kinds";
+import { K8S_KIND, RESOURCE_LABELS, kindToResource, type ResourceKind } from "./kinds";
 
 describe("kinds", () => {
   it("maps a resource kind to its Kubernetes kind", () => {
@@ -19,5 +19,14 @@ describe("kinds", () => {
     for (const kind of kinds) {
       expect(RESOURCE_LABELS[kind], `no label for ${kind}`).toBeTruthy();
     }
+  });
+});
+
+describe("kindToResource", () => {
+  it("maps known kinds to {group, resource}, null otherwise", () => {
+    expect(kindToResource("Deployment")).toEqual({ group: "apps", resource: "deployments" });
+    expect(kindToResource("Pod")).toEqual({ group: "", resource: "pods" });
+    expect(kindToResource("CronJob")).toEqual({ group: "batch", resource: "cronjobs" });
+    expect(kindToResource("Wibble")).toBeNull();
   });
 });
