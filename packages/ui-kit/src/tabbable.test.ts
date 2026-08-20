@@ -134,6 +134,41 @@ describe("tabbable", () => {
     expect(names(root)).toEqual(["first", "second", "flow1", "flow2"]);
   });
 
+  it("includes implicitly tabbable elements", () => {
+    // A contenteditable region and a <summary> are sequential tab stops without
+    // carrying a tabindex, so a selector listing only the classic form controls
+    // skipped them — and the trap then wrapped straight past, making them
+    // unreachable by keyboard inside a dialog. (#324 review)
+    const root = mount(`
+      <div contenteditable="true" data-n="editor"></div>
+      <details data-n="details"><summary data-n="summary">s</summary><p>body</p></details>
+      <button data-n="button">b</button>
+    `);
+    expect(names(root)).toEqual(["editor", "summary", "button"]);
+  });
+
+  it("ignores contenteditable=\"false\"", () => {
+    const root = mount(`<div contenteditable="false" data-n="off"></div><button data-n="on">b</button>`);
+    expect(names(root)).toEqual(["on"]);
+  });
+
+  it("skips controls collapsed inside a closed details", () => {
+    // A closed <details> hides its body without that showing up in the
+    // computed display of the controls inside it.
+    const root = mount(`
+      <details><summary data-n="summary">s</summary><button data-n="inside">a</button></details>
+      <button data-n="after">b</button>
+    `);
+    expect(names(root)).toEqual(["summary", "after"]);
+  });
+
+  it("includes them once the details is open", () => {
+    const root = mount(`
+      <details open><summary data-n="summary">s</summary><button data-n="inside">a</button></details>
+    `);
+    expect(names(root)).toEqual(["summary", "inside"]);
+  });
+
   it("keeps DOM order among equal tab indexes", () => {
     const root = mount(`
       <button tabindex="1" data-n="a">a</button>

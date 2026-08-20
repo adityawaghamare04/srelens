@@ -22,8 +22,48 @@
  * time. (#324 review)
  */
 
-/** Anything that could conceivably be a tab stop; the filter decides. */
-const CANDIDATES = "a[href], button, input, select, textarea, [tabindex]";
+/**
+ * Anything that could conceivably be a tab stop; the filter decides.
+ *
+ * Includes the implicit ones. A contenteditable region, a `<summary>` and a
+ * media element with controls are all sequential stops without carrying a
+ * tabindex, so listing only the classic form controls made them unreachable
+ * inside a trap — it wrapped straight past them. (#324 review)
+ */
+const CANDIDATES =
+  'a[href], button, input, select, textarea, [tabindex], summary, [contenteditable]:not([contenteditable="false"]), audio[controls], video[controls]';
+
+/**
+ * A closed `<details>` hides its body, and that does not show up in the
+ * computed display of the controls inside it. Only the summary stays
+ * reachable. (#324 review)
+ */
+function collapsedInDetails(el: HTMLElement, root: HTMLElement): boolean {
+  for (let node: HTMLElement | null = el; node && node !== root.parentElement; node = node.parentElement) {
+    const parent = node.parentElement;
+    if (
+      parent instanceof HTMLDetailsElement &&
+      !parent.open &&
+      node.tagName.toLowerCase() !== "summary"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** An explicit negative tabindex takes an element out of the tab order. */
+function negativeTabIndex(el: HTMLElement): boolean {
+  const attr = el.getAttribute("tabindex");
+  return attr !== null && Number(attr) < 0;
+}
+
+/** The element's place in the sequence: explicit if given, else the flow. */
+function tabOrder(el: HTMLElement): number {
+  const attr = el.getAttribute("tabindex");
+  const value = attr === null ? 0 : Number(attr);
+  return Number.isNaN(value) ? 0 : value;
+}
 
 /** `inert` makes a whole subtree unfocusable, and it is not a CSS property. */
 function inert(el: HTMLElement, root: HTMLElement): boolean {
@@ -62,12 +102,17 @@ export function tabbable(root: HTMLElement | null): HTMLElement[] {
     // `:disabled` covers a fieldset disabling its descendants, which the
     // element's own `disabled` property does not report.
     if (el.matches(":disabled")) return false;
-    // The effective value, whatever the tag — `:not([tabindex="-1"])` in a
-    // selector only qualifies the branch it is attached to.
-    if (el.tabIndex < 0) return false;
+    // Read the attribute rather than the `tabIndex` property. The property is
+    // the effective value in a browser, but jsdom reports -1 for implicitly
+    // focusable elements — contenteditable, summary, media with controls — so
+    // trusting it would drop exactly the stops this selector just added. The
+    // attribute is unambiguous either way, and a candidate without one is here
+    // because it is focusable by nature. (#324 review)
+    if (negativeTabIndex(el)) return false;
     if (el.hasAttribute("hidden") || el.closest("[hidden]")) return false;
     if (el instanceof HTMLInputElement && el.type === "hidden") return false;
     if (inert(el, root)) return false;
+    if (collapsedInDetails(el, root)) return false;
     if (hiddenByAncestor(el, root)) return false;
     if (isSupersededRadio(el, root)) return false;
     return true;
@@ -78,7 +123,7 @@ export function tabbable(root: HTMLElement | null): HTMLElement[] {
   // order lets the browser's real first stop sit at a nonzero array index, and
   // Shift+Tab from it escapes.
   return found
-    .map((el, index) => ({ el, index, order: el.tabIndex }))
+    .map((el, index) => ({ el, index, order: tabOrder(el) }))
     .sort((a, b) => {
       if (a.order === b.order) return a.index - b.index;
       if (a.order === 0) return 1;
