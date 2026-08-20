@@ -14,6 +14,7 @@ import { isTauri } from "../transport/platform";
 import { invokeCapability } from "../transport/transport";
 import { savePastedKubeconfig } from "./files";
 import { createCluster as createClusterWeb, type CreateClusterInput } from "./webClusters";
+import { parse as parseYaml } from "yaml";
 
 export type { CreateClusterInput };
 
@@ -55,51 +56,33 @@ export async function testClusterForm(input: CreateClusterInput): Promise<TestRe
 /**
  * The `current-context` a kubeconfig names, or null if it names none.
  *
- * Deliberately not one regex. The previous single pattern paired `\s*` around a
- * lazy body with a trailing `\s*$`, which gave the engine several ways to split
- * the same run of spaces: a 4KB line of them took 51 seconds, and the cost grew
- * cubically, so 8KB took minutes (js/polynomial-redos, #43). A kubeconfig is
- * pasted or uploaded, so that is a way to freeze the app from outside it.
+ * Parsed with the YAML library rather than matched.
  *
- * Matching only up to the end of the line and trimming in code is linear, and
- * far easier to read besides.
+ * A pattern here was a denial of service: `\s*` around a lazy body with a
+ * trailing `\s*$` gave the engine several ways to split one run of spaces, and
+ * a 4KB line took 52 seconds (js/polynomial-redos, #43). Hand-scanning instead
+ * fixed that and then got the YAML wrong three times over — `#` inside a name,
+ * `#` without preceding whitespace, `"prod\"live"`, `'prod''live'` — each a
+ * name that no cluster matches, sent to testClusterConnection as if it were
+ * real.
+ *
+ * The library already ships with this package for manifest editing, knows all
+ * of those rules, and parses a 16KB hostile line in under 4ms. Writing a
+ * fourth version of a YAML scalar reader was the wrong instinct.
  */
 export function parseCurrentContext(yaml: string): string | null {
-  const match = /^[^\S\n]*current-context:([^\n]*)$/m.exec(yaml);
-  if (!match) return null;
-  return unquoteScalar(match[1].trim());
-}
-
-/**
- * The value of a YAML scalar, with any trailing comment removed.
- *
- * Comment handling follows YAML rather than "cut at the first #": a `#` only
- * starts a comment when whitespace precedes it, and never inside quotes. A
- * context name may legitimately contain one — `prod#live` is a valid name, and
- * splitting on every `#` turned it into `prod`, or `"prod` when quoted, so
- * srelens then probed a context that does not exist.
- *
- * Done with string scanning rather than a pattern: this is on the path that
- * reads a pasted kubeconfig, and it is the ambiguity in the regex that used to
- * live here which made that path a denial of service.
- */
-function unquoteScalar(raw: string): string | null {
-  const quote = raw[0];
-  if (quote === '"' || quote === "'") {
-    const close = raw.indexOf(quote, 1);
-    // An unterminated quote is malformed; there is no scalar to read.
-    if (close === -1) return null;
-    return raw.slice(1, close) || null;
+  let document: unknown;
+  try {
+    document = parseYaml(yaml);
+  } catch {
+    // Malformed YAML has no context to read, and the backend would reject the
+    // same document anyway.
+    return null;
   }
-  // Unquoted: a comment needs whitespace in front of the `#`.
-  let end = raw.length;
-  for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === "#" && (i === 0 || raw[i - 1] === " " || raw[i - 1] === "\t")) {
-      end = i;
-      break;
-    }
-  }
-  return raw.slice(0, end).trim() || null;
+  if (typeof document !== "object" || document === null) return null;
+  const context = (document as Record<string, unknown>)["current-context"];
+  if (typeof context !== "string") return null;
+  return context.trim() || null;
 }
 
 /** Test-connect a pasted/uploaded kubeconfig by its `current-context`. */

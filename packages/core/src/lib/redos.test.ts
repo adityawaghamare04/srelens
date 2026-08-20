@@ -89,6 +89,9 @@ describe("the parsers still do their jobs", () => {
     expect(parseCurrentContext('current-context: "prod" # the live one')).toBe("prod");
     // Unterminated quote is malformed, not a name with a quote in it.
     expect(parseCurrentContext('current-context: "prod')).toBeNull();
+    // Escaped and doubled quotes belong to the name, not to the delimiter.
+    expect(parseCurrentContext('current-context: "prod\\"live"')).toBe('prod"live');
+    expect(parseCurrentContext("current-context: 'prod''live'")).toBe("prod'live");
   });
 
   it("returns null when there is no current-context to read", () => {
