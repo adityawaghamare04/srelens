@@ -1,4 +1,7 @@
 import { isTauri, notify } from "@srelens/core";
+// theme.ts imports only settingsStorage, so this does not drag the classic
+// stylesheet into the new design's chunk.
+import { getInitialTheme, resolvedThemeMode } from "./ui/theme";
 
 /**
  * Which design the app renders.
@@ -88,4 +91,25 @@ export async function switchDesign(design: Design): Promise<void> {
     }
   }
   window.location.reload();
+}
+
+/**
+ * Carry the user's light/dark choice into the new design.
+ *
+ * The two designs disagree about what `data-theme` means: the classic one puts
+ * the palette name there (`slate`) and the mode in `data-theme-mode`, while
+ * ui-next's stylesheet reads `data-theme="dark"` as the mode itself. Nothing
+ * translates between them, and a reload starts from a bare document — so
+ * without this the new design always rendered light, including for the many
+ * users on the classic default, which is dark. (#314 review)
+ *
+ * Light is the absence of the attribute, matching ui-next's `:root` tokens.
+ */
+export function applyNextDesignTheme(): void {
+  const root = document.documentElement;
+  if (resolvedThemeMode(getInitialTheme().mode) === "dark") {
+    root.dataset.theme = "dark";
+  } else {
+    delete root.dataset.theme;
+  }
 }

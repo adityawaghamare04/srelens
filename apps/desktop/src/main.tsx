@@ -6,7 +6,7 @@ import { initializeSettingsStorage } from "@srelens/core";
 // The service layer says what to notify; this decides how. Installed before
 // render so a toast raised during startup is not dropped on the floor.
 import { installToastNotifier } from "./ui/notifier";
-import { loadDesign, switchDesign } from "./design";
+import { applyNextDesignTheme, loadDesign, switchDesign } from "./design";
 
 installToastNotifier();
 
@@ -29,6 +29,8 @@ async function bootstrap(root: HTMLElement): Promise<void> {
   // index.html then links unconditionally — and the classic design's CSS would
   // load underneath the new one. Verified against a real build.
   if (loadDesign() === "next") {
+    // Before the stylesheet, so the first paint is already the right mode.
+    applyNextDesignTheme();
     await import("@srelens/ui-next/styles");
     const { NextApp } = await import("@srelens/ui-next");
     createRoot(root).render(<NextApp onExit={() => void switchDesign("classic")} />);
