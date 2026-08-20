@@ -62,8 +62,16 @@ function tabbable(root: HTMLElement | null): HTMLElement[] {
   if (!root) return [];
   return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => {
     if (el.hasAttribute("hidden") || el.closest("[hidden]")) return false;
-    const style = getComputedStyle(el);
-    return style.display !== "none" && style.visibility !== "hidden";
+    // `display` does not inherit, so asking the control alone says nothing
+    // about an ancestor being hidden — a caller wrapping part of its message in
+    // a collapsed container would leave an unfocusable control first in the
+    // list, and the trap would sit there calling a no-op focus(). Walk up to
+    // the dialog. `visibility` does inherit, so the control's own value is
+    // enough for that one. (#324 review)
+    for (let node: HTMLElement | null = el; node && node !== root.parentElement; node = node.parentElement) {
+      if (getComputedStyle(node).display === "none") return false;
+    }
+    return getComputedStyle(el).visibility !== "hidden";
   });
 }
 

@@ -418,3 +418,30 @@ describe("ConfirmDialog opener chain", () => {
     trigger.remove();
   });
 });
+
+describe("ConfirmDialog with a control under a hidden ancestor", () => {
+  it("does not try to focus a control inside a display:none wrapper", async () => {
+    // `display` does not inherit, so getComputedStyle on the control reports
+    // its own value and says nothing about an ancestor being hidden. Such a
+    // control cannot be focused, and since it precedes the actions the trap
+    // would keep re-calling a no-op focus() — holding the user outside the
+    // dialog again, one layer deeper than the hidden-input case. (#324 review)
+    render(
+      <ConfirmDialog
+        title="Apply?"
+        message={
+          <div style={{ display: "none" }}>
+            <button type="button">ghost</button>
+          </div>
+        }
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.tab();
+    expect(dialog.contains(document.activeElement), "Tab must stay inside").toBe(true);
+    expect(document.activeElement).not.toBe(screen.getByText("ghost"));
+  });
+});
