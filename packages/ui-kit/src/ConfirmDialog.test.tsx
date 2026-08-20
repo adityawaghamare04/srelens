@@ -280,3 +280,70 @@ describe("ConfirmDialog overlapping lifetimes", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
   });
 });
+
+describe("ConfirmDialog closing out of order", () => {
+  function stackTwo() {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const lower = render(
+      <ConfirmDialog title="lower" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const upper = render(
+      <ConfirmDialog title="upper" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    return { opener, lower, upper };
+  }
+
+  it("does not put focus behind a dialog that is still open", () => {
+    // The lower dialog closing used to focus its own opener — a control behind
+    // a visible modal, outside the trap, where the next Space or Enter
+    // activates something the user cannot see. (#324 review)
+    const { opener, lower } = stackTwo();
+    lower.unmount();
+    expect(document.activeElement).not.toBe(opener);
+    expect(document.body.contains(document.activeElement)).toBe(true);
+    opener.remove();
+  });
+
+  it("hands focus to the dialog that is left", () => {
+    const { opener, upper } = stackTwo();
+    const remaining = screen.getByRole("dialog", { name: "lower" });
+    upper.unmount();
+    expect(document.activeElement).toBe(remaining);
+    opener.remove();
+  });
+
+  it("returns to the opener once the last dialog closes", () => {
+    const { opener, lower, upper } = stackTwo();
+    upper.unmount();
+    lower.unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+});
+
+describe("ConfirmDialog with tall content", () => {
+  it("scrolls the message and keeps the actions in place", () => {
+    // The card is capped at max-h-full and clips. Without an internal scroll
+    // region a long message — a manifest preview, a stack of validation
+    // errors — pushes Confirm and Cancel outside the clipped area with no way
+    // to reach them. Asserted structurally: jsdom does no layout, so there is
+    // no height to measure. (#324 review)
+    render(
+      <ConfirmDialog
+        title="Apply?"
+        message={"a very long explanation. ".repeat(200)}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const message = document.getElementById(dialog.getAttribute("aria-describedby") ?? "");
+    expect(message?.className).toContain("overflow-y-auto");
+    expect(message?.className).toContain("min-h-0");
+
+    const actions = screen.getByRole("button", { name: "Cancel" }).parentElement;
+    expect(actions?.className, "the action row must not shrink away").toContain("shrink-0");
+  });
+});

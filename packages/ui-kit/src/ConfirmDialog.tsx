@@ -24,7 +24,8 @@ export interface ConfirmDialogProps {
  * component is replacing that behaviour, so it has to keep one too.
  * (#324 review)
  */
-const stack: symbol[] = [];
+type Layer = { token: symbol; el: () => HTMLElement | null };
+const stack: Layer[] = [];
 
 /**
  * How many dialogs are holding the scroll lock, and what to put back.
@@ -99,6 +100,16 @@ export function ConfirmDialog({
     // the dialog itself takes it, which still announces the title.
     (first ?? dialogRef.current)?.focus();
     return () => {
+      // Another dialog may still be on screen — either one opened over this
+      // one, or one this was opened over. Focusing this dialog's opener would
+      // put focus on a control behind a visible modal, outside the trap, where
+      // the next Space or Enter activates something the user cannot see. Hand
+      // focus to whatever layer is left instead. (#324 review)
+      const others = stack.filter((l) => l.token !== token.current);
+      if (others.length > 0) {
+        others[others.length - 1].el()?.focus();
+        return;
+      }
       if (returnFocusTo.current?.isConnected) returnFocusTo.current.focus();
     };
   }, []);
@@ -124,10 +135,10 @@ export function ConfirmDialog({
   }, []);
 
   useEffect(() => {
-    stack.push(token.current);
+    stack.push({ token: token.current, el: () => dialogRef.current });
     function onKeyDown(event: KeyboardEvent) {
       // Only the topmost dialog answers, whatever its own state.
-      if (stack[stack.length - 1] !== token.current) return;
+      if (stack[stack.length - 1]?.token !== token.current) return;
       if (event.key === "Escape") {
         if (busyRef.current) return;
         event.preventDefault();
@@ -162,7 +173,7 @@ export function ConfirmDialog({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      const at = stack.indexOf(token.current);
+      const at = stack.findIndex((l) => l.token === token.current);
       if (at >= 0) stack.splice(at, 1);
     };
   }, []);
@@ -190,15 +201,23 @@ export function ConfirmDialog({
         className="card rise flex max-h-full w-full flex-col overflow-hidden outline-none"
         style={{ maxWidth: 448 }}
       >
-        <div className="card-head">
+        <div className="card-head shrink-0">
           <div className="card-title" id={titleId}>
             {title}
           </div>
         </div>
-        <div className="section-body text-[0.8125rem] text-muted" id={messageId}>
+        {/* The card is capped at max-h-full and clips, so a long message — a
+            manifest preview, a stack of validation errors — used to push the
+            actions outside the clipped area with no way to reach them. The
+            message scrolls; the head and the actions do not shrink.
+            (#324 review) */}
+        <div
+          className="section-body min-h-0 flex-1 overflow-y-auto text-[0.8125rem] text-muted"
+          id={messageId}
+        >
           {message}
         </div>
-        <div className="card-head flex justify-end gap-2">
+        <div className="card-head flex shrink-0 justify-end gap-2">
           <Button variant="secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </Button>
