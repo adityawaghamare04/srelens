@@ -14,7 +14,10 @@ import { dirname, join, relative, resolve } from "node:path";
  * transitively while this test stayed green.
  *
  * So it now walks the actual import graph from the barrel. A module is only
- * safe if nothing it reaches, at any depth, imports React.
+ * safe if nothing it reaches, at any depth, imports React — directly, or by
+ * depending on a package that requires it. The second half was also caught in
+ * review: `notify.ts` imported `sonner`, a React component library, so the
+ * barrier held for relative imports and leaked through an external one.
  */
 
 /** Resolve a relative import specifier to a file on disk. */
@@ -47,6 +50,44 @@ function importsReact(file: string): boolean {
   return /from\s+["']react["']/.test(readFileSync(file, "utf8"));
 }
 
+/** Bare (non-relative) package specifiers a module imports. */
+function bareImports(file: string): string[] {
+  const source = readFileSync(file, "utf8");
+  return [...source.matchAll(/from\s+["']([^."'][^"']*)["']/g)]
+    .map((m) => m[1])
+    .filter((spec) => !spec.startsWith("node:"));
+}
+
+/** Package name from a specifier: "@scope/pkg/sub" -> "@scope/pkg". */
+function packageName(spec: string): string {
+  return spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+}
+
+const manifest = JSON.parse(
+  readFileSync(join(__dirname, "../package.json"), "utf8"),
+) as { dependencies?: Record<string, string> };
+
+/**
+ * Whether a declared runtime dependency needs React.
+ *
+ * Deliberately reads the *declared* dependencies rather than resolving whatever
+ * a module happens to import: an undeclared package is not installed under this
+ * package, so resolving it would throw and the check would pass by accident —
+ * which is exactly how a first attempt at this test missed `sonner`.
+ */
+function dependencyNeedsReact(name: string): boolean {
+  // Read the manifest from disk rather than require()-ing it: a package whose
+  // "exports" map omits ./package.json (@tauri-apps/plugin-process does) throws
+  // on resolution, and a throwing check is a check that passes by accident.
+  const file = join(__dirname, "../node_modules", name, "package.json");
+  if (!existsSync(file)) return false;
+  const pkg = JSON.parse(readFileSync(file, "utf8")) as {
+    dependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+  };
+  return Boolean(pkg.dependencies?.react ?? pkg.peerDependencies?.react);
+}
+
 const short = (p: string) => relative(join(__dirname, ".."), p);
 
 describe("the service layer", () => {
@@ -58,6 +99,29 @@ describe("the service layer", () => {
       // usually the one before it.
       .map(([, trail]) => trail.map(short).join("\n    -> "));
     expect(offenders, `React reachable from the barrel:\n  ${offenders.join("\n  ")}`).toEqual([]);
+  });
+
+  it("declares no runtime dependency that requires React", () => {
+    const offenders = Object.keys(manifest.dependencies ?? {}).filter(dependencyNeedsReact);
+    expect(
+      offenders,
+      `these dependencies pull React in: ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("imports nothing it has not declared", () => {
+    // A phantom dependency resolves through hoisting today and vanishes in the
+    // Docker build tomorrow — and it would slip past the check above, which can
+    // only see what is declared.
+    const declared = new Set(Object.keys(manifest.dependencies ?? {}));
+    const offenders = new Set<string>();
+    for (const [file] of reachableFrom(join(__dirname, "index.ts"))) {
+      for (const spec of bareImports(file)) {
+        const name = packageName(spec);
+        if (!declared.has(name)) offenders.add(`${short(file)} imports undeclared ${name}`);
+      }
+    }
+    expect([...offenders]).toEqual([]);
   });
 
   it("keeps the two React hooks out of the main barrel", () => {
