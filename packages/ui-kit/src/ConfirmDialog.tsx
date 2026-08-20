@@ -140,6 +140,15 @@ export function ConfirmDialog({
     };
   }, []);
 
+  // Confirming disables the button that was just pressed, and the browser then
+  // moves focus out to the document — leaving a keyboard or screen-reader user
+  // outside the modal for the whole request. The mount-only effect above cannot
+  // see that, so this watches the transition. (#324 review)
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+  }, [busy]);
+
   // The page behind a modal must not scroll under it. Locking the body is not
   // enough on its own — this design already sets `body { overflow: hidden }`,
   // so the real scroller is whichever container the app puts inside it. The
@@ -174,8 +183,10 @@ export function ConfirmDialog({
       if (event.key !== "Tab") return;
       const focusable = tabbable(dialogRef.current);
       if (focusable.length === 0) {
-        // Nothing to move to; keep focus here rather than letting it escape.
+        // Nothing to move to. Cancelling the key is not enough — if focus is
+        // already outside, it stays outside. Put it on the dialog. (#324 review)
         event.preventDefault();
+        dialogRef.current?.focus();
         return;
       }
       const first = focusable[0];

@@ -644,3 +644,37 @@ describe("ConfirmDialog tab stops match the browser's", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
   });
 });
+
+describe("ConfirmDialog while an action is in flight", () => {
+  it("keeps focus inside when confirming disables the button", () => {
+    // onConfirm starts the work and flips busy, which disables the focused
+    // Confirm button — so the browser moves focus to the document. The focus
+    // effect only ran on mount, so nothing brought it back, and a keyboard or
+    // screen-reader user sat outside the modal for the whole request.
+    // (#324 review)
+    const { rerender } = render(
+      <ConfirmDialog title="t" message="m" confirmLabel="Apply" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const confirm = screen.getByRole("button", { name: "Apply" });
+    confirm.focus();
+    expect(document.activeElement).toBe(confirm);
+
+    // jsdom does not blur a control when it becomes disabled, so the literal
+    // browser sequence cannot be reproduced here — this stands in for it by
+    // putting focus where the browser would leave it, outside the dialog.
+    confirm.blur();
+
+    rerender(
+      <ConfirmDialog title="t" message="m" busy confirmLabel="Apply" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement), "focus must stay in the modal").toBe(true);
+  });
+
+  it("puts focus on the dialog when Tab finds nothing to move to", () => {
+    render(<ConfirmDialog title="t" message="m" busy onConfirm={() => {}} onCancel={() => {}} />);
+    (document.activeElement as HTMLElement)?.blur();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+  });
+});
