@@ -152,14 +152,22 @@ export function ConfirmDialog({
       // focus to whatever layer is left instead. (#324 review)
       const others = stack.filter((l) => l.token !== token.current);
       if (others.length > 0) {
+        // Hand the opener on. A dialog opened over this one recorded a control
+        // *inside* this one as its opener, and that reference dies with this
+        // unmount — so closing it later would fail the isConnected check and
+        // drop focus on the body instead of the trigger the user came from.
+        //
+        // Every surviving layer, not just the top: with three dialogs the top's
+        // opener can still be alive inside the middle while the bottom is the
+        // one closing, so repairing only the top loses the bottom's external
+        // opener, and the middle later hands the top a reference that already
+        // died with the bottom. (#324 review)
+        for (const layer of others) {
+          const stale =
+            !layer.opener.current?.isConnected || dialogRef.current?.contains(layer.opener.current);
+          if (stale) layer.opener.current = returnFocusTo.current;
+        }
         const next = others[others.length - 1];
-        // Hand the opener on as well. A dialog opened over this one recorded a
-        // control *inside* this one as its opener, and that reference dies with
-        // this unmount — so closing it later would fail the isConnected check
-        // and drop focus on the body instead of the trigger the user came from.
-        // (#324 review)
-        const stale = !next.opener.current?.isConnected || dialogRef.current?.contains(next.opener.current);
-        if (stale) next.opener.current = returnFocusTo.current;
         // If this dialog was opened from a control inside that layer, and the
         // control is still there, it is the user's actual position — the dialog
         // root is only a fallback for when it is not. (#324 review)

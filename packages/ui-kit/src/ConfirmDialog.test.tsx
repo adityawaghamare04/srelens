@@ -535,3 +535,33 @@ describe("ConfirmDialog with a radio group in the message", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Apply" }));
   });
 });
+
+describe("ConfirmDialog with three layers", () => {
+  it("returns to the original trigger however the stack unwinds", () => {
+    // Bottom closing repaired only the top layer. The top's opener was still
+    // connected inside the middle, so nothing propagated — and when the middle
+    // then closed it handed the top an opener from the already-gone bottom.
+    // Closing the top then failed isConnected and dropped focus on the body.
+    // (#324 review)
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const bottom = render(
+      <ConfirmDialog title="bottom" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const middle = render(
+      <ConfirmDialog title="middle" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const top = render(
+      <ConfirmDialog title="top" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+
+    bottom.unmount();
+    middle.unmount();
+    top.unmount();
+
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+});
