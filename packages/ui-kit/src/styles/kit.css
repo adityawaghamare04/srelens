@@ -183,6 +183,25 @@
   .btn-danger { color: var(--sev); border-color: color-mix(in srgb, var(--sev) 32%, transparent); }
   .btn-danger:hover { background: var(--sev-wash); border-color: var(--sev); color: var(--sev); }
 
+  /* A borderless button for toolbars and row affordances, where a bordered one
+     would draw a box around every action. The classic kit's `ghost` variant;
+     distinct from `.ghost`, which is the full-width row button with an arrow. */
+  .btn-ghost { background: transparent; border-color: transparent; }
+  .btn-ghost:hover { background: var(--field); border-color: transparent; }
+
+  /* Sizes come off the element's data-size so call sites keep the classic API
+     and the measurements stay here with the rest of the appearance. */
+  .btn[data-size="xs"] { padding: 0.15rem 0.4rem; font-size: 0.6875rem; }
+  .btn[data-size="sm"] { padding: 0.22rem 0.45rem; }
+  .btn[data-size="lg"] { padding: 0.4rem 0.8rem; font-size: 0.8125rem; }
+  .btn[data-size^="icon"] { padding: 0; justify-content: center; gap: 0; }
+  .btn[data-size="icon-xs"] { width: 20px; height: 18px; }
+  .btn[data-size="icon-sm"] { width: 24px; height: 22px; }
+  .btn[data-size="icon"] { width: 28px; height: 26px; }
+  .btn[data-size="icon-lg"] { width: 32px; height: 30px; }
+
+  .btn:disabled, .icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
   /* --- badges --------------------------------------------------- */
   .badge {
     display: inline-flex;
