@@ -37,15 +37,24 @@ describe("the app entry", () => {
   });
 
   it("loads both designs dynamically, and only one per boot", () => {
-    expect(main).toMatch(/await import\(["']@srelens\/ui-next\/styles["']\)/);
-    expect(main).toMatch(/await import\(["']@srelens\/ui-next["']\)/);
-    expect(main).toMatch(/await import\(["']\.\/styles\/globals\.css["']\)/);
-    expect(main).toMatch(/await import\(["']\.\/AppGate["']\)/);
+    // Written as `import(...)` inside Promise.all rather than `await import`,
+    // so each design's stylesheet and tree download together instead of one
+    // after the other.
+    expect(main).toMatch(/import\(["']@srelens\/ui-next\/styles["']\)/);
+    expect(main).toMatch(/import\(["']@srelens\/ui-next["']\)/);
+    expect(main).toMatch(/import\(["']\.\/styles\/globals\.css["']\)/);
+    expect(main).toMatch(/import\(["']\.\/AppGate["']\)/);
     // The next-design branch must return, or the classic tree would render on
     // top of it and pull its stylesheet into the same document.
     const branch = main.slice(main.indexOf('loadDesign() === "next"'));
-    expect(branch.slice(0, branch.indexOf("await import(\"./styles/globals.css\")"))).toMatch(
-      /\breturn;/,
-    );
+    expect(branch.slice(0, branch.indexOf('import("./styles/globals.css")'))).toMatch(/\breturn;/);
+  });
+
+  it("does not serialise a design's stylesheet behind its tree", () => {
+    // Both are needed before the first paint and neither depends on the other,
+    // so awaiting one before requesting the second only lengthens the blank
+    // window. (#314 review)
+    const serial = /await import\([^)]*\);\s*(?:const[^;]*=\s*)?await import\(/.test(main);
+    expect(serial, "main.tsx awaits one import before starting the next").toBe(false);
   });
 });

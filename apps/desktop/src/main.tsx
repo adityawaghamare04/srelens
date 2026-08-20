@@ -31,8 +31,14 @@ async function bootstrap(root: HTMLElement): Promise<void> {
   if (loadDesign() === "next") {
     // Before the stylesheet, so the first paint is already the right mode.
     applyNextDesignTheme();
-    await import("@srelens/ui-next/styles");
-    const { NextApp } = await import("@srelens/ui-next");
+    // Started together, awaited together: the stylesheet and the tree are
+    // independent downloads, and awaiting one before requesting the other
+    // serialised them. index.html links no stylesheet, so the window stays
+    // blank until both land — that wait is the whole startup screen.
+    const [, { NextApp }] = await Promise.all([
+      import("@srelens/ui-next/styles"),
+      import("@srelens/ui-next"),
+    ]);
     createRoot(root).render(
       <NextApp
         onExit={async () => {
@@ -43,8 +49,10 @@ async function bootstrap(root: HTMLElement): Promise<void> {
     );
     return;
   }
-  await import("./styles/globals.css");
-  const { default: AppGate } = await import("./AppGate");
+  const [, { default: AppGate }] = await Promise.all([
+    import("./styles/globals.css"),
+    import("./AppGate"),
+  ]);
   createRoot(root).render(<AppGate />);
 }
 
