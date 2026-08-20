@@ -35,4 +35,20 @@ describe("NextApp", () => {
         expect(screen.getByRole("alert").textContent).toContain("storage refused");
       });
   });
+
+  it("follows the hash after mount, not only on a fresh load", async () => {
+    // Reading window.location.hash during render subscribes to nothing, so
+    // navigating to #gallery left the placeholder up and navigating away left
+    // the gallery up, until a reload. (#317 review)
+    render(<NextApp onExit={() => null} />);
+    expect(screen.getByRole("heading", { name: /new design/i })).toBeDefined();
+
+    window.location.hash = "#gallery";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(await screen.findByRole("heading", { name: /design system/i })).toBeDefined();
+
+    window.location.hash = "";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(await screen.findByRole("heading", { name: /new design/i })).toBeDefined();
+  });
 });

@@ -1,5 +1,27 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { Gallery } from "@srelens/ui-kit/gallery";
+
+function subscribeToHash(onChange: () => void): () => void {
+  window.addEventListener("hashchange", onChange);
+  return () => window.removeEventListener("hashchange", onChange);
+}
+
+/**
+ * The current location hash, as state rather than as a render-time read.
+ *
+ * Reading `window.location.hash` while rendering subscribes to nothing, so the
+ * browser fires `hashchange` and React never hears about it: navigating to
+ * #gallery left the placeholder up, and navigating away left the gallery up,
+ * until a reload. (#317 review)
+ */
+function useHash(): string {
+  return useSyncExternalStore(
+    subscribeToHash,
+    () => window.location.hash,
+    // No hash on a server render; the client picks it up on hydration.
+    () => "",
+  );
+}
 
 /**
  * The new design's root.
@@ -22,9 +44,9 @@ export function NextApp({ onExit }: { onExit: () => Promise<string | null> | str
     setError((await onExit()) ?? null);
   }
 
-  // A hash rather than a route: this tree has no router yet, and the gallery
-  // is a developer surface rather than a screen.
-  if (typeof window !== "undefined" && window.location.hash === "#gallery") {
+  // A hash rather than a route: this tree has no router yet, and the gallery is
+  // a developer surface rather than a screen.
+  if (useHash() === "#gallery") {
     return <Gallery />;
   }
 
