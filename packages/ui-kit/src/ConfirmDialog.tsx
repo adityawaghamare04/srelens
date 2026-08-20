@@ -1,6 +1,5 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { tabbable } from "./tabbable";
+import type { ReactNode } from "react";
+import { Dialog } from "radix-ui";
 import { Button } from "./Button";
 import { Spinner } from "./Spinner";
 
@@ -16,62 +15,26 @@ export interface ConfirmDialogProps {
 }
 
 /**
- * Every open dialog, innermost last.
- *
- * Each instance listens on the document, so without this one Escape reached all
- * of them at once: two overlapping dialogs both cancelled, and a busy dialog on
- * top — whose own handler correctly declines — let the keypress fall through and
- * cancel the one hidden underneath it. Radix kept a layer stack for this; the
- * component is replacing that behaviour, so it has to keep one too.
- * (#324 review)
- */
-type Layer = {
-  token: symbol;
-  el: () => HTMLElement | null;
-  /** The live ref, so a closing layer can hand its opener on. */
-  opener: { current: HTMLElement | null };
-};
-const stack: Layer[] = [];
-
-/**
- * How many dialogs are holding the scroll lock, and what to put back.
- *
- * Per-instance snapshots leak when dialogs overlap and unmount out of order:
- * the lower one captures "", the upper captures "hidden", and if the lower
- * closes first it unlocks the page while the upper is still open — then the
- * upper restores the "hidden" it saw and the host stays locked forever. Only
- * the first lock records the original and only the last one restores it.
- * (#324 review)
- */
-let locks = 0;
-let lockedFrom: string | null = null;
-
-
-/**
  * Modal confirmation dialog for destructive actions. Mounted only while open,
  * so dismissing — Escape, the overlay, Cancel — routes to `onCancel`.
  *
- * The classic version wrapped shadcn's Dialog and got the modal contract from
- * Radix. Under the kit's no-dependency rule every piece of it is written out
- * here, and none of it is decoration: a modal that does not trap focus lets Tab
- * walk into the page behind it, where a keyboard user can operate controls they
- * cannot see while a dialog claims to be blocking them. (#318)
+ * Built on Radix's Dialog rather than by hand. The first version of this
+ * component wrote the modal contract out itself and drew twenty-two review
+ * findings, sixteen of them in one function deciding which controls the browser
+ * treats as tab stops: hidden inputs, collapsed ancestors, radio groups, inert
+ * subtrees, positive tab indexes, `<details>` with and without a summary. That
+ * is a library-sized problem, and the library already exists.
  *
- * What Radix was doing, and is now done here:
+ * Radix is headless, so nothing about the appearance changes: the design's own
+ * `.card`, `.card-head` and `.section-body` still do all the styling, and the
+ * markup below is the same as the hand-written version's. What Radix supplies
+ * is the behaviour — focus trapping and restoration, Escape, the portal, the
+ * scroll lock, layering when dialogs stack, and the ARIA wiring.
  *
- *   - `role="dialog"` with `aria-modal`, named by its title and described by
- *     its message
- *   - focus moves in on open, to the first focusable control — Cancel, since it
- *     is first in the DOM, which is the safe default for a destructive prompt
- *   - Tab and Shift+Tab cycle within the dialog and never leave it
- *   - focus returns to whatever opened it on close
- *   - Escape and a click on the overlay cancel, but never while `busy`: the
- *     action is already in flight and dismissing would strand it
- *   - the page behind does not scroll
- *
- * `data-state="open"` is not cosmetic. Drawer looks for
- * `[role="dialog"][data-state="open"]` to decide that a layered modal owns the
- * first Escape; dropping the attribute would silently close both at once.
+ * What stays ours: `busy` blocks every dismissal path, because the action is
+ * already in flight and dismissing would strand it; and the message scrolls
+ * while the head and actions hold their place, so a long confirmation cannot
+ * push the buttons out of a clipped card.
  */
 export function ConfirmDialog({
   title,
@@ -83,187 +46,61 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const returnFocusTo = useRef<HTMLElement | null>(null);
-  const titleId = useId();
-  const messageId = useId();
-  // Read through a ref so the focus and key effects do not re-run — and so
-  // re-tear-down the trap — every time the caller passes a new closure.
-  const busyRef = useRef(busy);
-  busyRef.current = busy;
-  const cancelRef = useRef(onCancel);
-  cancelRef.current = onCancel;
-  const token = useRef(Symbol("dialog"));
-
-  // Focus in on open, and back to the opener on close.
-  useEffect(() => {
-    const opener = document.activeElement;
-    returnFocusTo.current = opener instanceof HTMLElement ? opener : null;
-    const first = tabbable(dialogRef.current)[0];
-    // While busy every control is disabled, so there may be nothing to focus;
-    // the dialog itself takes it, which still announces the title.
-    (first ?? dialogRef.current)?.focus();
-    return () => {
-      // Another dialog may still be on screen — either one opened over this
-      // one, or one this was opened over. Focusing this dialog's opener would
-      // put focus on a control behind a visible modal, outside the trap, where
-      // the next Space or Enter activates something the user cannot see. Hand
-      // focus to whatever layer is left instead. (#324 review)
-      const others = stack.filter((l) => l.token !== token.current);
-      if (others.length > 0) {
-        // Hand the opener on. A dialog opened over this one recorded a control
-        // *inside* this one as its opener, and that reference dies with this
-        // unmount — so closing it later would fail the isConnected check and
-        // drop focus on the body instead of the trigger the user came from.
-        //
-        // Every surviving layer, not just the top: with three dialogs the top's
-        // opener can still be alive inside the middle while the bottom is the
-        // one closing, so repairing only the top loses the bottom's external
-        // opener, and the middle later hands the top a reference that already
-        // died with the bottom. (#324 review)
-        for (const layer of others) {
-          const stale =
-            !layer.opener.current?.isConnected || dialogRef.current?.contains(layer.opener.current);
-          if (stale) layer.opener.current = returnFocusTo.current;
-        }
-        const next = others[others.length - 1];
-        // If this dialog was opened from a control inside that layer, and the
-        // control is still there, it is the user's actual position — the dialog
-        // root is only a fallback for when it is not. (#324 review)
-        const nextEl = next.el();
-        const launcher = returnFocusTo.current;
-        if (launcher?.isConnected && nextEl?.contains(launcher)) launcher.focus();
-        else nextEl?.focus();
-        return;
-      }
-      if (returnFocusTo.current?.isConnected) returnFocusTo.current.focus();
-    };
-  }, []);
-
-  // Confirming disables the button that was just pressed, and the browser then
-  // moves focus out to the document — leaving a keyboard or screen-reader user
-  // outside the modal for the whole request. The mount-only effect above cannot
-  // see that, so this watches the transition. (#324 review)
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
-  }, [busy]);
-
-  // The page behind a modal must not scroll under it. Locking the body is not
-  // enough on its own — this design already sets `body { overflow: hidden }`,
-  // so the real scroller is whichever container the app puts inside it. The
-  // overlay is portalled out to the body for that reason: as a fixed child of
-  // the body it is no longer a descendant of any scroll container, so a wheel
-  // over it has nothing to chain into. The body lock stays for hosts whose
-  // body does scroll. (#324 review)
-  useEffect(() => {
-    if (locks === 0) lockedFrom = document.body.style.overflow;
-    locks += 1;
-    document.body.style.overflow = "hidden";
-    return () => {
-      locks -= 1;
-      if (locks === 0) {
-        document.body.style.overflow = lockedFrom ?? "";
-        lockedFrom = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    stack.push({ token: token.current, el: () => dialogRef.current, opener: returnFocusTo });
-    function onKeyDown(event: KeyboardEvent) {
-      // Only the topmost dialog answers, whatever its own state.
-      if (stack[stack.length - 1]?.token !== token.current) return;
-      if (event.key === "Escape") {
-        if (busyRef.current) return;
-        event.preventDefault();
-        cancelRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = tabbable(dialogRef.current);
-      if (focusable.length === 0) {
-        // Nothing to move to. Cancelling the key is not enough — if focus is
-        // already outside, it stays outside. Put it on the dialog. (#324 review)
-        event.preventDefault();
-        dialogRef.current?.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      // Index rather than identity checks. Focus can sit on something that is
-      // inside the dialog but not in the tab order — the dialog root itself,
-      // which is where it lands when the dialog opens while `busy` and every
-      // control is disabled. Once `busy` clears, identity checks matched
-      // neither end, so Shift+Tab fell through to the browser and walked into
-      // the page behind the portal. -1 covers that and the outside case alike.
-      // (#324 review)
-      const at = focusable.indexOf(active as HTMLElement);
-      // Wrapping is the trap: without it Tab from the last control lands on the
-      // browser chrome and then the page behind.
-      if (event.shiftKey ? at <= 0 : at === -1 || at === focusable.length - 1) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      const at = stack.findIndex((l) => l.token === token.current);
-      if (at >= 0) stack.splice(at, 1);
-    };
-  }, []);
-
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      style={{ background: "color-mix(in srgb, var(--canvas-deep) 72%, transparent)" }}
-      onMouseDown={(event) => {
-        // mousedown, not click: a drag that starts inside the dialog and ends
-        // on the overlay would otherwise dismiss it mid-selection.
-        if (event.target !== event.currentTarget) return;
-        if (busy) return;
-        onCancel();
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) onCancel();
       }}
     >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        data-state="open"
-        aria-labelledby={titleId}
-        aria-describedby={messageId}
-        tabIndex={-1}
-        className="card rise flex max-h-full w-full flex-col overflow-hidden outline-none"
-        style={{ maxWidth: 448 }}
-      >
-        <div className="card-head shrink-0">
-          <div className="card-title" id={titleId}>
-            {title}
-          </div>
-        </div>
-        {/* The card is capped at max-h-full and clips, so a long message — a
-            manifest preview, a stack of validation errors — used to push the
-            actions outside the clipped area with no way to reach them. The
-            message scrolls; the head and the actions do not shrink.
-            (#324 review) */}
-        <div
-          className="section-body min-h-0 flex-1 overflow-y-auto text-[0.8125rem] text-muted"
-          id={messageId}
+      <Dialog.Portal>
+        <Dialog.Overlay
+          data-slot="dialog-overlay"
+          className="fixed inset-0 z-50"
+          style={{ background: "color-mix(in srgb, var(--canvas-deep) 72%, transparent)" }}
+        />
+        <Dialog.Content
+          data-slot="dialog-content"
+          // Radix isolates the background with aria-hidden on the surrounding
+          // content, which is stronger than aria-modal — it removes the page
+          // from the accessibility tree rather than asking for it to be
+          // ignored. aria-modal is set anyway: it costs nothing and is what
+          // older assistive technology looks for.
+          aria-modal="true"
+          className="card rise fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100%-3rem)] w-[calc(100%-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden outline-none"
+          style={{ maxWidth: 448 }}
+          // Both dismissal paths are blocked while the action is in flight.
+          onEscapeKeyDown={(event) => {
+            if (busy) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (busy) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (busy) event.preventDefault();
+          }}
         >
-          {message}
-        </div>
-        <div className="card-head flex shrink-0 justify-end gap-2">
-          <Button variant="secondary" onClick={onCancel} disabled={busy}>
-            {cancelLabel}
-          </Button>
-          <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={busy}>
-            {busy ? <Spinner label="Working" /> : confirmLabel}
-          </Button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+          <div className="card-head shrink-0">
+            <Dialog.Title className="card-title">{title}</Dialog.Title>
+          </div>
+          {/* The card is capped and clips, so a long message — a manifest
+              preview, a stack of validation errors — would push the actions out
+              of view. The message scrolls; the head and actions do not shrink. */}
+          <Dialog.Description asChild>
+            <div className="section-body min-h-0 flex-1 overflow-y-auto text-[0.8125rem] text-muted">
+              {message}
+            </div>
+          </Dialog.Description>
+          <div className="card-head flex shrink-0 justify-end gap-2">
+            <Button variant="secondary" onClick={onCancel} disabled={busy}>
+              {cancelLabel}
+            </Button>
+            <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={busy}>
+              {busy ? <Spinner label="Working" /> : confirmLabel}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
