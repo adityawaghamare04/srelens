@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Gallery } from "@srelens/ui-kit/gallery";
 
 /**
  * The new design's root.
@@ -19,6 +20,12 @@ export function NextApp({ onExit }: { onExit: () => Promise<string | null> | str
     // classic tree, so a failure on the way out would have been invisible and
     // this button would have looked inert. (#314 review)
     setError((await onExit()) ?? null);
+  }
+
+  // A hash rather than a route: this tree has no router yet, and the gallery
+  // is a developer surface rather than a screen.
+  if (typeof window !== "undefined" && window.location.hash === "#gallery") {
+    return <Gallery />;
   }
 
   return (

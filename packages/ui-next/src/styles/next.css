@@ -1,0 +1,4 @@
+/* The kit owns the design's tokens, base layer and component rules; ui-next
+   adds only what belongs to its shell and screens. Re-exported under ui-next's
+   own "./styles" so the app entry keeps importing exactly one stylesheet. */
+@import "@srelens/ui-kit/styles";
