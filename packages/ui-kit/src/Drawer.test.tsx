@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Drawer } from "./Drawer";
 
 /**
@@ -136,6 +138,36 @@ describe("Drawer", () => {
     expect(document.activeElement).toBe(other);
     opener.remove();
     other.remove();
+  });
+
+  it("does not grow, so its width is the one the drag set", () => {
+    // The drawer is documented as a flex sibling of the list. A layout class
+    // that also sets `flex: 1` makes flex-basis 0 and grow 1, so the inline
+    // width is ignored during sizing: the panel takes a share of the row and
+    // dragging updates state without moving anything on screen. `shrink-0`
+    // does not save it — that fixes only flex-shrink. (#323 review)
+    //
+    // Asserted against the real rule from the design's stylesheet, so this
+    // fails if `.pane` is reintroduced rather than if a class name changes.
+    const css = readFileSync(join(__dirname, "styles/kit.css"), "utf8");
+    const pane = css.match(/\.pane\s*\{[^}]*\}/)?.[0];
+    expect(pane, "the .pane rule should exist to test against").toBeTruthy();
+    const style = document.createElement("style");
+    style.textContent = `${pane}\n.shrink-0{flex-shrink:0}\n.flex{display:flex}`;
+    document.head.appendChild(style);
+    try {
+      render(
+        <Drawer open onClose={() => {}}>
+          body
+        </Drawer>,
+      );
+      const aside = screen.getByRole("complementary", { name: "Details" });
+      // `|| "0"`: an unset flex-grow reads as "" in jsdom, and unset is the
+      // initial value, which is 0. What must never hold is 1.
+      expect(getComputedStyle(aside).flexGrow || "0").toBe("0");
+    } finally {
+      style.remove();
+    }
   });
 
   it("is not a tab stop of its own", () => {

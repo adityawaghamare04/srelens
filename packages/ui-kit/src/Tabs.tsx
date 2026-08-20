@@ -42,7 +42,13 @@ export function Tabs({ tabs, active, onChange, label }: TabsProps) {
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const index = tabs.findIndex((t) => t.id === active);
+    // From the focused tab, not from `active`. A controlled parent may not have
+    // committed the change yet — a deferred update, or a parent that validates
+    // first — and computing from stale state sent the second arrow key off from
+    // a tab the user had already left. Focus is the thing that actually moved.
+    // (#323 review)
+    const focused = tabs.findIndex((t) => refs.current.get(t.id) === document.activeElement);
+    const index = focused >= 0 ? focused : tabs.findIndex((t) => t.id === active);
     if (index < 0) return;
     let next: number | null = null;
     if (event.key === "ArrowRight") next = (index + 1) % tabs.length;

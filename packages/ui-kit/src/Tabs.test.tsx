@@ -45,8 +45,12 @@ describe("Tabs keyboard behaviour", () => {
     await userEvent.keyboard("{ArrowRight}");
     expect(onChange).toHaveBeenLastCalledWith("services");
     onChange.mockClear();
+    // Back to Pods, not on to Events. Navigation follows the focused tab, not
+    // the `active` prop: a controlled parent may not have committed the change
+    // yet, and computing from stale state made a second arrow key jump from a
+    // tab the user was no longer on. (#323 review)
     await userEvent.keyboard("{ArrowLeft}");
-    expect(onChange).toHaveBeenLastCalledWith("events");
+    expect(onChange).toHaveBeenLastCalledWith("pods");
   });
 
   it("wraps at both ends", async () => {

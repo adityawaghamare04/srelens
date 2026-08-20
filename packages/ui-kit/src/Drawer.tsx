@@ -118,7 +118,10 @@ export function Drawer({
       // panel itself.
       tabIndex={-1}
       style={{ width, borderLeft: "1px solid var(--rule)", background: "var(--surface)" }}
-      className="pane relative shrink-0 outline-none"
+      // Deliberately not the design's `.pane`, which sets `flex: 1`: this panel
+      // is sized by the drag, and a growing flex child ignores its own width.
+      // (#323 review)
+      className="relative flex shrink-0 flex-col outline-none"
     >
       <div
         ref={handleRef}
