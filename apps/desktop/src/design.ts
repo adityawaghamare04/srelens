@@ -49,9 +49,18 @@ export function saveDesign(design: Design): void {
 export async function switchDesign(design: Design): Promise<void> {
   saveDesign(design);
   if (isTauri()) {
-    // The new design draws its own titlebar; the classic one uses the system's.
-    const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().setDecorations(design === "classic");
+    try {
+      // The new design draws its own titlebar; the classic one uses the
+      // system's. Cosmetic, and explicitly not allowed to block the switch:
+      // `core:window:allow-set-decorations` has to be granted in the app's
+      // capabilities, and on a build where it is not, this throws. Letting
+      // that reject left the preference written and the window unchanged, so
+      // the design only appeared after a manual restart.
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      await getCurrentWindow().setDecorations(design === "classic");
+    } catch {
+      // Wrong chrome is a blemish; not switching at all is a broken setting.
+    }
   }
   window.location.reload();
 }

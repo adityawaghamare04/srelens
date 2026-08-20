@@ -1051,3 +1051,48 @@
     }
   }
 }
+
+/* ---------------------------------------------------------------
+   The placeholder shown while the new design has no screens yet.
+   Uses the design's own tokens, so it doubles as a visible check
+   that this stylesheet — and only this one — reached the document.
+   --------------------------------------------------------------- */
+.next-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+
+.next-placeholder h1 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.next-placeholder p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-muted);
+}
+
+.next-placeholder button {
+  padding: 7px 14px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.next-placeholder button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
