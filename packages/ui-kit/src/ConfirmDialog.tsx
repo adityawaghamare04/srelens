@@ -45,41 +45,53 @@ const stack: Layer[] = [];
 let locks = 0;
 let lockedFrom: string | null = null;
 
-const FOCUSABLE =
-  'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+/** Anything that could conceivably be a tab stop; `tabbable` decides. */
+const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
 
 /**
  * The controls a user can actually reach, in order.
  *
- * Matching the selector is not enough. `<input type="hidden">` matched it and
- * cannot be focused, and since the message pane precedes the actions it sorted
- * first — so `focus()` was a no-op, initial focus stayed on the page behind,
- * and every Tab was cancelled while re-calling that no-op. The trap held the
- * user OUT of the dialog rather than in. The same goes for anything hidden or
- * display:none inside a caller's message. (#324 review)
+ * Rebuilt to ask the DOM rather than approximate it. Six review findings on
+ * this PR were all the same mistake in different clothes — a hidden input, a
+ * control under a collapsed ancestor, a radio group counted member by member, a
+ * control disabled by an ancestor fieldset, a native control with a negative
+ * tab index, and two forms sharing a radio name. Each was patched as a special
+ * case until the pattern was obvious: "matches a selector" is not "the browser
+ * will stop here", and the gap between them is where the trap turns around and
+ * holds the user *outside* the dialog. (#324 review)
+ *
+ * So the checks below are the browser's own answers wherever one exists:
+ *
+ *   `:disabled`   covers a fieldset disabling its descendants, which the
+ *                 element's own `disabled` property does not report
+ *   `tabIndex`    is the effective value for every element type, so a negative
+ *                 one is excluded whatever the tag
+ *   `el.form`     scopes a radio group, since two forms may reuse a name
+ *
+ * `display` is walked because it does not inherit; `visibility` is not, because
+ * it does.
  */
 function tabbable(root: HTMLElement | null): HTMLElement[] {
   if (!root) return [];
   return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => {
+    if (el.matches(":disabled")) return false;
+    if (el.tabIndex < 0) return false;
     if (el.hasAttribute("hidden") || el.closest("[hidden]")) return false;
-    // `display` does not inherit, so asking the control alone says nothing
-    // about an ancestor being hidden — a caller wrapping part of its message in
-    // a collapsed container would leave an unfocusable control first in the
-    // list, and the trap would sit there calling a no-op focus(). Walk up to
-    // the dialog. `visibility` does inherit, so the control's own value is
-    // enough for that one. (#324 review)
-    for (let node: HTMLElement | null = el; node && node !== root.parentElement; node = node.parentElement) {
+    if (el instanceof HTMLInputElement && el.type === "hidden") return false;
+
+    for (
+      let node: HTMLElement | null = el;
+      node && node !== root.parentElement;
+      node = node.parentElement
+    ) {
       if (getComputedStyle(node).display === "none") return false;
     }
     if (getComputedStyle(el).visibility === "hidden") return false;
-    // A radio group is a single tab stop: the browser exposes only the checked
-    // member, or the first when none is checked. Counting every radio put the
-    // checked one at a nonzero index, so Shift+Tab was waved through while the
-    // browser treated the group as the first stop — and focus left the modal.
-    // (#324 review)
+
+    // One stop per radio group, and a group is (form owner, name).
     if (el instanceof HTMLInputElement && el.type === "radio" && el.name) {
       const group = [...root.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter(
-        (r) => r.name === el.name,
+        (r) => r.name === el.name && r.form === el.form,
       );
       const stop = group.find((r) => r.checked) ?? group[0];
       if (stop !== el) return false;

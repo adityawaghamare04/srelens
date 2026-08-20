@@ -565,3 +565,82 @@ describe("ConfirmDialog with three layers", () => {
     trigger.remove();
   });
 });
+
+/**
+ * The sixth, seventh and eighth findings in `tabbable`, all the same root
+ * mistake: approximating what the browser considers a tab stop instead of
+ * asking it. (#324 review)
+ */
+describe("ConfirmDialog tab stops match the browser's", () => {
+  it("skips a control disabled by an ancestor fieldset", async () => {
+    // The control carries no disabled attribute of its own, but the browser
+    // treats it as disabled, so focus() is a no-op and the trap sits on it.
+    render(
+      <ConfirmDialog
+        title="t"
+        message={
+          <fieldset disabled>
+            <button type="button">ghost</button>
+          </fieldset>
+        }
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+  });
+
+  it("skips a native control with a negative tab index", async () => {
+    // :not([tabindex="-1"]) only qualified the generic branch, so a button or
+    // input with tabIndex={-1} was still counted — putting Cancel at a nonzero
+    // index, so Shift+Tab was waved through while the browser skipped the
+    // negative control and left the modal.
+    render(
+      <ConfirmDialog
+        title="t"
+        message={
+          <button type="button" tabIndex={-1}>
+            skipme
+          </button>
+        }
+        confirmLabel="Apply"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.tab({ shift: true });
+    expect(dialog.contains(document.activeElement), "must stay inside").toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Apply" }));
+  });
+
+  it("treats same-named radios in different forms as different groups", async () => {
+    // Two forms reusing a name are independent groups. Merging them by name
+    // dropped the second form's checked radio from the list entirely, so the
+    // browser could focus something the trap did not know about.
+    render(
+      <ConfirmDialog
+        title="t"
+        message={
+          <>
+            <form>
+              <input type="radio" name="scope" aria-label="one" defaultChecked />
+            </form>
+            <form>
+              <input type="radio" name="scope" aria-label="two" defaultChecked />
+            </form>
+          </>
+        }
+        confirmLabel="Apply"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const two = screen.getByRole("radio", { name: "two" });
+    two.focus();
+    await userEvent.tab();
+    // The second form's radio is a real stop, so Tab from it reaches Cancel.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+  });
+});
