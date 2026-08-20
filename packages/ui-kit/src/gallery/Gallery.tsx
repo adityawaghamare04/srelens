@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
-import { Field } from "../Field";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { Drawer } from "../Drawer";
+import { Field } from "../Field";
 import { IconButton } from "../IconButton";
 import { LoadingState } from "../LoadingState";
 import { Meter } from "../Meter";
@@ -46,6 +47,14 @@ export function Gallery() {
   const [ns, setNs] = useState("kube-system");
   const [tab, setTab] = useState("pods");
   const [drawer, setDrawer] = useState(false);
+  const [dialog, setDialog] = useState<null | "plain" | "danger" | "busy">(null);
+  // The busy dialog is deliberately undismissable — that is the state being
+  // shown — so the catalogue releases it rather than trapping whoever opened it.
+  useEffect(() => {
+    if (dialog !== "busy") return;
+    const timer = setTimeout(() => setDialog(null), 2500);
+    return () => clearTimeout(timer);
+  }, [dialog]);
 
   return (
     <div className="kit-gallery">
@@ -207,6 +216,37 @@ export function Gallery() {
             <Spinner label="Fetching pods" /> Fetching pods
           </span>
         </div>
+      </section>
+
+      <section>
+        <h2>ConfirmDialog</h2>
+        <div className="kit-gallery__row">
+          <Button size="xs" onClick={() => setDialog("plain")}>
+            confirm
+          </Button>
+          <Button size="xs" variant="danger" onClick={() => setDialog("danger")}>
+            destructive
+          </Button>
+          {/* In flight: both controls disabled, Escape and the overlay inert. */}
+          <Button size="xs" variant="secondary" onClick={() => setDialog("busy")}>
+            busy
+          </Button>
+        </div>
+        {dialog ? (
+          <ConfirmDialog
+            title={dialog === "danger" ? "Delete pod?" : "Apply changes?"}
+            message={
+              dialog === "danger"
+                ? "web-1 will be removed. This cannot be undone."
+                : "The manifest will be applied to the cluster."
+            }
+            confirmLabel={dialog === "danger" ? "Delete" : "Apply"}
+            danger={dialog === "danger"}
+            busy={dialog === "busy"}
+            onConfirm={() => setDialog(null)}
+            onCancel={() => setDialog(null)}
+          />
+        ) : null}
       </section>
 
       <section>
