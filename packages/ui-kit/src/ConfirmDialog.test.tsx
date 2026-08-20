@@ -347,3 +347,48 @@ describe("ConfirmDialog with tall content", () => {
     expect(actions?.className, "the action row must not shrink away").toContain("shrink-0");
   });
 });
+
+describe("ConfirmDialog with non-tabbable controls in the message", () => {
+  it("enters the dialog even when the message hides an input", async () => {
+    // `input:not([disabled])` matches <input type="hidden">, which browsers
+    // cannot focus. It sorted first because the message precedes the actions,
+    // so focus() was a no-op: initial focus stayed on the page behind, and each
+    // Tab was preventDefault'd while re-calling that no-op — trapping the user
+    // OUT of the dialog rather than in. (#324 review)
+    render(
+      <ConfirmDialog
+        title="Apply?"
+        message={
+          <form>
+            <input type="hidden" name="token" value="x" readOnly />
+            details
+          </form>
+        }
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+
+    await userEvent.tab();
+    expect(dialog.contains(document.activeElement), "Tab must stay inside").toBe(true);
+  });
+
+  it("skips a hidden control when cycling", async () => {
+    render(
+      <ConfirmDialog
+        title="Apply?"
+        message={<input type="hidden" name="token" value="x" readOnly />}
+        confirmLabel="Apply"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Apply" }));
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+  });
+});

@@ -41,7 +41,26 @@ let locks = 0;
 let lockedFrom: string | null = null;
 
 const FOCUSABLE =
-  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * The controls a user can actually reach, in order.
+ *
+ * Matching the selector is not enough. `<input type="hidden">` matched it and
+ * cannot be focused, and since the message pane precedes the actions it sorted
+ * first — so `focus()` was a no-op, initial focus stayed on the page behind,
+ * and every Tab was cancelled while re-calling that no-op. The trap held the
+ * user OUT of the dialog rather than in. The same goes for anything hidden or
+ * display:none inside a caller's message. (#324 review)
+ */
+function tabbable(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => {
+    if (el.hasAttribute("hidden") || el.closest("[hidden]")) return false;
+    const style = getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden";
+  });
+}
 
 /**
  * Modal confirmation dialog for destructive actions. Mounted only while open,
@@ -95,7 +114,7 @@ export function ConfirmDialog({
   useEffect(() => {
     const opener = document.activeElement;
     returnFocusTo.current = opener instanceof HTMLElement ? opener : null;
-    const first = dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE);
+    const first = tabbable(dialogRef.current)[0];
     // While busy every control is disabled, so there may be nothing to focus;
     // the dialog itself takes it, which still announces the title.
     (first ?? dialogRef.current)?.focus();
@@ -146,7 +165,7 @@ export function ConfirmDialog({
         return;
       }
       if (event.key !== "Tab") return;
-      const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
+      const focusable = tabbable(dialogRef.current);
       if (focusable.length === 0) {
         // Nothing to move to; keep focus here rather than letting it escape.
         event.preventDefault();
