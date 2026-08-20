@@ -41,9 +41,14 @@ function isCleanSegment(value: string): boolean {
  * single segment instead of splitting the route apart.
  */
 function segmentsOf(url: string): string[] | null {
-  const match = /^srelens:\/*(.*)$/i.exec(url.trim());
-  if (!match) return null;
-  const [path] = match[1].split(/[?#]/, 1);
+  // Two steps, not one pattern: `\/*` and `(.*)` both matched a slash, so a URL
+  // of nothing but slashes gave the engine a quadratic number of ways to split
+  // them — 2.5s at 40KB (js/polynomial-redos, #48). A deep link arrives from
+  // the OS, so its length is not ours to trust.
+  const trimmed = url.trim();
+  if (!/^srelens:/i.test(trimmed)) return null;
+  const afterScheme = trimmed.slice("srelens:".length).replace(/^\/+/, "");
+  const [path] = afterScheme.split(/[?#]/, 1);
   const raw = path.split("/").filter((segment) => segment.length > 0);
   try {
     return raw.map(decodeURIComponent);

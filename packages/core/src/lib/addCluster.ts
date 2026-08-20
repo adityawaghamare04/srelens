@@ -52,10 +52,31 @@ export async function testClusterForm(input: CreateClusterInput): Promise<TestRe
   });
 }
 
+/**
+ * The `current-context` a kubeconfig names, or null if it names none.
+ *
+ * Deliberately not one regex. The previous single pattern paired `\s*` around a
+ * lazy body with a trailing `\s*$`, which gave the engine several ways to split
+ * the same run of spaces: a 4KB line of them took 51 seconds, and the cost grew
+ * cubically, so 8KB took minutes (js/polynomial-redos, #43). A kubeconfig is
+ * pasted or uploaded, so that is a way to freeze the app from outside it.
+ *
+ * Matching only up to the end of the line and trimming in code is linear, and
+ * far easier to read besides.
+ */
+export function parseCurrentContext(yaml: string): string | null {
+  const match = /^[^\S\n]*current-context:([^\n]*)$/m.exec(yaml);
+  if (!match) return null;
+  // Strip a trailing comment, then surrounding whitespace, then quotes.
+  const withoutComment = match[1].split("#", 1)[0].trim();
+  const unquoted = /^(["'])(.*)\1$/.exec(withoutComment);
+  const context = (unquoted ? unquoted[2] : withoutComment).trim();
+  return context || null;
+}
+
 /** Test-connect a pasted/uploaded kubeconfig by its `current-context`. */
 export async function testKubeconfigYaml(yaml: string): Promise<TestResult> {
-  const match = yaml.match(/^\s*current-context:\s*["']?([^"'\n#]+?)["']?\s*$/m);
-  const context = match?.[1]?.trim();
+  const context = parseCurrentContext(yaml);
   if (!context) throw new Error("kubeconfig has no current-context to test");
   return invokeCapability<TestResult>("k8s.testClusterConnection", { yaml, context });
 }

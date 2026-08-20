@@ -15,12 +15,30 @@ export type MdBlock =
   | { kind: "table"; headers: NoteSpan[][]; rows: NoteSpan[][][] }
   | { kind: "code"; text: string };
 
-const HEADING = /^(#{1,6})\s+(.*)$/;
-const BULLET = /^[-*]\s+(.*)$/;
-const ORDERED = /^\d+\.\s+(.*)$/;
+// `[^\S\n]` rather than `\s`, and `[^\n]` rather than `.`: the two overlapped on
+// every space, so a line the pattern ultimately rejects could be split many
+// ways. Harmless in practice for these three, since callers split on newlines
+// first and none reproduced under load — but the ambiguity is real, and the
+// tighter classes say what was meant anyway (js/polynomial-redos, #45-#47).
+const HEADING = /^(#{1,6})[^\S\n]+([^\n]*)$/;
+const BULLET = /^[-*][^\S\n]+([^\n]*)$/;
+const ORDERED = /^\d+\.[^\S\n]+([^\n]*)$/;
 // A GFM header/body separator row: only pipes, dashes, colons, spaces, with at
 // least one dash (e.g. `|---|:--:|`).
-const TABLE_SEP = /^\s*\|?[\s|:-]*-[\s|:-]*\|?\s*$/;
+/**
+ * Whether a row is a markdown table's separator (`|---|:--:|`).
+ *
+ * Was one pattern with four overlapping quantifiers around a single required
+ * dash, which let the engine split a run of spaces every possible way: 10.7
+ * seconds on a 40KB row, growing quadratically (js/polynomial-redos, #44).
+ * This input is the assistant's own output, so its shape is not ours to trust.
+ *
+ * A separator is exactly "only these characters, and at least one dash", which
+ * is two unambiguous checks.
+ */
+export function isTableSeparator(row: string): boolean {
+  return row.includes("-") && /^[\s|:-]*$/.test(row);
+}
 
 /** A line looks like a table row if it has an interior pipe (`a | b`), so a
  * lone trailing/leading `|` in prose isn't mistaken for one. */
@@ -71,7 +89,7 @@ export function parseAssistantMarkdown(md: string): MdBlock[] {
     // A real GFM table has a header row, a separator row, then body rows.
     // Anything else (a stray pipe-y line) degrades to a paragraph rather than
     // vanishing.
-    if (rows.length >= 2 && TABLE_SEP.test(rows[1])) {
+    if (rows.length >= 2 && isTableSeparator(rows[1])) {
       const headers = splitRow(rows[0]).map(parseSpans);
       const body = rows.slice(2).map((r) => splitRow(r).map(parseSpans));
       blocks.push({ kind: "table", headers, rows: body });
