@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+/**
+ * Every open drawer, innermost last.
+ *
+ * Each instance listens on the document, so without this one Escape reached all
+ * of them: `ResourceBrowser` opens the assistant from a selected resource, so
+ * the detail drawer and the assistant drawer are open together in the normal
+ * flow, and one keypress dismissed both — losing the detail the user was
+ * reading rather than backing out of the assistant.
+ *
+ * The same shape as ConfirmDialog's stack. Once both land they should share one
+ * layer registry, so a drawer and a dialog order against each other by mount
+ * rather than by the role check below. (#323 review)
+ */
+const stack: symbol[] = [];
+
 export interface DrawerProps {
   open: boolean;
   title?: ReactNode;
@@ -33,6 +48,7 @@ export function Drawer({
   const handleRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const returnFocusTo = useRef<HTMLElement | null>(null);
+  const token = useRef(Symbol("drawer"));
   const startX = useRef(0);
   const startW = useRef(0);
   const widthRef = useRef(width);
@@ -95,8 +111,24 @@ export function Drawer({
   // its own meaning.
   useEffect(() => {
     if (!open) return;
+    const mine = token.current;
+    stack.push(mine);
+    return () => {
+      const at = stack.indexOf(mine);
+      if (at >= 0) stack.splice(at, 1);
+    };
+    // Deliberately keyed on `open` alone. The Escape effect below also depends
+    // on `onClose`, and a caller passing a fresh closure each render would
+    // re-run it — re-pushing this drawer and promoting it over one opened
+    // later.
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape" || e.defaultPrevented) return;
+      // Only the innermost drawer backs out.
+      if (stack[stack.length - 1] !== token.current) return;
       if (document.querySelector('[role="dialog"][data-state="open"]')) return;
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {

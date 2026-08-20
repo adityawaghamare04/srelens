@@ -212,3 +212,83 @@ describe("Drawer", () => {
     expect(aside.style.width).toBe("320px");
   });
 });
+
+/**
+ * Stacked drawers. `ResourceBrowser` opens the assistant from a selected
+ * resource, so the detail drawer and the assistant drawer are open together in
+ * the normal flow. (#323 review)
+ */
+describe("Drawer stacking", () => {
+  function two() {
+    const lower = vi.fn();
+    const upper = vi.fn();
+    const first = render(
+      <Drawer open title="detail" onClose={lower}>
+        detail
+      </Drawer>,
+    );
+    const second = render(
+      <Drawer open title="assistant" onClose={upper}>
+        assistant
+      </Drawer>,
+    );
+    return { lower, upper, first, second };
+  }
+
+  it("backs out of the innermost drawer only", () => {
+    // One Escape used to dismiss both, losing the detail the user was reading
+    // instead of backing out of the assistant over it.
+    const { lower, upper } = two();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(upper).toHaveBeenCalledTimes(1);
+    expect(lower).not.toHaveBeenCalled();
+  });
+
+  it("hands Escape back to the drawer underneath", () => {
+    const { lower, second } = two();
+    second.unmount();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(lower).toHaveBeenCalledTimes(1);
+  });
+
+  it("still lets a layered dialog take Escape ahead of every drawer", () => {
+    const { lower, upper } = two();
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-state", "open");
+    document.body.appendChild(dialog);
+    try {
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(upper).not.toHaveBeenCalled();
+      expect(lower).not.toHaveBeenCalled();
+    } finally {
+      dialog.remove();
+    }
+  });
+
+  it("does not reorder when a caller passes a new onClose each render", () => {
+    // Membership is keyed on `open` alone. Keyed on the handler too, a parent
+    // re-rendering the lower drawer would re-push it and steal Escape from the
+    // drawer opened over it.
+    const lower = vi.fn();
+    const upper = vi.fn();
+    const first = render(
+      <Drawer open title="detail" onClose={() => lower()}>
+        detail
+      </Drawer>,
+    );
+    render(
+      <Drawer open title="assistant" onClose={() => upper()}>
+        assistant
+      </Drawer>,
+    );
+    first.rerender(
+      <Drawer open title="detail" onClose={() => lower()}>
+        detail
+      </Drawer>,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(upper).toHaveBeenCalledTimes(1);
+    expect(lower).not.toHaveBeenCalled();
+  });
+});
