@@ -49,4 +49,17 @@ describe("Sparkline", () => {
     const { container: labelled } = render(<Sparkline points={[1, 2]} ariaLabel="CPU" />);
     expect(labelled.querySelector("svg")?.getAttribute("role")).toBe("img");
   });
+
+  it("anchors to zero rather than to the samples' own range", () => {
+    // Deliberate, and inherited from the mock: [90, 95] reads as high and
+    // steady rather than as a climb, and two sparklines side by side share a
+    // baseline. Asserted so a later reader does not "fix" it into range
+    // scaling, which would change every chart in the product. (#317 review)
+    const { container } = render(<Sparkline points={[90, 95]} fill={false} />);
+    const d = container.querySelector("path")?.getAttribute("d") ?? "";
+    const ys = [...d.matchAll(/[ML][\d.]+,([\d.]+)/g)].map((m) => Number(m[1]));
+    // Both samples sit in the top third of a 34px box, close together.
+    expect(Math.abs(ys[0] - ys[1])).toBeLessThan(3);
+    expect(Math.max(...ys)).toBeLessThan(34 / 3);
+  });
 });

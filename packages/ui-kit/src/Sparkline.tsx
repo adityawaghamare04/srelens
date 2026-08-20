@@ -3,8 +3,13 @@ import { toneColor, type Tone } from "./tone";
 /**
  * A trend at a glance: no axes, no labels, no interaction.
  *
- * Scaled to its own range rather than to zero, so a metric that only varies in
- * its top few percent still shows its shape.
+ * Anchored to zero, and to a maximum of at least 1, rather than scaled to the
+ * samples' own range. That is the mock's choice and it is preserved
+ * deliberately: a series of [90, 95] reads as high and steady rather than as a
+ * dramatic climb, and two sparklines side by side are comparable because they
+ * share a baseline. The cost is that a metric varying only in its top few
+ * percent looks nearly flat — which is a design decision, not an oversight, so
+ * it is not one to change while porting.
  *
  * Hardened over the version this came from. A single sample divides by
  * `points.length - 1` and puts NaN in the path data, which renders as nothing
