@@ -95,6 +95,28 @@ describe("the parsers still do their jobs", () => {
     expect(parseDeepLink("srelens://")).toBeNull();
   });
 
+  it("refuses to invent a scope the error never stated", () => {
+    // The pattern this replaced required one of the two scope markers, so a
+    // message with neither fell through to describeError's generic RBAC
+    // guidance. A truncated or aggregated-API error must not be reported as
+    // cluster-scoped just because it lacks a namespace. (#313 review)
+    expect(describeForbidden('cannot patch resource "deployments"')).toBeNull();
+    expect(describeForbidden('cannot patch resource "deployments" somewhere odd')).toBeNull();
+
+    expect(describeForbidden('cannot patch resource "nodes" at the cluster scope')).toBe(
+      "You don't have permission to patch nodes at the cluster scope.",
+    );
+    expect(
+      describeForbidden('cannot patch resource "deployments" in the namespace "prod"'),
+    ).toBe("You don't have permission to patch deployments in prod.");
+    // Both present: namespaced wins, as the old alternation ordered it.
+    expect(
+      describeForbidden(
+        'cannot patch resource "deployments" in the namespace "prod" at the cluster scope',
+      ),
+    ).toBe("You don't have permission to patch deployments in prod.");
+  });
+
   it("recognises table separators and rejects other rows", () => {
     expect(isTableSeparator("|---|---|")).toBe(true);
     expect(isTableSeparator(" --- ")).toBe(true);
