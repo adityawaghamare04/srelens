@@ -67,11 +67,39 @@ export async function testClusterForm(input: CreateClusterInput): Promise<TestRe
 export function parseCurrentContext(yaml: string): string | null {
   const match = /^[^\S\n]*current-context:([^\n]*)$/m.exec(yaml);
   if (!match) return null;
-  // Strip a trailing comment, then surrounding whitespace, then quotes.
-  const withoutComment = match[1].split("#", 1)[0].trim();
-  const unquoted = /^(["'])(.*)\1$/.exec(withoutComment);
-  const context = (unquoted ? unquoted[2] : withoutComment).trim();
-  return context || null;
+  return unquoteScalar(match[1].trim());
+}
+
+/**
+ * The value of a YAML scalar, with any trailing comment removed.
+ *
+ * Comment handling follows YAML rather than "cut at the first #": a `#` only
+ * starts a comment when whitespace precedes it, and never inside quotes. A
+ * context name may legitimately contain one — `prod#live` is a valid name, and
+ * splitting on every `#` turned it into `prod`, or `"prod` when quoted, so
+ * srelens then probed a context that does not exist.
+ *
+ * Done with string scanning rather than a pattern: this is on the path that
+ * reads a pasted kubeconfig, and it is the ambiguity in the regex that used to
+ * live here which made that path a denial of service.
+ */
+function unquoteScalar(raw: string): string | null {
+  const quote = raw[0];
+  if (quote === '"' || quote === "'") {
+    const close = raw.indexOf(quote, 1);
+    // An unterminated quote is malformed; there is no scalar to read.
+    if (close === -1) return null;
+    return raw.slice(1, close) || null;
+  }
+  // Unquoted: a comment needs whitespace in front of the `#`.
+  let end = raw.length;
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "#" && (i === 0 || raw[i - 1] === " " || raw[i - 1] === "\t")) {
+      end = i;
+      break;
+    }
+  }
+  return raw.slice(0, end).trim() || null;
 }
 
 /** Test-connect a pasted/uploaded kubeconfig by its `current-context`. */

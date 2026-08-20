@@ -73,6 +73,24 @@ describe("the parsers still do their jobs", () => {
     );
   });
 
+  it("keeps a hash that belongs to the name (#313 review)", () => {
+    // YAML starts a comment at `#` only when whitespace precedes it, and never
+    // inside quotes. Cutting at every `#` turned a valid name into a shorter
+    // one, or left a stray quote, and srelens then probed a context that does
+    // not exist.
+    expect(parseCurrentContext("current-context: prod#live")).toBe("prod#live");
+    expect(parseCurrentContext('current-context: "prod#live"')).toBe("prod#live");
+    expect(parseCurrentContext("current-context: 'prod#live'")).toBe("prod#live");
+    expect(parseCurrentContext("current-context: #only-a-comment")).toBeNull();
+    // Whitespace before the hash still ends the scalar.
+    expect(parseCurrentContext("current-context: prod # the live one")).toBe("prod");
+    expect(parseCurrentContext("current-context: prod\t# tabbed comment")).toBe("prod");
+    // A comment after a quoted scalar is still a comment.
+    expect(parseCurrentContext('current-context: "prod" # the live one')).toBe("prod");
+    // Unterminated quote is malformed, not a name with a quote in it.
+    expect(parseCurrentContext('current-context: "prod')).toBeNull();
+  });
+
   it("returns null when there is no current-context to read", () => {
     expect(parseCurrentContext("kind: Config")).toBeNull();
     expect(parseCurrentContext("current-context:")).toBeNull();
