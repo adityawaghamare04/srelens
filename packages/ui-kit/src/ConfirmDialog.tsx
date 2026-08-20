@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import { Spinner } from "./Spinner";
 
@@ -12,6 +13,18 @@ export interface ConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
 }
+
+/**
+ * Every open dialog, innermost last.
+ *
+ * Each instance listens on the document, so without this one Escape reached all
+ * of them at once: two overlapping dialogs both cancelled, and a busy dialog on
+ * top — whose own handler correctly declines — let the keypress fall through and
+ * cancel the one hidden underneath it. Radix kept a layer stack for this; the
+ * component is replacing that behaviour, so it has to keep one too.
+ * (#324 review)
+ */
+const stack: symbol[] = [];
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -62,6 +75,7 @@ export function ConfirmDialog({
   busyRef.current = busy;
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
+  const token = useRef(Symbol("dialog"));
 
   // Focus in on open, and back to the opener on close.
   useEffect(() => {
@@ -76,7 +90,13 @@ export function ConfirmDialog({
     };
   }, []);
 
-  // The page behind a modal must not scroll under it.
+  // The page behind a modal must not scroll under it. Locking the body is not
+  // enough on its own — this design already sets `body { overflow: hidden }`,
+  // so the real scroller is whichever container the app puts inside it. The
+  // overlay is portalled out to the body for that reason: as a fixed child of
+  // the body it is no longer a descendant of any scroll container, so a wheel
+  // over it has nothing to chain into. The body lock stays for hosts whose
+  // body does scroll. (#324 review)
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -86,7 +106,10 @@ export function ConfirmDialog({
   }, []);
 
   useEffect(() => {
+    stack.push(token.current);
     function onKeyDown(event: KeyboardEvent) {
+      // Only the topmost dialog answers, whatever its own state.
+      if (stack[stack.length - 1] !== token.current) return;
       if (event.key === "Escape") {
         if (busyRef.current) return;
         event.preventDefault();
@@ -117,10 +140,14 @@ export function ConfirmDialog({
       }
     }
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      const at = stack.indexOf(token.current);
+      if (at >= 0) stack.splice(at, 1);
+    };
   }, []);
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-6"
       style={{ background: "color-mix(in srgb, var(--canvas-deep) 72%, transparent)" }}
@@ -160,6 +187,7 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

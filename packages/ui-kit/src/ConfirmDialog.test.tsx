@@ -137,21 +137,32 @@ describe("ConfirmDialog modal behaviour", () => {
 
   it("cancels on a click on the overlay, but not inside the dialog", () => {
     const onCancel = vi.fn();
-    const { container } = open({ onCancel });
+    open({ onCancel });
     fireEvent.mouseDown(screen.getByRole("dialog"));
     expect(onCancel).not.toHaveBeenCalled();
-    fireEvent.mouseDown(container.firstElementChild as Element);
+    fireEvent.mouseDown(screen.getByRole("dialog").parentElement as Element);
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("ignores the overlay while busy", () => {
     const onCancel = vi.fn();
-    const { container } = open({ busy: true, onCancel });
-    fireEvent.mouseDown(container.firstElementChild as Element);
+    open({ busy: true, onCancel });
+    fireEvent.mouseDown(screen.getByRole("dialog").parentElement as Element);
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("stops the page behind from scrolling, and restores it", () => {
+  it("renders outside any scroll container", () => {
+    // Locking the body is not enough and this test used to check only that.
+    // kit.css already sets `body { overflow: hidden }`, so the real scroller is
+    // whichever container the app puts inside it — `.kit-gallery` in the
+    // catalogue — and an overlay rendered inside that container still scrolls
+    // it on a wheel. Portalled to the body it is a fixed element with no scroll
+    // container to chain into. (#324 review)
+    open();
+    expect(screen.getByRole("dialog").parentElement?.parentElement).toBe(document.body);
+  });
+
+  it("locks the body too, for hosts whose body scrolls", () => {
     expect(document.body.style.overflow).toBe("");
     const { unmount } = open();
     expect(document.body.style.overflow).toBe("hidden");
@@ -164,5 +175,47 @@ describe("ConfirmDialog modal behaviour", () => {
     // dialog rather than falling through to the page.
     open({ busy: true });
     expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+  });
+});
+
+/**
+ * Stacked dialogs. An application-level confirmation can appear over a local
+ * one — an agent asking to run something while a delete prompt is open — and
+ * each instance listens on the document. (#324 review)
+ */
+describe("ConfirmDialog stacking", () => {
+  function two(topBusy = false) {
+    const bottom = vi.fn();
+    const top = vi.fn();
+    const lower = render(
+      <ConfirmDialog title="lower" message="m" onConfirm={() => {}} onCancel={bottom} />,
+    );
+    const upper = render(
+      <ConfirmDialog title="upper" message="m" busy={topBusy} onConfirm={() => {}} onCancel={top} />,
+    );
+    return { bottom, top, lower, upper };
+  }
+
+  it("cancels only the topmost dialog", () => {
+    const { bottom, top } = two();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(top).toHaveBeenCalledTimes(1);
+    expect(bottom).not.toHaveBeenCalled();
+  });
+
+  it("does not fall through to a hidden dialog when the top one is busy", () => {
+    // The visible dialog declines Escape because its action is in flight. If
+    // the keypress carried on, it would cancel something the user cannot see.
+    const { bottom, top } = two(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(top).not.toHaveBeenCalled();
+    expect(bottom).not.toHaveBeenCalled();
+  });
+
+  it("hands Escape back when the top one closes", () => {
+    const { bottom, upper } = two();
+    upper.unmount();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(bottom).toHaveBeenCalledTimes(1);
   });
 });
