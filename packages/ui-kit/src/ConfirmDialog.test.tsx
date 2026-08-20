@@ -219,3 +219,64 @@ describe("ConfirmDialog stacking", () => {
     expect(bottom).toHaveBeenCalledTimes(1);
   });
 });
+
+/** Both found in review on #324, neither reachable by the tests that existed. */
+describe("ConfirmDialog overlapping lifetimes", () => {
+  it("keeps the scroll lock while any dialog is still open", () => {
+    // Per-instance snapshots leak when dialogs unmount out of order: the lower
+    // one restores "" while the upper is still open, and the upper then puts
+    // back the "hidden" it captured, locking the host for good.
+    expect(document.body.style.overflow).toBe("");
+    const lower = render(
+      <ConfirmDialog title="lower" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const upper = render(
+      <ConfirmDialog title="upper" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    expect(document.body.style.overflow).toBe("hidden");
+
+    lower.unmount();
+    expect(document.body.style.overflow, "still locked: a dialog is open").toBe("hidden");
+
+    upper.unmount();
+    expect(document.body.style.overflow, "restored once the last one closes").toBe("");
+  });
+
+  it("traps Shift+Tab once a busy dialog becomes interactive", async () => {
+    // Opening while busy leaves focus on the dialog root, because every control
+    // is disabled. When busy clears, the root is inside the dialog but not in
+    // its tab order, so Shift+Tab used to fall through to the page behind.
+    const { rerender } = render(
+      <ConfirmDialog
+        title="t"
+        message="m"
+        busy
+        confirmLabel="Apply"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(document.activeElement).toBe(screen.getByRole("dialog"));
+
+    rerender(
+      <ConfirmDialog
+        title="t"
+        message="m"
+        confirmLabel="Apply"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Apply" }));
+  });
+
+  it("wraps forward from the dialog root too", async () => {
+    const { rerender } = render(
+      <ConfirmDialog title="t" message="m" busy onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    rerender(<ConfirmDialog title="t" message="m" onConfirm={() => {}} onCancel={() => {}} />);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+  });
+});

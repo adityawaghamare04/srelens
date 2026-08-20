@@ -26,6 +26,19 @@ export interface ConfirmDialogProps {
  */
 const stack: symbol[] = [];
 
+/**
+ * How many dialogs are holding the scroll lock, and what to put back.
+ *
+ * Per-instance snapshots leak when dialogs overlap and unmount out of order:
+ * the lower one captures "", the upper captures "hidden", and if the lower
+ * closes first it unlocks the page while the upper is still open — then the
+ * upper restores the "hidden" it saw and the host stays locked forever. Only
+ * the first lock records the original and only the last one restores it.
+ * (#324 review)
+ */
+let locks = 0;
+let lockedFrom: string | null = null;
+
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -98,10 +111,15 @@ export function ConfirmDialog({
   // over it has nothing to chain into. The body lock stays for hosts whose
   // body does scroll. (#324 review)
   useEffect(() => {
-    const previous = document.body.style.overflow;
+    if (locks === 0) lockedFrom = document.body.style.overflow;
+    locks += 1;
     document.body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = previous;
+      locks -= 1;
+      if (locks === 0) {
+        document.body.style.overflow = lockedFrom ?? "";
+        lockedFrom = null;
+      }
     };
   }, []);
 
@@ -126,17 +144,19 @@ export function ConfirmDialog({
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
+      // Index rather than identity checks. Focus can sit on something that is
+      // inside the dialog but not in the tab order — the dialog root itself,
+      // which is where it lands when the dialog opens while `busy` and every
+      // control is disabled. Once `busy` clears, identity checks matched
+      // neither end, so Shift+Tab fell through to the browser and walked into
+      // the page behind the portal. -1 covers that and the outside case alike.
+      // (#324 review)
+      const at = focusable.indexOf(active as HTMLElement);
       // Wrapping is the trap: without it Tab from the last control lands on the
       // browser chrome and then the page behind.
-      if (!event.shiftKey && active === last) {
+      if (event.shiftKey ? at <= 0 : at === -1 || at === focusable.length - 1) {
         event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && active === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!dialogRef.current?.contains(active as Node)) {
-        event.preventDefault();
-        first.focus();
+        (event.shiftKey ? last : first).focus();
       }
     }
     document.addEventListener("keydown", onKeyDown);
