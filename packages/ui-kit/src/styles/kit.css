@@ -752,7 +752,17 @@
     flex-shrink: 0;
     background: var(--canvas-deep);
     border-bottom: 1px solid var(--rule);
+    /* Tabs have a 108px minimum and flex items do not shrink past it, so three
+       of them need 324px — more than a Drawer at its 320px minimum can give.
+       Without this the strip is clipped, or the whole panel body scrolls
+       sideways to make room for it. The strip carries its own overflow instead.
+       The scrollbar is hidden rather than shown: inside 33px it would eat the
+       tabs' height, and a tab strip that scrolls without a visible bar is what
+       every browser does with its own. (#323 review) */
+    overflow-x: auto;
+    scrollbar-width: none;
   }
+  .tabstrip::-webkit-scrollbar { display: none; }
   .tab {
     position: relative;
     display: flex;

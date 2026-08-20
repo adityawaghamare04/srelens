@@ -2,13 +2,16 @@ import { useState } from "react";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { Field } from "../Field";
+import { Drawer } from "../Drawer";
 import { IconButton } from "../IconButton";
 import { LoadingState } from "../LoadingState";
 import { Meter } from "../Meter";
+import { Panel } from "../Panel";
 import { Select } from "../Select";
 import { Sparkline } from "../Sparkline";
 import { Spinner } from "../Spinner";
 import { StatusPill } from "../StatusPill";
+import { Tabs } from "../Tabs";
 import { TextInput } from "../TextInput";
 import type { Tone } from "../tone";
 
@@ -41,6 +44,8 @@ export function Gallery() {
   const [text, setText] = useState("kube-system");
   const [empty, setEmpty] = useState("");
   const [ns, setNs] = useState("kube-system");
+  const [tab, setTab] = useState("pods");
+  const [drawer, setDrawer] = useState(false);
 
   return (
     <div className="kit-gallery">
@@ -208,6 +213,49 @@ export function Gallery() {
         <h2>LoadingState</h2>
         <LoadingState />
         <LoadingState label="Loading pods" />
+      </section>
+      <section>
+        <h2>Panel</h2>
+        <Panel title="Cluster">A titled surface.</Panel>
+        {/* Untitled omits the header rather than ruling off an empty one. */}
+        <Panel>No title at all.</Panel>
+      </section>
+
+      <section>
+        <h2>Tabs</h2>
+        <Tabs
+          tabs={[
+            { id: "pods", label: "Pods" },
+            { id: "services", label: "Services" },
+            { id: "events", label: "Events" },
+          ]}
+          active={tab}
+          onChange={setTab}
+          label="Resource views"
+        />
+        {/* The keyboard contract is the part worth checking here: the strip is
+            one Tab stop, and Left/Right/Home/End move between tabs. */}
+        <p className="text-[0.75rem] text-muted">showing: {tab}</p>
+      </section>
+
+      <section>
+        <h2>Drawer</h2>
+        <Button size="xs" onClick={() => setDrawer((v) => !v)}>
+          {drawer ? "close" : "open"} the drawer
+        </Button>
+        <div className="flex" style={{ height: 180 }}>
+          <div className="flex-1 text-[0.75rem] text-muted">
+            the list this docks beside — it shrinks rather than being covered
+          </div>
+          <Drawer
+            open={drawer}
+            title="Pod · web-1"
+            onClose={() => setDrawer(false)}
+            defaultWidth={320}
+          >
+            Drag the left edge to resize. Escape closes it.
+          </Drawer>
+        </div>
       </section>
     </div>
   );
