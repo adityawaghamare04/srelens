@@ -33,7 +33,14 @@ async function bootstrap(root: HTMLElement): Promise<void> {
     applyNextDesignTheme();
     await import("@srelens/ui-next/styles");
     const { NextApp } = await import("@srelens/ui-next");
-    createRoot(root).render(<NextApp onExit={() => void switchDesign("classic")} />);
+    createRoot(root).render(
+      <NextApp
+        onExit={async () => {
+          const result = await switchDesign("classic");
+          return result.ok ? null : result.reason;
+        }}
+      />,
+    );
     return;
   }
   await import("./styles/globals.css");

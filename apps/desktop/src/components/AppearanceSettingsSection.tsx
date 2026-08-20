@@ -18,12 +18,21 @@ export function AppearanceSettingsSection() {
   // the component is mounted.
   const [current] = useState<Design>(loadDesign);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function choose(design: Design) {
+  async function choose(design: Design) {
     // Re-picking the design already in use would reload for nothing.
     if (design === current || busy) return;
     setBusy(true);
-    void switchDesign(design);
+    setError(null);
+    const result = await switchDesign(design);
+    // A successful switch reloads, so only a refusal ever gets here. Clearing
+    // busy matters: without it both buttons stayed disabled for good, and the
+    // setting looked broken rather than unavailable. (#314 review)
+    if (!result.ok) {
+      setError(result.reason);
+      setBusy(false);
+    }
   }
 
   return (
@@ -34,10 +43,15 @@ export function AppearanceSettingsSection() {
         screens are not there yet, and the ones that are may still change. Switching reloads
         the window, and you can switch back here at any time.
       </p>
+      {error && (
+        <p className="fl-settings-hint" role="alert">
+          Could not switch design. {error}
+        </p>
+      )}
       <div role="group" aria-label="Design">
         <Button
           type="button"
-          onClick={() => choose("classic")}
+          onClick={() => void choose("classic")}
           aria-pressed={current === "classic"}
           disabled={busy}
         >
@@ -45,7 +59,7 @@ export function AppearanceSettingsSection() {
         </Button>
         <Button
           type="button"
-          onClick={() => choose("next")}
+          onClick={() => void choose("next")}
           aria-pressed={current === "next"}
           disabled={busy}
         >

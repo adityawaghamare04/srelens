@@ -11,7 +11,7 @@ vi.mock("../design", async (importOriginal) => ({
 import { AppearanceSettingsSection } from "./AppearanceSettingsSection";
 
 beforeEach(() => {
-  switchDesignMock.mockClear();
+  switchDesignMock.mockReset().mockResolvedValue({ ok: true });
   localStorage.clear();
 });
 
@@ -50,5 +50,21 @@ describe("AppearanceSettingsSection", () => {
     render(<AppearanceSettingsSection />);
     await userEvent.click(screen.getByRole("button", { name: /classic design/i }));
     expect(switchDesignMock).not.toHaveBeenCalled();
+  });
+
+  it("re-enables the buttons and says why when a switch is refused", async () => {
+    // A successful switch reloads, so only a refusal returns here. Leaving
+    // busy set disabled both buttons for good, which read as broken rather
+    // than unavailable. (#314 review)
+    switchDesignMock.mockResolvedValue({ ok: false, reason: "storage refused it" });
+    render(<AppearanceSettingsSection />);
+    const next = screen.getByRole("button", { name: /new design/i });
+    await userEvent.click(next);
+
+    expect(screen.getByRole("alert").textContent).toContain("storage refused it");
+    expect(next.hasAttribute("disabled")).toBe(false);
+    // And it can be retried, rather than needing a manual reload.
+    await userEvent.click(next);
+    expect(switchDesignMock).toHaveBeenCalledTimes(2);
   });
 });

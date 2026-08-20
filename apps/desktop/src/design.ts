@@ -1,4 +1,4 @@
-import { isTauri, notify } from "@srelens/core";
+import { isTauri } from "@srelens/core";
 // theme.ts imports only settingsStorage, so this does not drag the classic
 // stylesheet into the new design's chunk.
 import { getInitialTheme, resolvedThemeMode } from "./ui/theme";
@@ -53,6 +53,9 @@ export function saveDesign(design: Design): boolean {
  * something the platform offers. A reload on a deliberate, rare action is a
  * fair price for removing a whole class of style-bleed bug.
  */
+/** Whether a design switch went through, and why not when it did not. */
+export type SwitchResult = { ok: true } | { ok: false; reason: string };
+
 /**
  * Whether the new design draws its own titlebar yet.
  *
@@ -65,17 +68,16 @@ export function saveDesign(design: Design): boolean {
  */
 const NEXT_DESIGN_DRAWS_ITS_OWN_CHROME = false;
 
-export async function switchDesign(design: Design): Promise<void> {
+export async function switchDesign(design: Design): Promise<SwitchResult> {
   if (!saveDesign(design)) {
     // The choice could not be persisted, so a reload would come back on the
     // old design — and on desktop it could do so with the chrome already
-    // changed. Better to leave everything alone and say nothing changed than
-    // to reload into a window that contradicts the setting.
-    notify.error(
-      "Could not switch design",
-      "This device would not let srelens save the preference.",
-    );
-    return;
+    // changed. Leave everything alone and report it.
+    //
+    // Reported to the caller rather than raised as a toast: the toast host
+    // lives in the classic tree, so a failure while leaving the new design
+    // would have been invisible, and the button would have looked inert.
+    return { ok: false, reason: "This device would not let srelens save the preference." };
   }
   if (isTauri() && NEXT_DESIGN_DRAWS_ITS_OWN_CHROME) {
     try {
@@ -91,6 +93,7 @@ export async function switchDesign(design: Design): Promise<void> {
     }
   }
   window.location.reload();
+  return { ok: true };
 }
 
 /**
@@ -105,11 +108,22 @@ export async function switchDesign(design: Design): Promise<void> {
  *
  * Light is the absence of the attribute, matching ui-next's `:root` tokens.
  */
-export function applyNextDesignTheme(): void {
-  const root = document.documentElement;
-  if (resolvedThemeMode(getInitialTheme().mode) === "dark") {
-    root.dataset.theme = "dark";
-  } else {
-    delete root.dataset.theme;
-  }
+export function applyNextDesignTheme(): () => void {
+  const apply = () => {
+    const root = document.documentElement;
+    if (resolvedThemeMode(getInitialTheme().mode) === "dark") {
+      root.dataset.theme = "dark";
+    } else {
+      delete root.dataset.theme;
+    }
+  };
+  apply();
+
+  // Someone on "system" changes appearance while the app is open, and the new
+  // tree has no equivalent of the classic App's matchMedia effect, so it would
+  // sit on a stale palette until the next reload. (#314 review)
+  if (getInitialTheme().mode !== "system") return () => {};
+  const query = window.matchMedia("(prefers-color-scheme: dark)");
+  query.addEventListener("change", apply);
+  return () => query.removeEventListener("change", apply);
 }

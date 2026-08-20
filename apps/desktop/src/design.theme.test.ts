@@ -49,4 +49,44 @@ describe("applyNextDesignTheme", () => {
     applyNextDesignTheme();
     expect(document.documentElement.dataset.theme).not.toBe("slate");
   });
+
+  it("follows the OS while the app is open, for a system preference", () => {
+    // The classic tree has a matchMedia effect for this; without an equivalent
+    // the new tree sat on a stale palette until a reload. (#314 review)
+    const listeners: Array<() => void> = [];
+    const removed: Array<() => void> = [];
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: (_: string, fn: () => void) => listeners.push(fn),
+      removeEventListener: (_: string, fn: () => void) => removed.push(fn),
+    }));
+    getInitialThemeMock.mockReturnValue({ name: "slate", mode: "system" });
+    resolvedThemeModeMock.mockReturnValue("light");
+
+    const stop = applyNextDesignTheme();
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(listeners).toHaveLength(1);
+
+    // The OS goes dark; the attribute must follow without a reload.
+    resolvedThemeModeMock.mockReturnValue("dark");
+    listeners[0]();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    stop();
+    expect(removed).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not subscribe when the mode is fixed", () => {
+    const listeners: Array<() => void> = [];
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: (_: string, fn: () => void) => listeners.push(fn),
+      removeEventListener: () => {},
+    }));
+    getInitialThemeMock.mockReturnValue({ name: "slate", mode: "dark" });
+    applyNextDesignTheme();
+    expect(listeners).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
 });

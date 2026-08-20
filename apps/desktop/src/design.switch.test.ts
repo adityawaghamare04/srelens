@@ -37,7 +37,7 @@ afterEach(() => {
 
 describe("switchDesign", () => {
   it("saves the choice and reloads", async () => {
-    await switchDesign("next");
+    expect((await switchDesign("next")).ok).toBe(true);
     expect(localStorage.getItem(DESIGN_KEY)).toBe("next");
     expect(reload).toHaveBeenCalledTimes(1);
   });
@@ -60,9 +60,12 @@ describe("switchDesign", () => {
       throw new Error("denied");
     };
     try {
-      await switchDesign("next");
+      const result = await switchDesign("next");
       expect(reload).not.toHaveBeenCalled();
-      expect(notifyErrorMock).toHaveBeenCalled();
+      // Reported back rather than toasted: the toast host lives in the classic
+      // tree, so a failure while leaving the new design would be invisible.
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.reason).toBeTruthy();
     } finally {
       Storage.prototype.setItem = original;
     }
