@@ -1,13 +1,12 @@
-import "./styles/globals.css"; // Tailwind + shadcn tokens — must load first.
 import React from "react";
 import { createRoot } from "react-dom/client";
-import AppGate from "./AppGate";
 import { applyPersistedTimeout } from "@srelens/core";
 import { isTauri } from "@srelens/core/platform";
 import { initializeSettingsStorage } from "@srelens/core";
 // The service layer says what to notify; this decides how. Installed before
 // render so a toast raised during startup is not dropped on the floor.
 import { installToastNotifier } from "./ui/notifier";
+import { loadDesign, switchDesign } from "./design";
 
 installToastNotifier();
 
@@ -24,6 +23,19 @@ if (!container) throw new Error("Root element #root not found");
 async function bootstrap(root: HTMLElement): Promise<void> {
   await initializeSettingsStorage();
   if (isTauri()) void applyPersistedTimeout();
+  // Both the stylesheet AND the tree are imported dynamically. Only the
+  // stylesheet is not enough: ui/index.ts imports ui/styles.css, so a
+  // statically imported AppGate drags that into the entry chunk, which
+  // index.html then links unconditionally — and the classic design's CSS would
+  // load underneath the new one. Verified against a real build.
+  if (loadDesign() === "next") {
+    await import("@srelens/ui-next/styles");
+    const { NextApp } = await import("@srelens/ui-next");
+    createRoot(root).render(<NextApp onExit={() => void switchDesign("classic")} />);
+    return;
+  }
+  await import("./styles/globals.css");
+  const { default: AppGate } = await import("./AppGate");
   createRoot(root).render(<AppGate />);
 }
 
