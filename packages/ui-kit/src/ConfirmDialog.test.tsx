@@ -392,3 +392,29 @@ describe("ConfirmDialog with non-tabbable controls in the message", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
   });
 });
+
+describe("ConfirmDialog opener chain", () => {
+  it("returns to the original trigger after the lower dialog closes first", () => {
+    // The upper dialog's opener is a control inside the lower one, so once the
+    // lower unmounts that reference is disconnected: the isConnected check
+    // fails and focus lands on the body instead of the trigger the user came
+    // from. Closing lower-first then upper is the sequence that exposes it.
+    // (#324 review)
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const lower = render(
+      <ConfirmDialog title="lower" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const upper = render(
+      <ConfirmDialog title="upper" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+
+    lower.unmount();
+    upper.unmount();
+
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
+});

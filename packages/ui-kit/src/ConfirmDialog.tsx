@@ -24,7 +24,12 @@ export interface ConfirmDialogProps {
  * component is replacing that behaviour, so it has to keep one too.
  * (#324 review)
  */
-type Layer = { token: symbol; el: () => HTMLElement | null };
+type Layer = {
+  token: symbol;
+  el: () => HTMLElement | null;
+  /** The live ref, so a closing layer can hand its opener on. */
+  opener: { current: HTMLElement | null };
+};
 const stack: Layer[] = [];
 
 /**
@@ -126,7 +131,15 @@ export function ConfirmDialog({
       // focus to whatever layer is left instead. (#324 review)
       const others = stack.filter((l) => l.token !== token.current);
       if (others.length > 0) {
-        others[others.length - 1].el()?.focus();
+        const next = others[others.length - 1];
+        // Hand the opener on as well. A dialog opened over this one recorded a
+        // control *inside* this one as its opener, and that reference dies with
+        // this unmount — so closing it later would fail the isConnected check
+        // and drop focus on the body instead of the trigger the user came from.
+        // (#324 review)
+        const stale = !next.opener.current?.isConnected || dialogRef.current?.contains(next.opener.current);
+        if (stale) next.opener.current = returnFocusTo.current;
+        next.el()?.focus();
         return;
       }
       if (returnFocusTo.current?.isConnected) returnFocusTo.current.focus();
@@ -154,7 +167,7 @@ export function ConfirmDialog({
   }, []);
 
   useEffect(() => {
-    stack.push({ token: token.current, el: () => dialogRef.current });
+    stack.push({ token: token.current, el: () => dialogRef.current, opener: returnFocusTo });
     function onKeyDown(event: KeyboardEvent) {
       // Only the topmost dialog answers, whatever its own state.
       if (stack[stack.length - 1]?.token !== token.current) return;
