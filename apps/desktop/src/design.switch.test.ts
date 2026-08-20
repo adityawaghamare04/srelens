@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const { isTauriMock, setDecorationsMock } = vi.hoisted(() => ({
+const { isTauriMock, setDecorationsMock, notifyErrorMock } = vi.hoisted(() => ({
   isTauriMock: vi.fn(),
   setDecorationsMock: vi.fn(),
+  notifyErrorMock: vi.fn(),
 }));
-vi.mock("@srelens/core/platform", () => ({ isTauri: isTauriMock, isWeb: () => false }));
+vi.mock("@srelens/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@srelens/core")>()),
+  isTauri: isTauriMock,
+  notify: { error: notifyErrorMock, success: vi.fn(), info: vi.fn() },
+}));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ setDecorations: setDecorationsMock }),
 }));
@@ -18,6 +23,7 @@ beforeEach(() => {
   localStorage.clear();
   reload.mockClear();
   setDecorationsMock.mockReset().mockResolvedValue(undefined);
+  notifyErrorMock.mockClear();
   isTauriMock.mockReturnValue(true);
   originalLocation = window.location;
   Object.defineProperty(window, "location", {
@@ -36,24 +42,30 @@ describe("switchDesign", () => {
     expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("drops the window decorations for the new design and restores them for classic", async () => {
+  it("leaves the system chrome alone while the new design has none of its own", async () => {
+    // NextApp is a heading, a paragraph and a button. Dropping the decorations
+    // now would leave a frameless window with no drag region and no window
+    // controls — unmovable, unminimisable, closable only by quitting. This
+    // flips when the design's own titlebar lands. (#314 review)
     await switchDesign("next");
-    expect(setDecorationsMock).toHaveBeenCalledWith(false);
-    setDecorationsMock.mockClear();
-    await switchDesign("classic");
-    expect(setDecorationsMock).toHaveBeenCalledWith(true);
+    expect(setDecorationsMock).not.toHaveBeenCalled();
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
-  it("still reloads when setting the decorations fails", async () => {
-    // `core:window:allow-set-decorations` is not granted by default, so this
-    // call throws on a build whose capabilities have not been updated. The
-    // decorations are cosmetic; the switch is not, and a rejected promise here
-    // left the user staring at an unchanged window with the preference already
-    // written — the design would only appear on the next manual restart.
-    setDecorationsMock.mockRejectedValue(new Error("window.set_decorations not allowed"));
-    await switchDesign("next");
-    expect(localStorage.getItem(DESIGN_KEY)).toBe("next");
-    expect(reload).toHaveBeenCalledTimes(1);
+  it("does not reload when the choice could not be saved", async () => {
+    // Reloading would come back on the old design, since the next boot reads
+    // no preference — a switch that silently undoes itself. (#314 review)
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      throw new Error("denied");
+    };
+    try {
+      await switchDesign("next");
+      expect(reload).not.toHaveBeenCalled();
+      expect(notifyErrorMock).toHaveBeenCalled();
+    } finally {
+      Storage.prototype.setItem = original;
+    }
   });
 
   it("reloads on web, where there are no decorations to set", async () => {
