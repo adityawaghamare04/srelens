@@ -13,9 +13,11 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 # package.json is not in the image.
 COPY apps/desktop/package.json apps/desktop/package.json
 COPY packages/core/package.json packages/core/package.json
+COPY packages/ui-next/package.json packages/ui-next/package.json
 RUN pnpm install --frozen-lockfile
 # Sources after install, so a source-only change does not re-run install.
 COPY packages/core packages/core
+COPY packages/ui-next packages/ui-next
 COPY apps/desktop apps/desktop
 RUN pnpm --filter @srelens/desktop build
 
