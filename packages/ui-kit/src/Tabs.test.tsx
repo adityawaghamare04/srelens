@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Tabs } from "./Tabs";
 
 const tabs = [
@@ -91,5 +93,27 @@ describe("Tabs keyboard behaviour", () => {
   it("names the strip when given a label", () => {
     render(<Tabs tabs={tabs} active="pods" onChange={() => {}} label="Resource views" />);
     expect(screen.getByRole("tablist", { name: "Resource views" })).toBeDefined();
+  });
+});
+
+describe("Tabs in a narrow container", () => {
+  it("carries its own horizontal overflow", () => {
+    // Each tab has a 108px minimum and flex items do not shrink past it, so
+    // three tabs need 324px. A Drawer at its 320px minimum offers about 296px,
+    // so without containment the strip is clipped or the whole panel body
+    // scrolls sideways — and the resource detail already ships three tabs,
+    // Helm four. Asserted on the stylesheet because the overflow lives there
+    // and jsdom does no layout. (#323 review)
+    const css = readFileSync(join(__dirname, "styles/kit.css"), "utf8");
+    const strip = css.match(/\.tabstrip\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(strip, "the .tabstrip rule should exist").toBeTruthy();
+    expect(strip).toContain("overflow-x: auto");
+  });
+
+  it("does not spend the strip's height on a scrollbar", () => {
+    // The strip is 33px tall; a visible horizontal bar would eat the tabs.
+    const css = readFileSync(join(__dirname, "styles/kit.css"), "utf8");
+    expect(css).toMatch(/\.tabstrip\s*\{[^}]*scrollbar-width:\s*none/);
+    expect(css).toContain(".tabstrip::-webkit-scrollbar");
   });
 });
