@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 /**
  * No component may name a colour of its own.
@@ -15,30 +15,53 @@ import { join } from "node:path";
  */
 const HEX = /#[0-9a-fA-F]{3,8}\b/;
 
+/**
+ * Every source under `src`, at any depth, as a path relative to it.
+ *
+ * Recursive because a flat listing made "kit-wide" untrue the moment a
+ * component moved into a folder: `gallery/Gallery.tsx` already existed and was
+ * already exempt, and any future grouping would have opted itself out of both
+ * rules while this suite stayed green. (#317 review)
+ */
+function sources(dir: string = __dirname): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return sources(path);
+    if (!/\.tsx?$/.test(entry.name) || entry.name.includes(".test.")) return [];
+    return [relative(__dirname, path)];
+  });
+}
+
+function read(file: string): string {
+  // Strip comments: both rules are discussed in prose in several places.
+  return readFileSync(join(__dirname, file), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "");
+}
+
 describe("the design system", () => {
-  const sources = readdirSync(__dirname).filter(
-    (f) => (f.endsWith(".tsx") || f.endsWith(".ts")) && !f.includes(".test."),
-  );
+  const files = sources();
 
   it("has components to check", () => {
-    expect(sources.length).toBeGreaterThan(0);
+    expect(files.length).toBeGreaterThan(0);
+  });
+
+  it("looks inside subdirectories", () => {
+    // Guards the guard: with a flat listing this suite passes while silently
+    // exempting whole folders. Conditional so that flattening the kit later is
+    // not a spurious failure — it only demands recursion where nesting exists.
+    const nested = readdirSync(__dirname, { withFileTypes: true }).some((e) => e.isDirectory());
+    if (!nested) return;
+    expect(files.some((f) => f.includes(sep))).toBe(true);
   });
 
   it("names no colour outside the tokens", () => {
-    const offenders = sources.filter((f) => {
-      const source = readFileSync(join(__dirname, f), "utf8");
-      // Strip comments: the rule is discussed in prose in several places.
-      return HEX.test(source.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, ""));
-    });
+    const offenders = files.filter((f) => HEX.test(read(f)));
     expect(offenders, `raw colour values in: ${offenders.join(", ")}`).toEqual([]);
   });
 
   it("does not depend on the service layer", () => {
     // A design system that knows about capabilities is not reusable, and the
     // boundary is far easier to keep than to recover.
-    const offenders = sources.filter((f) =>
-      /@srelens\/core/.test(readFileSync(join(__dirname, f), "utf8")),
-    );
-    expect(offenders).toEqual([]);
+    const offenders = files.filter((f) => /@srelens\/core/.test(read(f)));
+    expect(offenders, `service-layer imports in: ${offenders.join(", ")}`).toEqual([]);
   });
 });
