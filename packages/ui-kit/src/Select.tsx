@@ -25,7 +25,8 @@ export interface SelectProps {
  *
  * `placeholder` becomes a disabled leading option, which is how a native select
  * says "nothing chosen yet"; it appears only when no option matches the current
- * value, so it never competes with a real selection.
+ * value, so it never competes with a real selection — and when it appears, it is
+ * what the control shows.
  */
 export function Select({
   value,
@@ -36,10 +37,16 @@ export function Select({
   "aria-label": ariaLabel,
 }: SelectProps) {
   const unmatched = !options.some((o) => o.value === value);
+  // A controlled value matching no option leaves the browser free to choose,
+  // and it chooses the first enabled one — so the control displayed a value the
+  // parent state did not hold, in the very state where nothing is selected yet.
+  // Rendering the placeholder's value instead selects the placeholder when
+  // there is one, and selects nothing when there is not. (#322 review)
+  const rendered = unmatched ? "" : value;
   return (
     <div className="relative inline-flex items-center">
       <select
-        value={value}
+        value={rendered}
         onChange={(e) => onValueChange(e.target.value)}
         aria-label={ariaLabel}
         className={cx(
@@ -48,9 +55,14 @@ export function Select({
         )}
         style={{ background: "var(--surface-sunk)", borderColor: "var(--rule)" }}
       >
-        {placeholder && unmatched ? (
-          <option value="" disabled>
-            {placeholder}
+        {unmatched ? (
+          // Rendered whenever the value matches nothing, with or without
+          // placeholder text: `rendered` needs an option to land on, or the
+          // browser falls back to the first real one and the control shows a
+          // value nobody chose. Hidden when it has no text, so an unlabelled
+          // blank never becomes a visible row in the list.
+          <option value="" disabled hidden={!placeholder}>
+            {placeholder ?? ""}
           </option>
         ) : null}
         {options.map((o) => (

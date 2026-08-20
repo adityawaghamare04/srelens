@@ -56,6 +56,40 @@ describe("Select", () => {
     expect(screen.queryByRole("option", { name: "Pick one" })).toBeNull();
   });
 
+  it("shows the placeholder, not the first option, when the value matches nothing", () => {
+    // A controlled value matching no option leaves the browser to pick, and it
+    // picks the first enabled one — so the control claimed "a" was selected
+    // while the parent state said otherwise. Showing a value nobody chose is
+    // worse than showing none, and this is exactly the state where nothing is
+    // chosen yet. (#322 review)
+    render(
+      <Select
+        value="none"
+        onValueChange={() => {}}
+        options={[{ value: "a" }, { value: "b" }]}
+        placeholder="Pick a context"
+        aria-label="Context"
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "Context" }) as HTMLSelectElement;
+    expect(select.options[select.selectedIndex]?.text).toBe("Pick a context");
+  });
+
+  it("selects nothing rather than inventing a value when there is no placeholder", () => {
+    render(
+      <Select
+        value="none"
+        onValueChange={() => {}}
+        options={[{ value: "a" }, { value: "b" }]}
+        aria-label="Context"
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "Context" }) as HTMLSelectElement;
+    // Not "a": with nothing to land on the browser picks the first real option,
+    // which is the same misleading display as the placeholder case.
+    expect(select.options[select.selectedIndex]?.text).toBe("");
+  });
+
   it("does not let the placeholder be chosen", () => {
     render(
       <Select value="" onValueChange={() => {}} options={options} placeholder="Pick one" aria-label="Namespace" />,
