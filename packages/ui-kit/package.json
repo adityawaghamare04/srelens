@@ -1,19 +1,16 @@
 {
-  "name": "@srelens/ui-next",
+  "name": "@srelens/ui-kit",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.tsx",
-    "./styles": "./src/styles/next.css"
+    ".": "./src/index.ts",
+    "./styles": "./src/styles/kit.css",
+    "./gallery": "./src/gallery/Gallery.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@srelens/core": "workspace:*",
-    "@srelens/ui-kit": "workspace:*"
   },
   "peerDependencies": {
     "react": "^19.0.0",

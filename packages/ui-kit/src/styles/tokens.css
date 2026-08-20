@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Tailwind scans the source tree of whatever app builds it, and this package
+   sits outside that tree, so utilities used only by the kit were never
+   generated: `h-[5px]` and `text-[0.6875rem]` produced no rule at all, and
+   `text-muted` was dropped despite `--color-muted` being a theme colour. The
+   Meter's track collapsed to no height, which made every bar invisible in a
+   real build while the unit tests stayed green. Declared beside the import so
+   the kit carries its own scan into any consumer rather than each app
+   remembering to add it. (#317 review) */
+@source "../**/*.tsx";
+@source not "../**/*.test.tsx";
+
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
 /* ---------------------------------------------------------------
