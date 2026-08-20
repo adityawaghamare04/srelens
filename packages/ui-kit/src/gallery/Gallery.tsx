@@ -3,8 +3,12 @@ import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { Field } from "../Field";
 import { IconButton } from "../IconButton";
+import { LoadingState } from "../LoadingState";
 import { Meter } from "../Meter";
+import { Select } from "../Select";
 import { Sparkline } from "../Sparkline";
+import { Spinner } from "../Spinner";
+import { StatusPill } from "../StatusPill";
 import { TextInput } from "../TextInput";
 import type { Tone } from "../tone";
 
@@ -36,6 +40,7 @@ export function Gallery() {
   // into a component that never updates is not a working example of it.
   const [text, setText] = useState("kube-system");
   const [empty, setEmpty] = useState("");
+  const [ns, setNs] = useState("kube-system");
 
   return (
     <div className="kit-gallery">
@@ -147,6 +152,62 @@ export function Gallery() {
         <Field label="Manifest" action={<Button size="xs">Preview</Button>}>
           <TextInput value={empty} onValueChange={setEmpty} />
         </Field>
+      </section>
+
+      <section>
+        <h2>Select</h2>
+        <div className="kit-gallery__row">
+          <Select
+            value={ns}
+            onValueChange={setNs}
+            options={[{ value: "default" }, { value: "kube-system" }, { value: "argocd" }]}
+            aria-label="a namespace"
+          />
+          {/* An empty string is a real value here, not a sentinel. */}
+          <Select
+            value=""
+            onValueChange={() => {}}
+            options={[{ value: "", label: "All namespaces" }, { value: "default" }]}
+            aria-label="an all-namespaces select"
+          />
+          {/* Nothing chosen yet: the placeholder leads and cannot be picked. */}
+          <Select
+            value="none"
+            onValueChange={() => {}}
+            options={[{ value: "a" }, { value: "b" }]}
+            placeholder="Pick a context"
+            aria-label="an unselected select"
+          />
+        </div>
+      </section>
+
+      <section>
+        <h2>StatusPill</h2>
+        <div className="kit-gallery__row">
+          <StatusPill status="Running" kind="success" />
+          <StatusPill status="Pending" kind="warning" />
+          <StatusPill status="CrashLoopBackOff" kind="danger" />
+          <StatusPill status="Terminating" kind="info" />
+          <StatusPill status="Unknown" />
+        </div>
+      </section>
+
+      <section>
+        <h2>Spinner</h2>
+        <div className="kit-gallery__row">
+          <Spinner />
+          <Spinner className="size-8" />
+          {/* Inline beside text is where it spends most of its life. */}
+          <span className="inline-flex items-center gap-2 text-[0.8125rem]">
+            <Spinner label="Fetching pods" /> Fetching pods
+          </span>
+        </div>
+      </section>
+
+      <section>
+        <h2>LoadingState</h2>
+        <LoadingState />
+        <LoadingState label="Loading pods" />
       </section>
     </div>
   );
