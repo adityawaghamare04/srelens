@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { tabbable } from "./tabbable";
 import { Button } from "./Button";
 import { Spinner } from "./Spinner";
 
@@ -45,60 +46,6 @@ const stack: Layer[] = [];
 let locks = 0;
 let lockedFrom: string | null = null;
 
-/** Anything that could conceivably be a tab stop; `tabbable` decides. */
-const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
-
-/**
- * The controls a user can actually reach, in order.
- *
- * Rebuilt to ask the DOM rather than approximate it. Six review findings on
- * this PR were all the same mistake in different clothes — a hidden input, a
- * control under a collapsed ancestor, a radio group counted member by member, a
- * control disabled by an ancestor fieldset, a native control with a negative
- * tab index, and two forms sharing a radio name. Each was patched as a special
- * case until the pattern was obvious: "matches a selector" is not "the browser
- * will stop here", and the gap between them is where the trap turns around and
- * holds the user *outside* the dialog. (#324 review)
- *
- * So the checks below are the browser's own answers wherever one exists:
- *
- *   `:disabled`   covers a fieldset disabling its descendants, which the
- *                 element's own `disabled` property does not report
- *   `tabIndex`    is the effective value for every element type, so a negative
- *                 one is excluded whatever the tag
- *   `el.form`     scopes a radio group, since two forms may reuse a name
- *
- * `display` is walked because it does not inherit; `visibility` is not, because
- * it does.
- */
-function tabbable(root: HTMLElement | null): HTMLElement[] {
-  if (!root) return [];
-  return [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => {
-    if (el.matches(":disabled")) return false;
-    if (el.tabIndex < 0) return false;
-    if (el.hasAttribute("hidden") || el.closest("[hidden]")) return false;
-    if (el instanceof HTMLInputElement && el.type === "hidden") return false;
-
-    for (
-      let node: HTMLElement | null = el;
-      node && node !== root.parentElement;
-      node = node.parentElement
-    ) {
-      if (getComputedStyle(node).display === "none") return false;
-    }
-    if (getComputedStyle(el).visibility === "hidden") return false;
-
-    // One stop per radio group, and a group is (form owner, name).
-    if (el instanceof HTMLInputElement && el.type === "radio" && el.name) {
-      const group = [...root.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter(
-        (r) => r.name === el.name && r.form === el.form,
-      );
-      const stop = group.find((r) => r.checked) ?? group[0];
-      if (stop !== el) return false;
-    }
-    return true;
-  });
-}
 
 /**
  * Modal confirmation dialog for destructive actions. Mounted only while open,
