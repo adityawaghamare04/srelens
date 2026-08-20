@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 // each package alone sits below floors calibrated for the combined codebase,
 // so the two are measured together. This canary follows it there.
 import config from "../../../vitest.config";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // Canary for issue #29: vitest 1.x silently ignored thresholds placed at the
 // top level of `coverage` — they only bite under `coverage.thresholds`. This
@@ -43,5 +45,14 @@ describe("coverage threshold config", () => {
     const projects = (config as { test?: { projects?: string[] } }).test?.projects;
     expect(projects).toContain("apps/desktop");
     expect(projects).toContain("packages/core");
+  });
+
+  it("is actually invoked by CI", () => {
+    // `pnpm -r test` skips the workspace root, so CI running it would execute
+    // both packages' suites and enforce nothing — green, with the gate off.
+    // Caught in review on #311; asserted here so it cannot recur silently.
+    const ci = readFileSync(join(__dirname, "../../../.github/workflows/ci.yml"), "utf8");
+    expect(ci).toMatch(/^\s+run: pnpm test$/m);
+    expect(ci).not.toMatch(/^\s+run: pnpm -r test$/m);
   });
 });
