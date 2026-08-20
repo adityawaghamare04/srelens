@@ -5,7 +5,7 @@ import React from "react";
 const { notifyMock } = vi.hoisted(() => ({
   notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
-vi.mock("../lib/notify", () => ({ notify: notifyMock }));
+vi.mock("@srelens/core/lib/notify", () => ({ notify: notifyMock }));
 
 import { CopyAsKubectlButton } from "./CopyAsKubectlButton";
 

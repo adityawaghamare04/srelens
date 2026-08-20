@@ -7,24 +7,24 @@ const { applyManifestMock, diffManifestMock, notifyMock } = vi.hoisted(() => ({
   diffManifestMock: vi.fn(),
   notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn(), updateAvailable: vi.fn() },
 }));
-vi.mock("../lib/manifest", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/manifest")>()),
+vi.mock("@srelens/core/lib/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@srelens/core/lib/manifest")>()),
   applyManifest: applyManifestMock,
   diffManifest: diffManifestMock,
   validateManifest: vi.fn().mockResolvedValue({ valid: true }),
 }));
-vi.mock("../lib/notify", () => ({ notify: notifyMock }));
-vi.mock("../lib/schema", () => ({ openApiSchema: vi.fn().mockResolvedValue({ error: "n/a" }) }));
+vi.mock("@srelens/core/lib/notify", () => ({ notify: notifyMock }));
+vi.mock("@srelens/core/lib/schema", () => ({ openApiSchema: vi.fn().mockResolvedValue({ error: "n/a" }) }));
 vi.mock("../ui/CodeEditor", () => ({
   CodeEditor: ({ value, onChange, ariaLabel }: { value: string; onChange?: (v: string) => void; ariaLabel?: string }) => (
     <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange?.(e.target.value)} />
   ),
 }));
-vi.mock("../lib/access", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/access")>();
+vi.mock("@srelens/core/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/access")>();
   return { ...actual, useAccess: vi.fn() };
 });
-import { useAccess } from "../lib/access";
+import { useAccess } from "@srelens/core/react";
 
 import { ManifestEditor } from "./ManifestEditor";
 

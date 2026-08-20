@@ -49,8 +49,8 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
-import { listContexts, deleteContext, type ClusterContext } from "../lib/clusters";
-import { notify } from "../lib/notify";
+import { listContexts, deleteContext, type ClusterContext } from "@srelens/core";
+import { notify } from "@srelens/core";
 import {
   DEFAULT_WORKSPACE_LAYOUT,
   REQUEST_TIMEOUT,
@@ -66,18 +66,18 @@ import {
   type UpdateChannel,
   type WorkspaceLayoutSettings,
   orderContexts,
-} from "../lib/settings";
-import { UI_SCALE, applyUiScale, getUiScale, setUiScale, stepUiScale } from "../lib/uiScale";
-import { updateRequestTimeout } from "../lib/requestTimeout";
+} from "@srelens/core";
+import { UI_SCALE, applyUiScale, getUiScale, setUiScale, stepUiScale } from "@srelens/core";
+import { updateRequestTimeout } from "@srelens/core";
 import { ContextAvatar, CONTEXT_LOGO_OPTIONS } from "./ContextAvatar";
 import { McpSettingsSection } from "./McpSettingsSection";
 import { AssistantSettingsSection } from "./AssistantSettingsSection";
 import { SecuritySettingsSection } from "./SecuritySettingsSection";
 import { AppLogView } from "./AppLogView";
-import { pickKubeconfigFiles, savePastedKubeconfig } from "../lib/files";
-import { checkForUpdate, installUpdate, type UpdateMeta } from "../lib/updater";
-import { appVersion, relaunchApp } from "../transport/transport";
-import { isTauri } from "../transport/platform";
+import { pickKubeconfigFiles, savePastedKubeconfig } from "@srelens/core";
+import { checkForUpdate, installUpdate, type UpdateMeta } from "@srelens/core";
+import { appVersion, relaunchApp } from "@srelens/core/transport";
+import { isTauri } from "@srelens/core/platform";
 import { WebKubeconfigSection } from "./WebKubeconfigSection";
 import { WebAddClusterSection } from "./WebAddClusterSection";
 import { WebClusterSignInSection } from "./WebClusterSignInSection";

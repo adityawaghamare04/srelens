@@ -5,7 +5,7 @@ import { ClusterHotbar } from "./components/ClusterHotbar";
 import { ResourceTabs, type TabDescriptor } from "./components/ResourceTabs";
 import { Sidebar } from "./components/Sidebar";
 import { ResourceBrowser } from "./components/ResourceBrowser";
-import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "./lib/kinds";
+import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { CustomResourceBrowser } from "./components/CustomResourceBrowser";
 import { ClusterOverview } from "./components/ClusterOverview";
 import { PortForwardsView } from "./components/PortForwardsView";
@@ -17,7 +17,7 @@ import { ToolboxView } from "./components/ToolboxView";
 import { AssistantTab } from "./components/AssistantTab";
 import { CommandPalette } from "./components/CommandPalette";
 import { ShortcutCheatSheet } from "./components/ShortcutCheatSheet";
-import { isTypingTarget, matchesShortcut } from "./lib/shortcuts";
+import { isTypingTarget, matchesShortcut } from "@srelens/core";
 import { McpConfirmDialog } from "./components/McpConfirmDialog";
 import { VaultGate } from "./components/VaultGate";
 import { Toaster } from "./components/ui/sonner";
@@ -25,13 +25,13 @@ import { Dock, type DockSession, type DockKind } from "./components/Dock";
 import { StatusBar } from "./components/StatusBar";
 import { LandingPage } from "./components/LandingPage";
 import { getInitialTheme, applyTheme, type Theme, type ThemeMode, type ThemeName } from "./ui";
-import { listCrds, type CrdRef } from "./lib/crds";
+import { listCrds, type CrdRef } from "@srelens/core";
 import {
   isClusterScopedKind,
   isNavigableResourceKind,
   targetNamespace,
   type ResourceTarget,
-} from "./lib/resourceNavigation";
+} from "@srelens/core";
 import {
   loadClusterNamespaces,
   saveClusterNamespaces,
@@ -51,10 +51,10 @@ import {
   orderContexts,
   loadUpdateChannel,
   loadMcpSettings,
-} from "./lib/settings";
-import { applyUiScale, getUiScale, setUiScale, stepUiScale, uiScaleShortcut } from "./lib/uiScale";
-import { dedupeDeepLinkTargets, parseDeepLink, type DeepLinkTarget } from "./lib/deepLink";
-import { applyViewPatch, type TabViewState } from "./lib/tabView";
+} from "@srelens/core";
+import { applyUiScale, getUiScale, setUiScale, stepUiScale, uiScaleShortcut } from "@srelens/core";
+import { dedupeDeepLinkTargets, parseDeepLink, type DeepLinkTarget } from "@srelens/core";
+import { applyViewPatch, type TabViewState } from "@srelens/core";
 import {
   remapTabsToContexts,
   mergeFromNames,
@@ -63,8 +63,8 @@ import {
   migrateRecordKeys,
   projectOrderToNames,
   projectToNames,
-} from "./lib/contextIdentity";
-import { invokeCommand } from "./transport/transport";
+} from "@srelens/core";
+import { invokeCommand } from "@srelens/core/transport";
 import {
   loadOpenTabs,
   scheduleSaveOpenTabs,
@@ -73,17 +73,17 @@ import {
   pruneMissingContexts,
   reconcileActiveTab,
   reconcileCrdTabs,
-} from "./lib/openTabs";
-import { flushSettingsWrites } from "./lib/settingsStorage";
-import { startMcpHttp } from "./lib/mcp";
-import { checkForUpdateAndNotify } from "./lib/updateNotifier";
-import { notify } from "./lib/notify";
-import { isTauri, isWeb } from "./transport/platform";
+} from "@srelens/core";
+import { flushSettingsWrites } from "@srelens/core";
+import { startMcpHttp } from "@srelens/core";
+import { checkForUpdateAndNotify } from "@srelens/core";
+import { notify } from "@srelens/core";
+import { isTauri, isWeb } from "@srelens/core/platform";
 import type { SettingsSection } from "./components/SettingsView";
-import { listContexts, deleteContext, type ClusterContext } from "./lib/clusters";
-import { deletePod } from "./lib/workloads";
-import { clearAccessCache } from "./lib/access";
-import type { ViewTab } from "./lib/tabs";
+import { listContexts, deleteContext, type ClusterContext } from "@srelens/core";
+import { deletePod } from "@srelens/core";
+import { clearAccessCache } from "@srelens/core/react";
+import type { ViewTab } from "@srelens/core";
 
 /** How long a closing window waits for the settings write to land. */
 const CLOSE_WRITE_TIMEOUT_MS = 2000;

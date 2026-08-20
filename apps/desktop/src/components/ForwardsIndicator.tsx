@@ -8,7 +8,7 @@ import {
   stopPortForward,
   forwardAddress,
   type ActiveForward,
-} from "../lib/forward";
+} from "@srelens/core";
 
 /** Subscribe to the active port-forwards store. */
 export function useForwards(): ActiveForward[] {

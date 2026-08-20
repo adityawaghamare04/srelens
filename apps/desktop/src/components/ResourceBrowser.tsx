@@ -5,8 +5,8 @@ import {
   type PodSummary,
   type DeploymentSummary,
   type ServiceSummary,
-} from "../lib/workloads";
-import { useNamespaceOptions } from "../lib/useNamespaceOptions";
+} from "@srelens/core";
+import { useNamespaceOptions } from "@srelens/core/react";
 import {
   listNodes,
   listResource,
@@ -14,7 +14,7 @@ import {
   type NodeSummary,
   type ResourceRow,
   type EventSummary,
-} from "../lib/manifest";
+} from "@srelens/core";
 import {
   type StatefulSetSummary,
   type DaemonSetSummary,
@@ -24,47 +24,47 @@ import {
   type SecretSummary,
   type ResourceQuotaSummary,
   type LimitRangeSummary,
-} from "../lib/controllers";
+} from "@srelens/core";
 import {
   type IngressSummary,
   type EndpointSliceSummary,
   type NetworkPolicySummary,
-} from "../lib/network";
+} from "@srelens/core";
 import {
   formatStorageSize,
   type PvcSummary,
   type PvSummary,
   type StorageClassSummary,
-} from "../lib/storage";
+} from "@srelens/core";
 import {
   type ServiceAccountSummary,
   type RoleSummary,
   type ClusterRoleSummary,
   type RoleBindingSummary,
   type ClusterRoleBindingSummary,
-} from "../lib/rbac";
+} from "@srelens/core";
 
 type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 type PodRow = PodSummary & { cpu?: number; memory?: number };
-import { watchResource, WATCHABLE_KINDS, type WatchHandle, type WatchStatus } from "../lib/watch";
-import type { TabViewState } from "../lib/tabView";
+import { watchResource, WATCHABLE_KINDS, type WatchHandle, type WatchStatus } from "@srelens/core";
+import type { TabViewState } from "@srelens/core";
 import {
   parseNamespaceSelection,
   serializeNamespaceSelection,
   watchNamespaceForSelection,
   rowInSelection,
-} from "../lib/namespaces";
+} from "@srelens/core";
 import { NamespaceMultiSelect } from "../ui/NamespaceMultiSelect";
 import { PodActions, ResourceActions, ServiceForwardAction, desiredReplicasForDetail } from "./DetailActions";
 import { BulkActionBar } from "./BulkActionBar";
 import { NodeCordonAction } from "./NodeCordonAction";
 import { ResourceDetail } from "./ResourceDetail";
 import { AssistantDrawer, type AssistantContext } from "./AssistantDrawer";
-import { isTauri } from "../transport/platform";
-import type { OpenResource } from "../lib/resourceNavigation";
-import { describeError } from "../lib/errors";
-import { ageSortValue } from "../lib/age";
-import { emptyListMessage } from "../lib/onboarding";
+import { isTauri } from "@srelens/core/platform";
+import type { OpenResource } from "@srelens/core";
+import { describeError } from "@srelens/core";
+import { ageSortValue } from "@srelens/core";
+import { emptyListMessage } from "@srelens/core";
 import {
   Table,
   filterTableData,
@@ -82,7 +82,7 @@ import {
   type Column,
   type StatusKind,
 } from "../ui";
-import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "../lib/kinds";
+import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 
 
 

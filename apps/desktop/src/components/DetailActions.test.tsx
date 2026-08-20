@@ -21,11 +21,11 @@ const {
   cronjobTriggerNowMock: vi.fn(),
   debugPodMock: vi.fn(),
 }));
-vi.mock("../lib/workloads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/workloads")>();
+vi.mock("@srelens/core/lib/workloads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/workloads")>();
   return { ...actual, deletePod: deletePodMock, evictPod: evictPodMock };
 });
-vi.mock("../lib/actions", () => ({
+vi.mock("@srelens/core/lib/actions", () => ({
   deleteResource: deleteResourceMock,
   scaleResource: scaleResourceMock,
   rolloutRestart: rolloutRestartMock,
@@ -34,21 +34,21 @@ vi.mock("../lib/actions", () => ({
   debugPod: debugPodMock,
 }));
 const { getObjectMock } = vi.hoisted(() => ({ getObjectMock: vi.fn() }));
-vi.mock("../lib/manifest", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/manifest")>();
+vi.mock("@srelens/core/lib/manifest", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/manifest")>();
   return { ...actual, getObject: getObjectMock };
 });
 const { notifyMock } = vi.hoisted(() => ({
   notifyMock: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
-vi.mock("../lib/notify", () => ({ notify: notifyMock }));
+vi.mock("@srelens/core/lib/notify", () => ({ notify: notifyMock }));
 
-vi.mock("../lib/access", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/access")>();
+vi.mock("@srelens/core/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/access")>();
   return { ...actual, useAccess: vi.fn() };
 });
-import { useAccess } from "../lib/access";
-import { describeError } from "../lib/errors";
+import { useAccess } from "@srelens/core/react";
+import { describeError } from "@srelens/core";
 
 import {
   PodActions,

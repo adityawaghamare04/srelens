@@ -3,10 +3,12 @@ import { Bot, Check, ChevronDown, ChevronRight, Copy, Paperclip, Sparkles, Wrenc
 import { listen } from "@tauri-apps/api/event";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge, Button, Spinner, TextInput } from "../ui";
-import { cancelChat, listAgents, startChat, sendChat, type AgentEvent, type AgentInfo, type ToolStatus } from "../lib/chat";
-import { respondToConfirm, type ConfirmRequest } from "../lib/mcpSecurity";
-import { getPrompt, listPrompts, type PromptSummary } from "../lib/prompts";
-import { listSkills, loadSkill, type SkillMeta } from "../lib/skills";
+import { cancelChat, listAgents, startChat, sendChat, type AgentEvent, type AgentInfo } from "@srelens/core";
+// Named the same as toolbox's ToolStatus, so taken from its own module.
+import type { ToolStatus } from "@srelens/core/lib/chat";
+import { respondToConfirm, type ConfirmRequest } from "@srelens/core";
+import { getPrompt, listPrompts, type PromptSummary } from "@srelens/core";
+import { listSkills, loadSkill, type SkillMeta } from "@srelens/core";
 import {
   deleteSession as deleteSessionCmd,
   listSessions,
@@ -16,9 +18,9 @@ import {
   type SessionMeta,
   type StoredMessage,
   type StoredToolCall,
-} from "../lib/chatHistory";
-import { relativeTime } from "../lib/relativeTime";
-import { settingsStorage } from "../lib/settingsStorage";
+} from "@srelens/core";
+import { relativeTime } from "@srelens/core";
+import { settingsStorage } from "@srelens/core";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 
 export type AssistantContext = { context: string; namespace?: string; kind?: string; name?: string };

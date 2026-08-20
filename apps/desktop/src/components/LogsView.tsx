@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Clock, Download, DownloadCloud, History, Pause, Play, RefreshCw, WrapText } from "lucide-react";
-import { podLogs, podsForSelector } from "../lib/workloads";
-import { getObject } from "../lib/manifest";
-import { startLogStream, type LogStream, type LogTarget, type LogStatus } from "../lib/logsStream";
-import { saveTextFile } from "../lib/files";
+import { podLogs, podsForSelector } from "@srelens/core";
+import { getObject } from "@srelens/core";
+import { startLogStream, type LogStream, type LogTarget, type LogStatus } from "@srelens/core";
+import { saveTextFile } from "@srelens/core";
 import { Spinner, Select, IconButton, TextInput, avatarColor } from "../ui";
 import { computeLogWindow } from "./logWindow";
-import { isTauri } from "../transport/platform";
+import { isTauri } from "@srelens/core/platform";
 
 /**
  * Save `content` to `filename`: in the desktop app via the native save
