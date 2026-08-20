@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Copy, FolderOpen, RefreshCw } from "lucide-react";
-import { appLogPath, readAppLog, revealAppLog } from "../lib/appLog";
+import { appLogPath, readAppLog, revealAppLog } from "@srelens/core";
 import { Button, IconButton, Select, Spinner, TextInput } from "../ui";
-import { isTauri } from "../transport/platform";
+import { isTauri } from "@srelens/core/platform";
 
 /** Log levels emitted by tauri-plugin-log, most→least severe. */
 const LEVELS = ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] as const;

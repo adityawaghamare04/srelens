@@ -8,8 +8,14 @@ FROM node:26-slim@sha256:4ebb5ace66f15a24c14c492e01a8beeed4fddf970a856109f5126e7
 RUN npm install -g pnpm@9
 WORKDIR /src
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# Every workspace member's manifest must land before install: @srelens/desktop
+# depends on @srelens/core as workspace:*, and pnpm cannot link a package whose
+# package.json is not in the image.
 COPY apps/desktop/package.json apps/desktop/package.json
+COPY packages/core/package.json packages/core/package.json
 RUN pnpm install --frozen-lockfile
+# Sources after install, so a source-only change does not re-run install.
+COPY packages/core packages/core
 COPY apps/desktop apps/desktop
 RUN pnpm --filter @srelens/desktop build
 

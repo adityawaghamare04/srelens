@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import React from "react";
 
-vi.mock("../lib/access", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/access")>();
+vi.mock("@srelens/core/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/access")>();
   return { ...actual, useAccess: vi.fn() };
 });
-import { useAccess } from "../lib/access";
+import { useAccess } from "@srelens/core/react";
 
 import { NodeCordonAction } from "./NodeCordonAction";
 

@@ -2,9 +2,14 @@ import "./styles/globals.css"; // Tailwind + shadcn tokens — must load first.
 import React from "react";
 import { createRoot } from "react-dom/client";
 import AppGate from "./AppGate";
-import { applyPersistedTimeout } from "./lib/requestTimeout";
-import { isTauri } from "./transport/platform";
-import { initializeSettingsStorage } from "./lib/settingsStorage";
+import { applyPersistedTimeout } from "@srelens/core";
+import { isTauri } from "@srelens/core/platform";
+import { initializeSettingsStorage } from "@srelens/core";
+// The service layer says what to notify; this decides how. Installed before
+// render so a toast raised during startup is not dropped on the floor.
+import { installToastNotifier } from "./ui/notifier";
+
+installToastNotifier();
 
 // Re-apply the persisted request timeout to the backend, which resets to its
 // default each launch. Fire-and-forget: it resolves well before the user picks

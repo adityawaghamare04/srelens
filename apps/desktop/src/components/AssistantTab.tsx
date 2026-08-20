@@ -1,8 +1,8 @@
 import React, { useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, MessageSquarePlus, Plus, Trash2, Wrench } from "lucide-react";
 import { Button } from "../ui";
-import { relativeTime } from "../lib/relativeTime";
-import type { SessionMeta } from "../lib/chatHistory";
+import { relativeTime } from "@srelens/core";
+import type { SessionMeta } from "@srelens/core";
 import { AssistantConversation, type AssistantConversationHandle } from "./AssistantConversation";
 import { SkillsPanel } from "./SkillsPanel";
 

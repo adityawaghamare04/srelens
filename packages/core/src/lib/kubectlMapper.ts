@@ -4,7 +4,7 @@
  * anything, just generates the CLI equivalent for display/copy.
  */
 
-import { kindToResource } from "./access";
+import { kindToResource } from "./kinds";
 
 export interface KubectlInput {
   action:

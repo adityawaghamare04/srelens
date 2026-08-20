@@ -9,16 +9,16 @@ const { podLogsMock, getObjectMock, podsForSelectorMock, startLogStreamMock } = 
   podsForSelectorMock: vi.fn(),
   startLogStreamMock: vi.fn(),
 }));
-vi.mock("../lib/workloads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/workloads")>();
+vi.mock("@srelens/core/lib/workloads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/workloads")>();
   return { ...actual, podLogs: podLogsMock, podsForSelector: podsForSelectorMock };
 });
-vi.mock("../lib/logsStream", () => ({ startLogStream: startLogStreamMock }));
+vi.mock("@srelens/core/lib/logsStream", () => ({ startLogStream: startLogStreamMock }));
 
 const { saveTextFileMock } = vi.hoisted(() => ({ saveTextFileMock: vi.fn() }));
-vi.mock("../lib/files", () => ({ saveTextFile: saveTextFileMock }));
-vi.mock("../lib/manifest", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/manifest")>();
+vi.mock("@srelens/core/lib/files", () => ({ saveTextFile: saveTextFileMock }));
+vi.mock("@srelens/core/lib/manifest", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/manifest")>();
   return { ...actual, getObject: getObjectMock };
 });
 

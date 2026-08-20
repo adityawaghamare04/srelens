@@ -13,7 +13,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { deletePod, evictPod, type PodSummary } from "../lib/workloads";
+import { deletePod, evictPod, type PodSummary } from "@srelens/core";
 import {
   deleteResource,
   scaleResource,
@@ -21,24 +21,26 @@ import {
   cronjobSetSuspend,
   cronjobTriggerNow,
   debugPod,
-} from "../lib/actions";
-import { notify } from "../lib/notify";
-import { useAccess, rbac, kindToResource, denyReason, reportActionError, type AccessCheck } from "../lib/access";
-import { getObject } from "../lib/manifest";
+} from "@srelens/core";
+import { notify } from "@srelens/core";
+import { useAccess, rbac, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
+// Pure kind mapping, so it comes from the React-free entry point.
+import { kindToResource } from "@srelens/core";
+import { getObject } from "@srelens/core";
 import {
   defaultContainer,
   execCandidates,
   podContainerChoices,
   type ContainerChoice,
-} from "../lib/podContainers";
+} from "@srelens/core";
 import { IconButton, ConfirmDialog, TextInput, KubectlPreview } from "../ui";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { ForwardDialog } from "./ForwardDialog";
 import { CopyAsKubectlButton } from "./CopyAsKubectlButton";
-import { toKubectl } from "../lib/kubectlMapper";
-import { copyKubectlCommand } from "../lib/copyKubectl";
+import { toKubectl } from "@srelens/core";
+import { copyKubectlCommand } from "@srelens/core";
 import type { AssistantContext } from "./AssistantDrawer";
 
 type Opener = (s: { context: string; namespace: string; pod: string; container?: string }) => void;

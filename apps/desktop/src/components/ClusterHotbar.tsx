@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Bot, Moon, Settings, Sun, Wrench } from "lucide-react";
-import { listContexts, type ClusterContext } from "../lib/clusters";
+import { listContexts, type ClusterContext } from "@srelens/core";
 import {
   type Theme,
 } from "../ui";
 import { ContextAvatar } from "./ContextAvatar";
-import { contextDisplayName, orderContexts, type ContextProfiles } from "../lib/settings";
+import { contextDisplayName, orderContexts, type ContextProfiles } from "@srelens/core";
 
 const EMPTY_LIST: string[] = [];
 

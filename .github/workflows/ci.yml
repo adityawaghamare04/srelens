@@ -47,8 +47,11 @@ jobs:
       - name: Build
         run: pnpm build
       - name: Unit tests with coverage
-        # Vitest enforces the 85% line-coverage floor (vitest.config.ts).
-        run: pnpm -r test
+        # `pnpm test`, NOT `pnpm -r test`: recursive commands skip the workspace
+        # root, and the 85/80/76 floors live in the root vitest.config.ts because
+        # they are measured across apps/desktop and packages/core together.
+        # Running the packages individually would report green with no gate at all.
+        run: pnpm test
       - name: Performance-baseline script tests
         # The size classifier decides which artifacts are compared against
         # which (#31) — a wrong bucket silently publishes a bogus comparison.

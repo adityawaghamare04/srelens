@@ -10,24 +10,24 @@ vi.mock("./WorkloadRelations", () => ({
 }));
 vi.mock("./MetricsPanel", () => ({ MetricsPanel: () => <div data-testid="metrics" /> }));
 const { updateConfigDataMock } = vi.hoisted(() => ({ updateConfigDataMock: vi.fn() }));
-vi.mock("../lib/actions", () => ({ updateConfigData: updateConfigDataMock }));
+vi.mock("@srelens/core/lib/actions", () => ({ updateConfigData: updateConfigDataMock }));
 const { getSecretMock } = vi.hoisted(() => ({ getSecretMock: vi.fn() }));
-vi.mock("../lib/manifest", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/manifest")>()),
+vi.mock("@srelens/core/lib/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@srelens/core/lib/manifest")>()),
   getSecret: getSecretMock,
 }));
 const { listEndpointSlicesMock } = vi.hoisted(() => ({ listEndpointSlicesMock: vi.fn() }));
-vi.mock("../lib/network", () => ({ listEndpointSlices: listEndpointSlicesMock }));
+vi.mock("@srelens/core/lib/network", () => ({ listEndpointSlices: listEndpointSlicesMock }));
 const { podsForPvcMock } = vi.hoisted(() => ({ podsForPvcMock: vi.fn() }));
-vi.mock("../lib/storage", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/storage")>()),
+vi.mock("@srelens/core/lib/storage", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@srelens/core/lib/storage")>()),
   podsForPvc: podsForPvcMock,
 }));
 const { bindingsForServiceAccountMock, podsForServiceAccountMock } = vi.hoisted(() => ({
   bindingsForServiceAccountMock: vi.fn(),
   podsForServiceAccountMock: vi.fn(),
 }));
-vi.mock("../lib/rbac", () => ({
+vi.mock("@srelens/core/lib/rbac", () => ({
   bindingsForServiceAccount: bindingsForServiceAccountMock,
   podsForServiceAccount: podsForServiceAccountMock,
 }));
@@ -35,11 +35,11 @@ vi.mock("../lib/rbac", () => ({
 // Access gating is preflighted via useAccess; mock it so the ConfigMap/Secret
 // data editor tests control whether Save is permitted. Default: allowed, so the
 // existing behavioural tests keep exercising the enabled Save path.
-vi.mock("../lib/access", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../lib/access")>();
+vi.mock("@srelens/core/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/core/lib/access")>();
   return { ...actual, useAccess: vi.fn() };
 });
-import { useAccess } from "../lib/access";
+import { useAccess } from "@srelens/core/react";
 
 import {
   ResourceOverview,
@@ -50,7 +50,7 @@ import {
   orderPodConditions,
   summarizeAffinity,
 } from "./ResourceOverview";
-import type { K8sObject } from "../lib/manifest";
+import type { K8sObject } from "@srelens/core";
 
 const NOW = Date.parse("2026-01-01T00:00:00Z");
 
