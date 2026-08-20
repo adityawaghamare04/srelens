@@ -39,11 +39,29 @@ export function cleanErrorMessage(input: unknown): string {
  * doesn't match the standard shape.
  */
 export function describeForbidden(raw: string): string | null {
-  const m = raw.match(/cannot (\w+) resource "([^"]+)"(?:.*?in the namespace "([^"]+)"|.*?at the cluster scope)/s);
+  // Split from one pattern into two passes: the alternation of two lazy
+  // dot-alls made a message that never completes either branch quadratic
+  // (js/polynomial-redos, #49). API error text is not length-bounded.
+  const m = /cannot (\w+) resource "([^"]+)"/.exec(raw);
   if (!m) return null;
-  const [, verb, resource, namespace] = m;
-  const where = namespace ? `in ${namespace}` : "at the cluster scope";
-  return `You don't have permission to ${verb} ${resource} ${where}.`;
+  const [, verb, resource] = m;
+  const rest = raw.slice(m.index + m[0].length);
+
+  // Both markers are checked explicitly, and neither means null. The message
+  // has to SAY where it applies: a truncated or aggregated-API error carries
+  // the prefix without a scope, and defaulting such a message to "at the
+  // cluster scope" would state something the apiserver never said, while
+  // hiding the generic RBAC guidance describeError would otherwise give.
+  // Namespace is tried first, matching the order of the alternation this
+  // replaced, so a message carrying both reads as namespaced.
+  const namespace = /in the namespace "([^"]+)"/.exec(rest)?.[1];
+  if (namespace) {
+    return `You don't have permission to ${verb} ${resource} in ${namespace}.`;
+  }
+  if (rest.includes("at the cluster scope")) {
+    return `You don't have permission to ${verb} ${resource} at the cluster scope.`;
+  }
+  return null;
 }
 
 /**

@@ -14,6 +14,7 @@ import { isTauri } from "../transport/platform";
 import { invokeCapability } from "../transport/transport";
 import { savePastedKubeconfig } from "./files";
 import { createCluster as createClusterWeb, type CreateClusterInput } from "./webClusters";
+import { parse as parseYaml } from "yaml";
 
 export type { CreateClusterInput };
 
@@ -52,10 +53,41 @@ export async function testClusterForm(input: CreateClusterInput): Promise<TestRe
   });
 }
 
+/**
+ * The `current-context` a kubeconfig names, or null if it names none.
+ *
+ * Parsed with the YAML library rather than matched.
+ *
+ * A pattern here was a denial of service: `\s*` around a lazy body with a
+ * trailing `\s*$` gave the engine several ways to split one run of spaces, and
+ * a 4KB line took 52 seconds (js/polynomial-redos, #43). Hand-scanning instead
+ * fixed that and then got the YAML wrong three times over — `#` inside a name,
+ * `#` without preceding whitespace, `"prod\"live"`, `'prod''live'` — each a
+ * name that no cluster matches, sent to testClusterConnection as if it were
+ * real.
+ *
+ * The library already ships with this package for manifest editing, knows all
+ * of those rules, and parses a 16KB hostile line in under 4ms. Writing a
+ * fourth version of a YAML scalar reader was the wrong instinct.
+ */
+export function parseCurrentContext(yaml: string): string | null {
+  let document: unknown;
+  try {
+    document = parseYaml(yaml);
+  } catch {
+    // Malformed YAML has no context to read, and the backend would reject the
+    // same document anyway.
+    return null;
+  }
+  if (typeof document !== "object" || document === null) return null;
+  const context = (document as Record<string, unknown>)["current-context"];
+  if (typeof context !== "string") return null;
+  return context.trim() || null;
+}
+
 /** Test-connect a pasted/uploaded kubeconfig by its `current-context`. */
 export async function testKubeconfigYaml(yaml: string): Promise<TestResult> {
-  const match = yaml.match(/^\s*current-context:\s*["']?([^"'\n#]+?)["']?\s*$/m);
-  const context = match?.[1]?.trim();
+  const context = parseCurrentContext(yaml);
   if (!context) throw new Error("kubeconfig has no current-context to test");
   return invokeCapability<TestResult>("k8s.testClusterConnection", { yaml, context });
 }
