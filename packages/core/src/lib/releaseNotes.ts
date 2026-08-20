@@ -70,13 +70,18 @@ export function parseReleaseNotes(notes: string): NoteBlock[] {
       flushAll();
       continue;
     }
-    const heading = /^#{1,6}\s+(.*)$/.exec(line);
+    // `[^\S\n]`/`[^\n]` rather than `\s`/`.`: those two overlap on every
+    // space, so a line the pattern ultimately rejects can be split many ways
+    // (js/polynomial-redos, #50 and #51). The equivalents in
+    // assistantMarkdown.ts were tightened in #313; these were missed because
+    // they are inline rather than named constants.
+    const heading = /^#{1,6}[^\S\n]+([^\n]*)$/.exec(line);
     if (heading) {
       flushAll();
       blocks.push({ kind: "heading", spans: parseSpans(heading[1]) });
       continue;
     }
-    const bullet = /^[-*]\s+(.*)$/.exec(line);
+    const bullet = /^[-*][^\S\n]+([^\n]*)$/.exec(line);
     if (bullet) {
       // A bullet ends a paragraph but continues any run of bullets above it.
       flushParagraph();
