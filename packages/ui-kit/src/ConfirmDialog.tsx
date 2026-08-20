@@ -71,7 +71,20 @@ function tabbable(root: HTMLElement | null): HTMLElement[] {
     for (let node: HTMLElement | null = el; node && node !== root.parentElement; node = node.parentElement) {
       if (getComputedStyle(node).display === "none") return false;
     }
-    return getComputedStyle(el).visibility !== "hidden";
+    if (getComputedStyle(el).visibility === "hidden") return false;
+    // A radio group is a single tab stop: the browser exposes only the checked
+    // member, or the first when none is checked. Counting every radio put the
+    // checked one at a nonzero index, so Shift+Tab was waved through while the
+    // browser treated the group as the first stop — and focus left the modal.
+    // (#324 review)
+    if (el instanceof HTMLInputElement && el.type === "radio" && el.name) {
+      const group = [...root.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter(
+        (r) => r.name === el.name,
+      );
+      const stop = group.find((r) => r.checked) ?? group[0];
+      if (stop !== el) return false;
+    }
+    return true;
   });
 }
 
@@ -147,7 +160,13 @@ export function ConfirmDialog({
         // (#324 review)
         const stale = !next.opener.current?.isConnected || dialogRef.current?.contains(next.opener.current);
         if (stale) next.opener.current = returnFocusTo.current;
-        next.el()?.focus();
+        // If this dialog was opened from a control inside that layer, and the
+        // control is still there, it is the user's actual position — the dialog
+        // root is only a fallback for when it is not. (#324 review)
+        const nextEl = next.el();
+        const launcher = returnFocusTo.current;
+        if (launcher?.isConnected && nextEl?.contains(launcher)) launcher.focus();
+        else nextEl?.focus();
         return;
       }
       if (returnFocusTo.current?.isConnected) returnFocusTo.current.focus();

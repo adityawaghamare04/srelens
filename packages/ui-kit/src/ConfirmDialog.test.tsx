@@ -306,11 +306,47 @@ describe("ConfirmDialog closing out of order", () => {
     opener.remove();
   });
 
-  it("hands focus to the dialog that is left", () => {
-    const { opener, upper } = stackTwo();
+  it("hands focus back to the control that opened the top dialog", () => {
+    // This asserted the dialog *root* until #324 review pointed out that the
+    // saved opener is the user's actual position when it is still connected
+    // and belongs to the remaining layer. The root is the fallback, below.
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const lower = render(
+      <ConfirmDialog title="lower" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    // Captured between the renders: this is what had focus when the upper
+    // dialog mounted, so it is the upper's saved opener.
+    const launcher = document.activeElement as HTMLElement;
     const remaining = screen.getByRole("dialog", { name: "lower" });
+    expect(remaining.contains(launcher), "the upper was opened from the lower").toBe(true);
+
+    const upper = render(
+      <ConfirmDialog title="upper" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
     upper.unmount();
-    expect(document.activeElement).toBe(remaining);
+    expect(document.activeElement).toBe(launcher);
+    lower.unmount();
+    opener.remove();
+  });
+
+  it("falls back to the dialog root when the opener is not in that layer", () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    const lower = render(
+      <ConfirmDialog title="lower" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    // Focus somewhere unrelated before the upper opens, so its saved opener
+    // does not belong to the lower dialog.
+    (document.activeElement as HTMLElement)?.blur();
+    const upper = render(
+      <ConfirmDialog title="upper" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    upper.unmount();
+    expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "lower" }));
+    lower.unmount();
     opener.remove();
   });
 
@@ -443,5 +479,59 @@ describe("ConfirmDialog with a control under a hidden ancestor", () => {
     await userEvent.tab();
     expect(dialog.contains(document.activeElement), "Tab must stay inside").toBe(true);
     expect(document.activeElement).not.toBe(screen.getByText("ghost"));
+  });
+});
+
+describe("ConfirmDialog nested flows", () => {
+  it("returns to the control that opened the top dialog, not the dialog root", () => {
+    // The upper dialog was opened from a control inside the lower one, and that
+    // control is still connected — it is the user's actual position. Focusing
+    // the lower dialog's root instead loses it. (#324 review)
+    const lower = render(
+      <ConfirmDialog title="lower" message="m" confirmLabel="Go on" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const launcher = screen.getByRole("button", { name: "Go on" });
+    launcher.focus();
+
+    const upper = render(
+      <ConfirmDialog title="upper" message="m" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    upper.unmount();
+
+    expect(document.activeElement).toBe(launcher);
+    lower.unmount();
+  });
+});
+
+describe("ConfirmDialog with a radio group in the message", () => {
+  it("treats the group as one tab stop", async () => {
+    // The browser exposes only the checked radio as the group's sequential tab
+    // stop. Counting every enabled radio put the checked one at a nonzero
+    // index, so Shift+Tab was allowed through while the browser treated the
+    // group as the first stop — and focus left the modal. (#324 review)
+    render(
+      <ConfirmDialog
+        title="Pick one"
+        message={
+          <fieldset>
+            <label>
+              <input type="radio" name="scope" value="a" /> a
+            </label>
+            <label>
+              <input type="radio" name="scope" value="b" defaultChecked /> b
+            </label>
+          </fieldset>
+        }
+        confirmLabel="Apply"
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const checked = screen.getByRole("radio", { name: "b" }) as HTMLInputElement;
+    checked.focus();
+    await userEvent.tab({ shift: true });
+    expect(dialog.contains(document.activeElement), "Shift+Tab must stay inside").toBe(true);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Apply" }));
   });
 });
