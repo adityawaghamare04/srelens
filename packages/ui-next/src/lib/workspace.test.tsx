@@ -54,4 +54,27 @@ describe("workspace view", () => {
     expect(n).toBe(1);
     off();
   });
+
+  it("does not notify when setExpanded is handed the same list again", () => {
+    ws.setExpanded(["a", "b"]);
+    let n = 0;
+    const off = ws.subscribe(() => n++);
+    ws.setExpanded(["a", "b"]);
+    ws.setExpanded([...ws.getView().expanded]);
+    expect(n).toBe(0);
+    ws.setExpanded(["b", "a"]);
+    expect(n).toBe(1);
+    off();
+  });
+
+  it("does not notify when resetView is called on an already-initial view", () => {
+    let n = 0;
+    const off = ws.subscribe(() => n++);
+    ws.resetView();
+    expect(n).toBe(0);
+    ws.setActiveCluster("prod");
+    ws.resetView();
+    expect(n).toBe(2);
+    off();
+  });
 });

@@ -24,9 +24,17 @@ let view: WorkspaceView = initial();
 const listeners = new Set<() => void>();
 
 function emit(next: WorkspaceView) {
-  if (next === view) return;
   view = next;
   for (const l of listeners) l();
+}
+
+/** Order is significant: the sidebar renders sections in the order given. */
+function sameExpanded(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+function isInitial(v: WorkspaceView): boolean {
+  return v.activeCluster === null && Object.keys(v.links).length === 0 && v.expanded.length === 0;
 }
 
 export function getView(): WorkspaceView {
@@ -34,6 +42,7 @@ export function getView(): WorkspaceView {
 }
 
 export function resetView(): void {
+  if (isInitial(view)) return;
   emit(initial());
 }
 
@@ -64,5 +73,6 @@ export function toggleExpanded(id: string): void {
 }
 
 export function setExpanded(ids: string[]): void {
+  if (sameExpanded(view.expanded, ids)) return;
   emit({ ...view, expanded: [...ids] });
 }
