@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -23,13 +23,14 @@ const overlay = () => document.querySelector('[data-slot="dialog-overlay"]') as 
  * every dismissal path, and a long message scrolling instead of pushing the
  * actions out of a clipped card.
  *
- * Deliberately absent: focus trapping, focus restoration, layering between
- * stacked dialogs, and the scroll lock. Those were hand-written here and drew
- * twenty-two review findings, sixteen in tab-stop detection alone; they are now
- * Radix's, and asserting a dependency's internals through our component is the
- * same mistake in a new place. What is verified below is that Radix is wired up
- * and doing its job — the background really is hidden, focus really does land
- * inside — not how it achieves it. (#324)
+ * Deliberately absent: focus trapping, layering between stacked dialogs, and
+ * the scroll lock. Those were hand-written here and drew twenty-two review
+ * findings, sixteen in tab-stop detection alone; they are now Radix's, and
+ * asserting a dependency's internals through our component is the same mistake
+ * in a new place. What is verified below is that Radix is wired up and doing
+ * its job — the background really is hidden, focus really does land inside —
+ * not how it achieves it. The exception is the last block: two focus cases
+ * Radix's defaults do not cover for a dialog with no trigger. (#324)
  */
 describe("ConfirmDialog", () => {
   it("renders title/message and fires confirm and cancel", () => {
@@ -194,5 +195,51 @@ describe("ConfirmDialog with tall content", () => {
     expect(dialog.className).toContain("card");
     expect(dialog.querySelector(".card-head")).not.toBeNull();
     expect(dialog.querySelector(".card-title")).not.toBeNull();
+  });
+});
+
+/**
+ * The two focus seams this component closes itself, both downstream of it being
+ * mounted only while open, so it never renders a `Dialog.Trigger`. Radix is
+ * still the one trapping focus; these cover the cases where its defaults assume
+ * a trigger that is not there. (#324 review)
+ */
+describe("ConfirmDialog focus", () => {
+  it("returns focus to the opener on close", async () => {
+    render(<button>Delete pod</button>);
+    const opener = screen.getByRole("button", { name: "Delete pod" });
+    opener.focus();
+
+    const { unmount } = open();
+    expect(document.activeElement).not.toBe(opener);
+
+    // Radix hands focus back a tick after unmount, from its focus scope's
+    // cleanup — not synchronously.
+    unmount();
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it("keeps focus inside when confirming disables both buttons", () => {
+    // Confirming flips busy, disabling the button that was just pressed; the
+    // browser blurs it and, with no enabled tab stop left, focus falls to the
+    // document. Radix's focus scope does not catch this — a disabled control
+    // blurs with a null relatedTarget, which it ignores.
+    const { rerender } = render(
+      <ConfirmDialog title="t" message="m" confirmLabel="Apply" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const confirm = screen.getByRole("button", { name: "Apply" });
+    confirm.focus();
+    expect(document.activeElement).toBe(confirm);
+
+    // jsdom does not blur a control when it becomes disabled, so the literal
+    // browser sequence cannot be reproduced here — this stands in for it by
+    // putting focus where the browser would leave it, outside the dialog.
+    confirm.blur();
+
+    rerender(
+      <ConfirmDialog title="t" message="m" busy confirmLabel="Apply" onConfirm={() => {}} onCancel={() => {}} />,
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement), "focus must stay in the modal").toBe(true);
   });
 });
