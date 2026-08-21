@@ -17,6 +17,10 @@ const {
   getForwards,
   subscribeForwards,
   isApplePlatform,
+  isTauri,
+  zoomSpy,
+  createWorkspaceSpy,
+  switchWorkspaceSpy,
 } = vi.hoisted(() => ({
   listContexts: vi.fn(),
   loadTabsState: vi.fn(),
@@ -28,6 +32,10 @@ const {
   getForwards: vi.fn(() => []),
   subscribeForwards: vi.fn(() => () => {}),
   isApplePlatform: vi.fn(() => true),
+  isTauri: vi.fn(() => true),
+  zoomSpy: vi.fn(),
+  createWorkspaceSpy: vi.fn(),
+  switchWorkspaceSpy: vi.fn(),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => {
@@ -40,10 +48,35 @@ vi.mock("@srelens/core", async (importOriginal) => {
     getForwards: () => getForwards(),
     subscribeForwards: (...a: Parameters<typeof subscribeForwards>) => subscribeForwards(...a),
     isApplePlatform: () => isApplePlatform(),
+    isTauri: () => isTauri(),
   };
 });
 
 vi.mock("../lib/tabsPersist", () => ({ loadTabsState, scheduleSave, installFlushOnUnload, flushSave }));
+
+// The zoom helper lives in Chrome (shared with its buttons); spied rather than
+// replaced outright so Chrome itself still renders for real.
+vi.mock("./Chrome", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./Chrome")>();
+  return { ...real, zoom: (...a: Parameters<typeof real.zoom>) => zoomSpy(...a) };
+});
+
+// createWorkspace/switchWorkspace spied the same way — a pass-through so the
+// real store still drives every other test in this file.
+vi.mock("../lib/tabsStore", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../lib/tabsStore")>();
+  return {
+    ...real,
+    createWorkspace: (...a: Parameters<typeof real.createWorkspace>) => {
+      createWorkspaceSpy(...a);
+      return real.createWorkspace(...a);
+    },
+    switchWorkspace: (...a: Parameters<typeof real.switchWorkspace>) => {
+      switchWorkspaceSpy(...a);
+      return real.switchWorkspace(...a);
+    },
+  };
+});
 
 // jsdom has no ResizeObserver; TabStrip's overflow Popover wants one.
 if (!("ResizeObserver" in globalThis)) {
@@ -72,6 +105,10 @@ beforeEach(() => {
   getForwards.mockReset().mockReturnValue([]);
   subscribeForwards.mockReset().mockReturnValue(() => {});
   isApplePlatform.mockReset().mockReturnValue(true);
+  isTauri.mockReset().mockReturnValue(true);
+  zoomSpy.mockReset();
+  createWorkspaceSpy.mockReset();
+  switchWorkspaceSpy.mockReset();
   // Cleared so "flushes on unload" can actually fail: a spy that is never
   // cleared stays called from the first test in the file onwards.
   installFlushOnUnload.mockClear();
@@ -295,5 +332,62 @@ describe("Window accelerators", () => {
     await userEvent.click(await screen.findByRole("menuitem", { name: "Close others" }));
     // The pinned home tab survives by design; /events is what "others" means.
     expect(store.currentWorkspace().tabs.map((t) => t.route)).toEqual(["/", "/k/pods"]);
+  });
+
+  it("marks every close item as destructive", async () => {
+    await booted();
+    act(() => store.openTab("/k/pods", { clusterName: "prod" }));
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Pods/ }));
+    for (const name of ["Close", "Close others", "Close to the right", "Close all"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("data-danger")).toBe("true");
+    }
+  });
+
+  it("zooms via the shared helper under Tauri, and eats the keystroke", async () => {
+    await booted();
+    const notCancelled = fireEvent.keyDown(window, { key: "=", metaKey: true });
+    expect(zoomSpy).toHaveBeenCalledWith("in");
+    // `false` means preventDefault() was called on a cancelable event.
+    expect(notCancelled).toBe(false);
+  });
+
+  it("leaves the browser's own zoom alone in web mode", async () => {
+    // Core's uiScale doc: in a browser the native zoom already does this, so
+    // the accelerator must neither dispatch nor preventDefault — a suppressed
+    // keystroke that does nothing is worse than one left alone.
+    isTauri.mockReturnValue(false);
+    await booted();
+    const notCancelled = fireEvent.keyDown(window, { key: "=", metaKey: true });
+    expect(zoomSpy).not.toHaveBeenCalled();
+    expect(notCancelled).toBe(true);
+  });
+});
+
+describe("Window new workspace", () => {
+  it("pins the drawer inside the row, not as a sibling of the status bar", async () => {
+    await booted();
+    await userEvent.click(screen.getByRole("button", { name: /Default/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "New workspace" }));
+    const drawer = await screen.findByRole("complementary", { name: "Details" });
+    // The row is the middle `flex min-h-0 flex-1` that holds Rail/Nav/the tab
+    // column — an exact class match, since that string is unique to it.
+    const row = document.querySelector('div[class="flex min-h-0 flex-1"]');
+    expect(row).not.toBeNull();
+    expect(drawer.parentElement).toBe(row);
+  });
+
+  it("creates a workspace from the switcher with the name typed and the clusters picked", async () => {
+    listContexts.mockResolvedValue({ contexts: [ctx("prod"), ctx("dev")] });
+    await booted();
+    await userEvent.click(screen.getByRole("button", { name: /Default/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "New workspace" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Workspace name" }), "Team");
+    // Both clusters start picked; unticking "prod" leaves only "dev".
+    await userEvent.click(screen.getByRole("checkbox", { name: "prod" }));
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(createWorkspaceSpy).toHaveBeenCalledWith("Team", ["dev"]);
+    expect(store.currentWorkspace().name).toBe("Team");
+    expect(store.currentWorkspace().clusters).toEqual(["dev"]);
   });
 });

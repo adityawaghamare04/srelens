@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isApplePlatform, listContexts, type ClusterContext } from "@srelens/core";
+import { isApplePlatform, isTauri, listContexts, type ClusterContext } from "@srelens/core";
 import { Button, Checkbox, Drawer, LoadingState, TabStrip, TextInput, type ContextMenuItem, type StripTab } from "@srelens/ui-kit";
 import { defaultState, reconcile } from "../lib/tabs";
 import { flushSave, installFlushOnUnload, loadTabsState, scheduleSave } from "../lib/tabsPersist";
@@ -80,6 +80,10 @@ export function Window({
   const [name, setName] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const apple = useMemo(() => isApplePlatform(), []);
+  // Desktop only: `zoom` asks the webview to scale itself, which only exists
+  // under Tauri. In a browser the native zoom already does this (see core's
+  // uiScale doc), so a zoom chord here has to fall through to it untouched.
+  const desktop = useMemo(() => isTauri(), []);
   const { setOpen } = useConsole();
   const { tabs, activeId, workspace } = useTabs();
   const activeIdCluster = useActiveCluster();
@@ -196,12 +200,17 @@ export function Window({
     function onKey(e: KeyboardEvent) {
       const action = matchWindowKey(e, apple);
       if (!action) return;
+      // In web mode a zoom chord is the browser's own — neither dispatched
+      // nor preventDefault-ed, so Cmd/Ctrl +/-/0 falls through to it exactly
+      // as it would with no listener here at all.
+      const zooms = action.type === "zoom-in" || action.type === "zoom-out" || action.type === "zoom-reset";
+      if (zooms && !desktop) return;
       e.preventDefault();
       runRef.current(action);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [active, apple]);
+  }, [active, apple, desktop]);
 
   function menuFor(tab: StripTab): ContextMenuItem[] {
     return [
@@ -209,9 +218,9 @@ export function Window({
       { label: tab.pinned ? "Unpin" : "Pin", onPick: () => togglePin(tab.id) },
       { kind: "sep" },
       { label: "Close", hint: hint("close-tab", apple), danger: true, onPick: () => closeTab(tab.id) },
-      { label: "Close others", onPick: () => closeOthers(tab.id) },
-      { label: "Close to the right", onPick: () => closeToRight(tab.id) },
-      { label: "Close all", onPick: () => closeAll() },
+      { label: "Close others", danger: true, onPick: () => closeOthers(tab.id) },
+      { label: "Close to the right", danger: true, onPick: () => closeToRight(tab.id) },
+      { label: "Close all", danger: true, onPick: () => closeAll() },
       { kind: "sep" },
       { label: "Reopen closed", hint: hint("reopen-tab", apple), onPick: () => reopenClosed() },
     ];
@@ -278,33 +287,33 @@ export function Window({
           </div>
           {active && <Console apple={apple} />}
         </div>
+        <Drawer open={creating} title="New workspace" onClose={() => setCreating(false)}>
+          <div className="flex flex-col gap-3 px-3 py-3">
+            <TextInput value={name} onValueChange={setName} placeholder="Workspace name" aria-label="Workspace name" />
+            {contexts.map((c) => (
+              <Checkbox
+                key={c.stableId}
+                checked={picked.has(c.stableId)}
+                onChange={(checked) =>
+                  setPicked((prev) => {
+                    const next = new Set(prev);
+                    if (checked) next.add(c.stableId);
+                    else next.delete(c.stableId);
+                    return next;
+                  })
+                }
+                label={c.name}
+              />
+            ))}
+            <div className="flex justify-end">
+              <Button variant="primary" size="sm" onClick={() => create()}>
+                Create
+              </Button>
+            </div>
+          </div>
+        </Drawer>
       </div>
       {active && <Status contexts={contexts} />}
-      <Drawer open={creating} title="New workspace" onClose={() => setCreating(false)}>
-        <div className="flex flex-col gap-3 px-3 py-3">
-          <TextInput value={name} onValueChange={setName} placeholder="Workspace name" aria-label="Workspace name" />
-          {contexts.map((c) => (
-            <Checkbox
-              key={c.stableId}
-              checked={picked.has(c.stableId)}
-              onChange={(checked) =>
-                setPicked((prev) => {
-                  const next = new Set(prev);
-                  if (checked) next.add(c.stableId);
-                  else next.delete(c.stableId);
-                  return next;
-                })
-              }
-              label={c.name}
-            />
-          ))}
-          <div className="flex justify-end">
-            <Button variant="primary" size="sm" onClick={() => create()}>
-              Create
-            </Button>
-          </div>
-        </div>
-      </Drawer>
     </div>
   );
 }
