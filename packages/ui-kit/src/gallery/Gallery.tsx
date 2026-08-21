@@ -3,17 +3,24 @@ import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Drawer } from "../Drawer";
+import { EmptyState } from "../EmptyState";
+import { ErrorState } from "../ErrorState";
 import { Field } from "../Field";
 import { IconButton } from "../IconButton";
 import { LoadingState } from "../LoadingState";
 import { Meter } from "../Meter";
+import { MetricTile } from "../MetricTile";
+import { NavIcon } from "../NavIcon";
 import { Panel } from "../Panel";
+import { Screen } from "../Screen";
+import { SegmentBar } from "../SegmentBar";
 import { Select } from "../Select";
 import { Sparkline } from "../Sparkline";
 import { Spinner } from "../Spinner";
 import { StatusPill } from "../StatusPill";
 import { Tabs } from "../Tabs";
 import { TextInput } from "../TextInput";
+import { Toolbar } from "../Toolbar";
 import type { Tone } from "../tone";
 
 const TONES: Tone[] = ["muted", "ok", "info", "accent", "warn", "sev"];
@@ -87,6 +94,9 @@ export function Gallery() {
         {/* A pod over its limit reports more than 100%: the bar clamps, the
             number does not. */}
         <Meter value={150} ariaLabel="over limit" />
+        {/* Captioned: the number moves above the bar rather than doubling, and
+            the caption is not the accessible name — the meter still needs one. */}
+        <Meter value={42} ariaLabel="Node CPU" label="CPU" detail="3 of 8 cores" />
       </section>
 
       <section>
@@ -257,6 +267,11 @@ export function Gallery() {
       <section>
         <h2>Panel</h2>
         <Panel title="Cluster">A titled surface.</Panel>
+        <Panel title="Cluster" description="Every node in the current context">
+          A description under the title.
+        </Panel>
+        {/* A description with no title still earns a header. */}
+        <Panel description="No title, still a header">Body.</Panel>
         {/* Untitled omits the header rather than ruling off an empty one. */}
         <Panel>No title at all.</Panel>
       </section>
@@ -295,6 +310,103 @@ export function Gallery() {
           >
             Drag the left edge to resize. Escape closes it.
           </Drawer>
+        </div>
+      </section>
+      <section>
+        <h2>MetricTile</h2>
+        <div className="kit-gallery__row">
+          <MetricTile label="Pods" value={248} />
+          <MetricTile label="Restarts" value={9} tone="sev" description="last hour" />
+          <MetricTile label="Nodes" value={12} tone="ok" />
+          {/* The figure stays in the body colour whatever the tone: severity is
+              context around the number, not the number itself. */}
+          <MetricTile label="Pending" value={3} tone="warn" action={<Button size="xs">view</Button>} />
+        </div>
+      </section>
+
+      <section>
+        <h2>SegmentBar</h2>
+        <SegmentBar
+          ariaLabel="Pods: 18 running, 3 pending, 1 failed"
+          segments={[
+            { value: 18, tone: "ok", label: "Running" },
+            { value: 3, tone: "warn", label: "Pending" },
+            { value: 1, tone: "sev", label: "Failed" },
+          ]}
+        />
+        {/* A cluster with nothing scheduled yet is the first render, not an
+            edge case — it must not divide by zero into a NaN width. */}
+        <p className="text-[0.75rem] text-muted">nothing scheduled yet</p>
+        <SegmentBar
+          ariaLabel="Empty cluster"
+          segments={[
+            { value: 0, tone: "ok", label: "Running" },
+            { value: 0, tone: "sev", label: "Failed" },
+          ]}
+        />
+      </section>
+
+      <section>
+        <h2>Toolbar</h2>
+        <Toolbar>
+          <TextInput value={ns} onValueChange={setNs} placeholder="filter" aria-label="filter" />
+          <span className="flex-1" />
+          <Button size="xs" variant="secondary">
+            refresh
+          </Button>
+        </Toolbar>
+      </section>
+
+      <section>
+        <h2>Screen</h2>
+        {/* Bounded here; in the app it takes the full height of its pane. */}
+        <div className="card overflow-hidden" style={{ height: 220 }}>
+          <Screen
+            title="Pods"
+            eyebrow="Workloads"
+            description="Everything scheduled in this namespace."
+            actions={<Button size="xs">new</Button>}
+          >
+            <p className="text-[0.75rem] text-muted">the table goes here</p>
+          </Screen>
+        </div>
+      </section>
+
+      <section>
+        <h2>EmptyState</h2>
+        <EmptyState title="No pods" />
+        <EmptyState title="No pods" hint="Nothing is scheduled in this namespace." />
+        <EmptyState
+          title="No pods"
+          hint="Nothing is scheduled in this namespace."
+          action={<Button size="xs">create pod</Button>}
+        />
+      </section>
+
+      <section>
+        <h2>ErrorState</h2>
+        {/* The states differ in what they announce, not just how they look:
+            this one is a live region, the two above are not. */}
+        <ErrorState title="Could not load pods" />
+        <ErrorState
+          title="Could not load pods"
+          detail="dial tcp 10.0.0.1:6443: connection refused"
+          onRetry={() => {}}
+          action={{ label: "Diagnose in Toolbox", onClick: () => {} }}
+        />
+      </section>
+
+      <section>
+        <h2>NavIcon</h2>
+        {/* Takes its colour from the row it sits in, so hover and the active
+            state reach it without it knowing about them. */}
+        <div className="kit-gallery__row">
+          <span className="inline-flex items-center gap-2 text-[0.8125rem]">
+            <NavIcon icon={DotIcon} /> Pods
+          </span>
+          <span className="inline-flex items-center gap-2 text-[0.8125rem]" style={{ color: "var(--accent)" }}>
+            <NavIcon icon={DotIcon} /> Deployments
+          </span>
         </div>
       </section>
     </div>
