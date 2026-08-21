@@ -64,6 +64,16 @@ describe("openTab", () => {
     store.newTab("/");
     expect(routes()).toEqual(["/", "/"]);
   });
+
+  it("newTab makes a closeable tab, even on a route that is pinned by default", () => {
+    // `pinned` belongs to the seed home tab, not to "/" — a Cmd+T tab the user
+    // cannot then close is a trap, and every close path refuses a pinned tab.
+    store.newTab("/");
+    expect(active().pinned).toBeFalsy();
+    expect(active().preview).toBeFalsy();
+    store.closeTab(active().id);
+    expect(routes()).toEqual(["/"]);
+  });
 });
 
 describe("closeTab", () => {
@@ -259,5 +269,70 @@ describe("subscribe", () => {
     store.activateTab(active().id);
     store.switchWorkspace("nope");
     expect(n).toBe(0);
+  });
+});
+
+describe("no-op actions do not notify", () => {
+  /**
+   * The store's subscribers include the one that writes the settings file, so an
+   * action that changes nothing must not emit. Every guard below is a line of
+   * `tabsStore.ts` that looks redundant until you delete it; these are the tests
+   * that make deleting it fail.
+   */
+  function silent(name: string, arrange: () => void, action: () => void) {
+    it(name, () => {
+      arrange();
+      let n = 0;
+      const off = store.subscribe(() => n++);
+      const before = store.getState();
+      action();
+      off();
+      expect(n, "notifications").toBe(0);
+      expect(store.getState(), "state identity").toBe(before);
+    });
+  }
+
+  const activeId = () => store.currentWorkspace().activeId;
+  /** Two tabs, both pinned, the first of them active. */
+  function twoPinnedFirstActive() {
+    store.openTab("/a");
+    store.togglePin(activeId());
+    store.activateTab(store.currentWorkspace().tabs[0].id);
+  }
+
+  silent("openTab on the active, non-preview route", () => {}, () => store.openTab("/"));
+
+  silent(
+    "closeOthers when every other tab is pinned and this one is active",
+    () => store.openTab("/a"),
+    () => store.closeOthers(activeId()),
+  );
+
+  silent("closeToRight when everything to the right is pinned", twoPinnedFirstActive, () =>
+    store.closeToRight(activeId()),
+  );
+
+  silent("closeAll when every tab is pinned and the first is active", twoPinnedFirstActive, () => store.closeAll());
+
+  silent("togglePin on an id that is not there", () => {}, () => store.togglePin("nope"));
+
+  silent(
+    "setWorkspaceClusters with a list equal to the one it has",
+    () => store.setWorkspaceClusters(store.getState().currentId, ["x", "y"]),
+    () => store.setWorkspaceClusters(store.getState().currentId, ["x", "y"]),
+  );
+
+  silent("renameWorkspace to the name it already has", () => {}, () =>
+    store.renameWorkspace(store.getState().currentId, "Default"),
+  );
+
+  it("but a real change still notifies exactly once", () => {
+    let n = 0;
+    const off = store.subscribe(() => n++);
+    const before = store.getState();
+    store.openTab("/a");
+    off();
+    expect(n).toBe(1);
+    expect(store.getState()).not.toBe(before);
   });
 });

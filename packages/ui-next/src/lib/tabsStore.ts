@@ -100,10 +100,16 @@ export function openTab(route: string, opts: { preview?: boolean; clusterName?: 
   });
 }
 
-/** Always a new tab, even for a route already open — that is what "new tab" means. */
+/**
+ * Always a new tab, even for a route already open — that is what "new tab" means.
+ *
+ * Never pinned: `pinned` belongs to the seed home tab that must always be there,
+ * not to the route, and `makeTab("/")` — what Cmd+T asks for — would otherwise
+ * hand back a tab that every close path refuses.
+ */
 export function newTab(route = "/", clusterName?: string): void {
   patchCurrent((w) => {
-    const t = makeTab(route, { clusterName });
+    const t: Tab = { ...makeTab(route, { clusterName }), pinned: false };
     return { ...w, tabs: [...w.tabs, t], activeId: t.id };
   });
 }
