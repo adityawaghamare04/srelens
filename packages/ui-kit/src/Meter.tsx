@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { toneColor, type Tone } from "./tone";
 
 /**
@@ -5,11 +6,21 @@ import { toneColor, type Tone } from "./tone";
  * ARIA meter, so several unnamed ones read as a list of numbers with nothing
  * saying which resource each belongs to. Required as a union rather than
  * checked at runtime, so the compiler asks for it. (#317 review)
+ *
+ * `label` does not satisfy this and is not an alternative to it. It is a
+ * visible caption; the accessible name is a separate obligation, and a meter
+ * can want a short visible label ("CPU") alongside a fuller spoken one ("Node
+ * CPU"). Anyone tempted to collapse the two should note that dropping the union
+ * silently un-names every meter rendered without a caption. (#318)
  */
-type MeterProps = { value: number; tone?: Tone } & (
-  | { ariaLabel: string; ariaLabelledBy?: never }
-  | { ariaLabelledBy: string; ariaLabel?: never }
-);
+type MeterProps = {
+  value: number;
+  tone?: Tone;
+  /** Visible caption above the bar. Not the accessible name. */
+  label?: ReactNode;
+  /** A line under the bar giving the figure behind the proportion. */
+  detail?: ReactNode;
+} & ({ ariaLabel: string; ariaLabelledBy?: never } | { ariaLabelledBy: string; ariaLabel?: never });
 
 /**
  * A proportion bar with its percentage beside it.
@@ -21,11 +32,18 @@ type MeterProps = { value: number; tone?: Tone } & (
  * than 100%, and a bar that runs past its track looks like a rendering fault
  * rather than the reading it is. The number keeps the real value; only the bar
  * is clamped.
+ *
+ * `label` and `detail` come from the classic `StatusMeter`, which was this
+ * component with a caption. Carrying it as a second component would have left
+ * the kit with two meters differing by one line, so the line moved here — and
+ * with it that version's layout, which puts the caption and the number in a row
+ * above the bar. The percentage moves rather than doubling: a captioned meter
+ * shows it above, a bare one beside, never both. (#318)
  */
-export function Meter({ value, tone, ...naming }: MeterProps) {
+export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
   const resolved: Tone = tone ?? (value > 80 ? "sev" : value > 65 ? "warn" : "ok");
   const width = Math.min(Math.max(value, 0), 100);
-  return (
+  const bar = (
     <div className="flex items-center gap-2">
       <div
         className="h-[5px] w-full overflow-hidden rounded-full"
@@ -48,7 +66,34 @@ export function Meter({ value, tone, ...naming }: MeterProps) {
           style={{ width: `${width}%`, background: toneColor(resolved) }}
         />
       </div>
-      <span className="num w-9 shrink-0 text-right text-[0.6875rem] text-muted">{value}%</span>
+      {label == null && (
+        <span className="num w-9 shrink-0 text-right text-[0.6875rem] text-muted">{value}%</span>
+      )}
+    </div>
+  );
+
+  // An unadorned meter is exactly what it was — no wrapper, so it stays the
+  // flex item its callers lay out. The wrapper appears only when there is
+  // something to stack above or below the bar.
+  if (label == null && detail == null) return bar;
+
+  return (
+    <div>
+      {label != null && (
+        <div
+          data-slot="meter-head"
+          className="flex items-baseline justify-between gap-2 text-[0.6875rem]"
+        >
+          <span className="truncate text-muted">{label}</span>
+          <span className="num shrink-0">{value}%</span>
+        </div>
+      )}
+      {bar}
+      {detail != null && (
+        <p data-slot="meter-detail" className="path mt-0.5">
+          {detail}
+        </p>
+      )}
     </div>
   );
 }

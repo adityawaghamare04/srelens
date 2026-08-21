@@ -59,4 +59,34 @@ describe("Meter", () => {
     const { container } = render(<Meter value={-5} ariaLabel="CPU" />);
     expect(container.querySelector<HTMLElement>(".h-full")?.style.width).toBe("0%");
   });
+
+  it("renders the label and the detail when given", () => {
+    render(<Meter value={42} ariaLabel="CPU" label="CPU" detail="3 of 8 cores" />);
+    expect(screen.getByText("CPU")).toBeDefined();
+    expect(screen.getByText("3 of 8 cores")).toBeDefined();
+  });
+
+  it("omits the label and detail elements, not just their text", () => {
+    // Both hold a line box of their own; an empty one makes a bare meter sit
+    // taller than its neighbours in the same column. (#318)
+    const { container } = render(<Meter value={42} ariaLabel="CPU" />);
+    expect(container.querySelector('[data-slot="meter-head"]')).toBeNull();
+    expect(container.querySelector('[data-slot="meter-detail"]')).toBeNull();
+  });
+
+  it("shows the percentage exactly once, labelled or not", () => {
+    // A label moves the number above the bar rather than adding a second copy
+    // of it beside the bar. (#318)
+    const bare = render(<Meter value={42} ariaLabel="CPU" />);
+    expect(bare.container.textContent?.match(/42%/g)).toHaveLength(1);
+    const labelled = render(<Meter value={42} ariaLabel="CPU" label="CPU" />);
+    expect(labelled.container.textContent?.match(/42%/g)).toHaveLength(1);
+  });
+
+  it("keeps the accessible name required even when a visible label is given", () => {
+    // The visible label is not the accessible name: the meter still needs one
+    // of its own, and the type still demands it. (#317 review, #318)
+    render(<Meter value={42} ariaLabel="Node CPU" label="CPU" />);
+    expect(screen.getByRole("meter", { name: "Node CPU" })).toBeDefined();
+  });
 });
