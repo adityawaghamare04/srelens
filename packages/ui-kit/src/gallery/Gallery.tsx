@@ -4,25 +4,33 @@ import { Button } from "../Button";
 import { CodeEditor } from "../CodeEditor";
 import { ColumnPicker } from "../ColumnPicker";
 import { Combobox } from "../Combobox";
+import { Checkbox } from "../Checkbox";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Drawer } from "../Drawer";
 import { EmptyState } from "../EmptyState";
 import { ErrorState } from "../ErrorState";
+import { Eyebrow } from "../Eyebrow";
 import { Field } from "../Field";
 import { IconButton } from "../IconButton";
 import { KubectlPreview } from "../KubectlPreview";
+import { KV, KVList } from "../KV";
 import { LoadingState } from "../LoadingState";
 import { Meter } from "../Meter";
 import { MultiSelect } from "../MultiSelect";
 import { MetricTile } from "../MetricTile";
 import { NavIcon } from "../NavIcon";
+import { PairList } from "../PairList";
 import { Panel } from "../Panel";
+import { Radio } from "../Radio";
 import { Screen } from "../Screen";
 import { SegmentBar } from "../SegmentBar";
 import { Select } from "../Select";
 import { Sparkline } from "../Sparkline";
+import { Stat } from "../Stat";
 import { Spinner } from "../Spinner";
 import { StatusPill } from "../StatusPill";
+import { SubHead } from "../SubHead";
+import { Switch } from "../Switch";
 import { Table, type Column } from "../Table";
 import { Tabs } from "../Tabs";
 import { TextInput } from "../TextInput";
@@ -60,6 +68,9 @@ export function Gallery() {
   const [ns, setNs] = useState("kube-system");
   const [tab, setTab] = useState("pods");
   const [drawer, setDrawer] = useState(false);
+  const [boxes, setBoxes] = useState({ a: true, b: false });
+  const [refresh, setRefresh] = useState("30");
+  const [live, setLive] = useState(true);
   const [scope, setScope] = useState("kube-system");
   const [sort, setSort] = useState<import("../Table").TableSort | null>(null);
   const [picked2, setPicked2] = useState<Set<string>>(new Set());
@@ -537,6 +548,114 @@ export function Gallery() {
           getRowKey={(r) => r.name}
           emptyText="No pods"
           emptyHint="Nothing is scheduled in this namespace."
+        />
+      </section>
+      <section>
+        <h2>Checkbox</h2>
+        <div className="kit-gallery__row">
+          <Checkbox checked={boxes.a} onChange={(v) => setBoxes((b) => ({ ...b, a: v }))} label="Include system namespaces" />
+          <Checkbox checked={boxes.b} onChange={(v) => setBoxes((b) => ({ ...b, b: v }))} label="Watch for changes" />
+          {/* The third state, for a header box over a partial selection — and
+              the one the mock lost on the first click. */}
+          <Checkbox checked={false} indeterminate onChange={() => {}} label="Select all" />
+          <Checkbox checked disabled onChange={() => {}} label="Locked on" />
+          <Checkbox checked={boxes.a} onChange={(v) => setBoxes((b) => ({ ...b, a: v }))} ariaLabel="Unlabelled" />
+        </div>
+      </section>
+
+      <section>
+        <h2>Radio</h2>
+        {/* One tab stop for the group; arrows move within it, which is the
+            browser's doing and the reason these are native inputs. */}
+        {[
+          { value: "10", label: "Every 10 seconds", hint: "Heaviest on the API server." },
+          { value: "30", label: "Every 30 seconds" },
+          { value: "off", label: "Never", hint: "Refresh by hand." },
+        ].map((option) => (
+          <Radio
+            key={option.value}
+            name="kit-gallery-refresh"
+            checked={refresh === option.value}
+            onChange={() => setRefresh(option.value)}
+            label={option.label}
+            hint={option.hint}
+          />
+        ))}
+      </section>
+
+      <section>
+        <h2>Switch</h2>
+        <Switch on={live} onChange={setLive} label="Live updates" hint="Stream changes as they happen." />
+        <Switch on={!live} onChange={() => setLive((v) => !v)} label="Pause on error" danger />
+        <Switch on={false} onChange={() => {}} label="Unavailable here" disabled />
+        {/* Unlabelled still needs a name; the caller supplies one. */}
+        <Switch on={live} onChange={setLive} ariaLabel="Live updates, compact" />
+      </section>
+
+      <section>
+        <h2>Eyebrow</h2>
+        <div className="kit-gallery__row">
+          <Eyebrow>since</Eyebrow>
+          <Eyebrow tone="warn">degraded</Eyebrow>
+          <Eyebrow tone="sev">failing</Eyebrow>
+        </div>
+      </section>
+
+      <section>
+        <h2>SubHead</h2>
+        {/* A heading, so the pane it labels has an outline. */}
+        <SubHead>Containers</SubHead>
+        <p className="text-[0.75rem] text-muted">the group this labels</p>
+      </section>
+
+      <section>
+        <h2>Stat</h2>
+        {/* A divided row: `.stat + .stat` rules between them. */}
+        <div className="card flex">
+          <Stat label="Nodes" value={12} delta="all ready" tone="ok" className="flex-1" />
+          <Stat label="Pods" value="1 284" delta="3 not ready" tone="sev" className="flex-1" />
+          <Stat label="Age" value="84d" className="flex-1" />
+        </div>
+      </section>
+
+      <section>
+        <h2>KV</h2>
+        {/* A row carries its own name/value group, so one on its own is valid
+            markup anywhere — which is why it is used standalone as often as
+            through a list. */}
+        <KV k="Status" v="Running" />
+        <KV k="Image" v="nginx:1.25" mono title="nginx:1.25" />
+      </section>
+
+      <section>
+        <h2>KVList</h2>
+        <Panel title="Pod · web-1">
+          <KVList
+            rows={[
+              ["Kind", "Pod"],
+              ["Namespace", "kube-system"],
+              ["Image", "nginx:1.25"],
+              ["Node", "ip-10-0-1-23"],
+            ]}
+            mono={(v) => v.includes(":") || v.startsWith("ip-")}
+          />
+        </Panel>
+      </section>
+
+      <section>
+        <h2>PairList</h2>
+        <SubHead>Labels</SubHead>
+        <PairList
+          pairs={[
+            ["app", "web"],
+            ["app.kubernetes.io/managed-by", "Helm"],
+          ]}
+        />
+        {/* Wide enough to read one in full. */}
+        <SubHead>Annotations</SubHead>
+        <PairList
+          breakValues
+          pairs={[["kubectl.kubernetes.io/last-applied-configuration", '{"apiVersion":"v1","kind":"Pod"}']]}
         />
       </section>
     </div>
