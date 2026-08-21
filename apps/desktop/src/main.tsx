@@ -6,7 +6,7 @@ import { initializeSettingsStorage } from "@srelens/core";
 // The service layer says what to notify; this decides how. Installed before
 // render so a toast raised during startup is not dropped on the floor.
 import { installToastNotifier } from "./ui/notifier";
-import { applyNextDesignTheme, loadDesign, switchDesign } from "./design";
+import { PORTED_SCREENS, applyNextDesignTheme, loadDesign, switchDesign } from "./design";
 
 installToastNotifier();
 
@@ -41,6 +41,7 @@ async function bootstrap(root: HTMLElement): Promise<void> {
     ]);
     createRoot(root).render(
       <NextApp
+        ported={PORTED_SCREENS.map((s) => s.name)}
         onExit={async () => {
           const result = await switchDesign("classic");
           return result.ok ? null : result.reason;

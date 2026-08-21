@@ -1,5 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
 import { Gallery } from "@srelens/ui-kit/gallery";
+import { Window } from "./shell/Window";
 
 export { ConsoleProvider, useConsole, type ConsoleValue } from "./console";
 
@@ -26,20 +27,30 @@ function useHash(): string {
 }
 
 /**
- * The new design's root.
+ * The new design's root: the window, and nothing else.
  *
- * A placeholder for the screens, which arrive in later steps. This package
- * exists so the design switch has a real second tree to load, with its own
- * stylesheet — which is what proves the two designs never share a document.
+ * The screens arrive one at a time; until a route has one, its tab renders the
+ * Placeholder — so the design is navigable from the first PR rather than being
+ * a single "nothing here yet" page. This package having its own tree and its
+ * own stylesheet is what proves the two designs never share a document.
  *
- * It is not empty, though: the component gallery lives here, and is linked
- * from the placeholder rather than left to whoever already knows the hash.
+ * The component gallery lives here too, at #gallery: a developer surface rather
+ * than a screen, so it is a hash and not a route. The way *in* is on the
+ * Placeholder, because that is the screen every un-ported route renders.
  *
- * It carries its own way back to the classic design on purpose: Settings does
- * not exist here yet, so without this button someone who opts in would have no
- * route out of the app except editing localStorage.
+ * `onExit` is the way back to the classic design. Settings does not exist in
+ * this tree yet, so without it someone who opts in would have no route out of
+ * the app except editing localStorage — which is why the Placeholder's "Open in
+ * classic" is wired to it rather than to a per-route handoff, which is PR 3.
  */
-export function NextApp({ onExit }: { onExit: () => Promise<string | null> | string | null }) {
+export function NextApp({
+  onExit,
+  ported = [],
+}: {
+  onExit: () => Promise<string | null> | string | null;
+  /** Display names of the screens that exist in the new design. */
+  ported?: string[];
+}) {
   const [error, setError] = useState<string | null>(null);
 
   async function leave() {
@@ -51,31 +62,44 @@ export function NextApp({ onExit }: { onExit: () => Promise<string | null> | str
 
   // A hash rather than a route: this tree has no router yet, and the gallery is
   // a developer surface rather than a screen.
-  if (useHash() === "#gallery") {
-    return <Gallery />;
-  }
+  const gallery = useHash() === "#gallery";
 
   return (
-    <main className="next-placeholder">
-      <h1>The new design</h1>
-      <p>
-        Nothing is built here yet. You are seeing this because the new design is
-        switched on in Settings — the screens are still being written.
-      </p>
-      {/* The kit has been reachable at #gallery since #317 and nothing said so,
-          which left this page announcing that nothing is built with two dozen
-          built components one hash away. A review surface nobody can find is
-          one nobody reviews. An anchor rather than a button because it goes
-          somewhere: middle-click and copy-link work, and the hash is the
-          address. (#318) */}
-      <p>
-        <a href="#gallery">Component gallery</a> — every component in the design
-        system, in its states. A developer surface rather than a screen.
-      </p>
-      <button type="button" onClick={() => void leave()}>
-        Back to the classic design
-      </button>
-      {error && <p role="alert">Could not switch design. {error}</p>}
-    </main>
+    // A flex column rather than the Window and the alert as siblings: `body` is
+    // `overflow: hidden` and `#root` is `height: 100%`, so an alert next to an
+    // `h-full` Window starts at the bottom edge and is clipped — in the DOM and
+    // the a11y tree, and off screen. That is the silent failure #314 closed, so
+    // the Window gets the room that is left and the alert keeps its own.
+    <div className="flex h-full min-h-0 flex-col">
+      {/*
+        Hidden rather than unmounted while the gallery is up — the same
+        keep-mounted principle as `TabSurface`. Returning the Gallery *instead*
+        of the Window unmounted it, and coming back re-booted it: with session
+        restore off, boot found nothing saved and wrote a fresh default state,
+        so every tab of the session was gone; with it on, only what the 300ms
+        debounce had already flushed came back. The `hidden` attribute also
+        takes the whole column out of the a11y tree, so the gallery is what a
+        screen reader — and `queryByRole` — sees.
+      */}
+      <div className="min-h-0 flex-1" hidden={gallery}>
+        <Window
+          ported={ported}
+          onOpenInClassic={() => void leave()}
+          onOpenGallery={() => {
+            window.location.hash = "#gallery";
+          }}
+        />
+      </div>
+      {gallery && (
+        <div className="min-h-0 flex-1">
+          <Gallery />
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="shrink-0 px-3 py-2 text-[0.75rem] text-[var(--sev)]">
+          Could not switch design. {error}
+        </p>
+      )}
+    </div>
   );
 }
