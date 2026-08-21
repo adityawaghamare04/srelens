@@ -1,6 +1,7 @@
 import { useState, useSyncExternalStore } from "react";
 import { Gallery } from "@srelens/ui-kit/gallery";
 import { Window } from "./shell/Window";
+import { ConsoleProvider } from "./console";
 
 export { ConsoleProvider, useConsole, type ConsoleValue } from "./console";
 
@@ -46,18 +47,22 @@ function useHash(): string {
 export function NextApp({
   onExit,
   ported = [],
+  onToggleTheme = () => {},
+  controls = "none",
 }: {
-  onExit: () => Promise<string | null> | string | null;
+  onExit: (route: string, context?: string) => Promise<string | null> | string | null;
   /** Display names of the screens that exist in the new design. */
   ported?: string[];
+  onToggleTheme?: () => void;
+  controls?: "macos" | "none";
 }) {
   const [error, setError] = useState<string | null>(null);
 
-  async function leave() {
+  async function leave(route: string, context?: string) {
     // Rendered here rather than raised as a toast: the toast host lives in the
     // classic tree, so a failure on the way out would have been invisible and
     // this button would have looked inert. (#314 review)
-    setError((await onExit()) ?? null);
+    setError((await onExit(route, context)) ?? null);
   }
 
   // A hash rather than a route: this tree has no router yet, and the gallery is
@@ -82,13 +87,20 @@ export function NextApp({
         screen reader — and `queryByRole` — sees.
       */}
       <div className="min-h-0 flex-1" hidden={gallery}>
-        <Window
-          ported={ported}
-          onOpenInClassic={() => void leave()}
-          onOpenGallery={() => {
-            window.location.hash = "#gallery";
-          }}
-        />
+        {/* The provider wraps the window, not the gallery: the gallery has no
+            console, and the dock is the window's own bottom edge. */}
+        <ConsoleProvider>
+          <Window
+            ported={ported}
+            active={!gallery}
+            controls={controls}
+            onToggleTheme={onToggleTheme}
+            onOpenInClassic={leave}
+            onOpenGallery={() => {
+              window.location.hash = "#gallery";
+            }}
+          />
+        </ConsoleProvider>
       </div>
       {gallery && (
         <div className="min-h-0 flex-1">

@@ -1,21 +1,46 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { fireEvent } from "@testing-library/react";
 
 // `vi.hoisted` because `vi.mock` is hoisted above every declaration in the
 // file, and the tabsPersist factory reads these the moment `./Window` imports
 // the module — a plain `const` is still in its temporal dead zone by then.
-const { listContexts, loadTabsState, scheduleSave, installFlushOnUnload, flushSave } = vi.hoisted(() => ({
+const {
+  listContexts,
+  loadTabsState,
+  scheduleSave,
+  installFlushOnUnload,
+  flushSave,
+  connectCluster,
+  listCrds,
+  getForwards,
+  subscribeForwards,
+  isApplePlatform,
+} = vi.hoisted(() => ({
   listContexts: vi.fn(),
   loadTabsState: vi.fn(),
   scheduleSave: vi.fn(),
   installFlushOnUnload: vi.fn(() => () => {}),
   flushSave: vi.fn(),
+  connectCluster: vi.fn(),
+  listCrds: vi.fn(),
+  getForwards: vi.fn(() => []),
+  subscribeForwards: vi.fn(() => () => {}),
+  isApplePlatform: vi.fn(() => true),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => {
   const real = await importOriginal<typeof import("@srelens/core")>();
-  return { ...real, listContexts: (...a: unknown[]) => listContexts(...a) };
+  return {
+    ...real,
+    listContexts: (...a: unknown[]) => listContexts(...a),
+    connectCluster: (...a: unknown[]) => connectCluster(...a),
+    listCrds: (...a: unknown[]) => listCrds(...a),
+    getForwards: () => getForwards(),
+    subscribeForwards: (...a: Parameters<typeof subscribeForwards>) => subscribeForwards(...a),
+    isApplePlatform: () => isApplePlatform(),
+  };
 });
 
 vi.mock("../lib/tabsPersist", () => ({ loadTabsState, scheduleSave, installFlushOnUnload, flushSave }));
@@ -29,8 +54,11 @@ if (!("ResizeObserver" in globalThis)) {
   };
 }
 
+import { ConsoleProvider } from "../console";
 import { Window } from "./Window";
 import * as store from "../lib/tabsStore";
+import { resetProbes } from "../lib/probe";
+import { resetView } from "../lib/workspace";
 import { defaultState, makeTab } from "../lib/tabs";
 
 const ctx = (stableId: string, name = stableId) => ({ name, stableId, cluster: name, server: "", isCurrent: false });
@@ -39,15 +67,26 @@ beforeEach(() => {
   listContexts.mockReset().mockResolvedValue({ contexts: [ctx("prod")] });
   loadTabsState.mockReset().mockReturnValue(null);
   scheduleSave.mockReset();
+  connectCluster.mockReset().mockImplementation(async (name: string) => ({ context: name, reachable: true, version: "1.30" }));
+  listCrds.mockReset().mockResolvedValue({ crds: [] });
+  getForwards.mockReset().mockReturnValue([]);
+  subscribeForwards.mockReset().mockReturnValue(() => {});
+  isApplePlatform.mockReset().mockReturnValue(true);
   // Cleared so "flushes on unload" can actually fail: a spy that is never
   // cleared stays called from the first test in the file onwards.
   installFlushOnUnload.mockClear();
   flushSave.mockClear();
   store.setState(defaultState([]));
+  resetProbes();
+  resetView();
 });
 
 async function booted() {
-  render(<Window ported={[]} onOpenInClassic={() => {}} />);
+  render(
+    <ConsoleProvider>
+      <Window ported={[]} onOpenInClassic={() => {}} />
+    </ConsoleProvider>,
+  );
   await waitFor(() => expect(screen.getByRole("tablist")).toBeDefined());
 }
 
@@ -82,7 +121,11 @@ describe("Window boot", () => {
     saved.workspaces[0].activeId = saved.workspaces[0].tabs[0].id;
     loadTabsState.mockReturnValue(saved);
     listContexts.mockResolvedValue({ error: "kubeconfig unreadable" });
-    render(<Window ported={[]} onOpenInClassic={() => {}} />);
+    render(
+      <ConsoleProvider>
+        <Window ported={[]} onOpenInClassic={() => {}} />
+      </ConsoleProvider>,
+    );
     await screen.findByRole("tablist");
     // reconcile(saved, []) would have stripped "prod"; a transient failure must not.
     expect(store.currentWorkspace().clusters).toEqual(["prod"]);
@@ -91,7 +134,11 @@ describe("Window boot", () => {
   it("shows a loading state rather than the wrong tabs before boot resolves", () => {
     let resolve!: (v: unknown) => void;
     listContexts.mockReturnValue(new Promise((r) => (resolve = r)));
-    render(<Window ported={[]} onOpenInClassic={() => {}} />);
+    render(
+      <ConsoleProvider>
+        <Window ported={[]} onOpenInClassic={() => {}} />
+      </ConsoleProvider>,
+    );
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.getByText(/loading/i)).toBeDefined();
     act(() => resolve({ contexts: [] }));
@@ -120,7 +167,11 @@ describe("Window boot", () => {
     // Unmounting mid-debounce — the gallery round trip, a design switch —
     // dropped up to 300ms of changes: the unload listener never fires, so
     // taking it off without writing threw the pending state away.
-    const view = render(<Window ported={[]} onOpenInClassic={() => {}} />);
+    const view = render(
+      <ConsoleProvider>
+        <Window ported={[]} onOpenInClassic={() => {}} />
+      </ConsoleProvider>,
+    );
     await waitFor(() => expect(screen.getByRole("tablist")).toBeDefined());
     act(() => store.openTab("/k/pods"));
     expect(flushSave).not.toHaveBeenCalled();
@@ -161,25 +212,88 @@ describe("Window strip", () => {
     expect(store.currentWorkspace().tabs.map((t) => t.route)).toEqual(["/", "/"]);
   });
 
-  it("does not name an arbitrary cluster on a new tab", async () => {
-    // `contexts[0]` is whichever context the kubeconfig happens to list first
-    // — not the current one, and not necessarily even in this workspace — and
-    // `TabStrip` reads `sub` into the accessible name, so the tab announced
-    // itself as being on a cluster the user had not chosen. PR 2 wires the
-    // active cluster; until then a tab names no cluster at all.
+  it("names the workspace's active cluster on a new tab", async () => {
+    // `contexts[0]` would have been whichever context the kubeconfig lists
+    // first — not the current one, and not necessarily even in this
+    // workspace. The active cluster is what a new tab is about, so its name
+    // is what the tab carries.
     listContexts.mockResolvedValue({ contexts: [ctx("prod", "prod-eu")] });
     await booted();
     await userEvent.click(screen.getByRole("button", { name: /new tab/i }));
     const opened = store.currentWorkspace().tabs.at(-1)!;
-    expect(opened.sub).toBeUndefined();
-    expect(screen.getAllByRole("tab").at(-1)!.textContent).not.toContain("prod-eu");
+    expect(opened.sub).toBe("prod-eu");
   });
 
-  it("hands the Placeholder the way back to classic", async () => {
+  it("hands the Placeholder the way back to classic, with the cluster", async () => {
     const onOpenInClassic = vi.fn();
-    render(<Window ported={[]} onOpenInClassic={onOpenInClassic} />);
+    render(
+      <ConsoleProvider>
+        <Window ported={[]} onOpenInClassic={onOpenInClassic} />
+      </ConsoleProvider>,
+    );
     await waitFor(() => expect(screen.getByRole("tablist")).toBeDefined());
     await userEvent.click(screen.getByRole("button", { name: /open in classic/i }));
-    expect(onOpenInClassic).toHaveBeenCalledWith("/");
+    expect(onOpenInClassic).toHaveBeenCalledWith("/", "prod");
+  });
+});
+
+describe("Window accelerators", () => {
+  it("binds ⌘T to a new tab carrying the active cluster's name", async () => {
+    await booted();
+    fireEvent.keyDown(window, { key: "t", metaKey: true });
+    const tabs = store.currentWorkspace().tabs;
+    expect(tabs).toHaveLength(2);
+    expect(tabs.at(-1)!.sub).toBe("prod");
+  });
+
+  it("⌘W closes the active tab and ⌘⇧T reopens it", async () => {
+    await booted();
+    act(() => store.openTab("/k/pods"));
+    fireEvent.keyDown(window, { key: "w", metaKey: true });
+    expect(store.currentWorkspace().tabs).toHaveLength(1);
+    expect(store.currentWorkspace().closed).toHaveLength(1);
+    fireEvent.keyDown(window, { key: "T", metaKey: true, shiftKey: true });
+    expect(store.currentWorkspace().tabs).toHaveLength(2);
+  });
+
+  it("does nothing on Ctrl+W while Apple, since that chord belongs to the terminal", async () => {
+    await booted();
+    act(() => store.openTab("/k/pods"));
+    fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+    expect(store.currentWorkspace().tabs).toHaveLength(2);
+  });
+
+  it("binds nothing while inactive, and takes the chrome down but not the bodies", async () => {
+    render(
+      <ConsoleProvider>
+        <Window ported={[]} onOpenInClassic={() => {}} active={false} />
+      </ConsoleProvider>,
+    );
+    await screen.findByText(/not in the new design yet/);
+    expect(screen.queryByRole("tablist")).toBeNull();
+    fireEvent.keyDown(window, { key: "t", metaKey: true });
+    expect(store.currentWorkspace().tabs).toHaveLength(1);
+  });
+
+  it("probes each cluster of the workspace once at boot", async () => {
+    listContexts.mockResolvedValue({ contexts: [ctx("prod"), ctx("dev")] });
+    render(
+      <ConsoleProvider>
+        <Window ported={[]} onOpenInClassic={() => {}} />
+      </ConsoleProvider>,
+    );
+    await screen.findByRole("tablist");
+    await waitFor(() => expect(connectCluster).toHaveBeenCalledTimes(2));
+    expect(connectCluster.mock.calls.map((c) => c[0])).toEqual(["prod", "dev"]);
+  });
+
+  it("offers Close others on a tab's context menu", async () => {
+    await booted();
+    act(() => store.openTab("/k/pods", { clusterName: "prod" }));
+    act(() => store.openTab("/events"));
+    fireEvent.contextMenu(screen.getByRole("tab", { name: /Pods/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Close others" }));
+    // The pinned home tab survives by design; /events is what "others" means.
+    expect(store.currentWorkspace().tabs.map((t) => t.route)).toEqual(["/", "/k/pods"]);
   });
 });

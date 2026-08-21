@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // `vi.hoisted` because `vi.mock` is hoisted above every declaration in the
@@ -149,5 +149,46 @@ describe("NextApp", () => {
     window.location.hash = "";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
     expect(await screen.findByRole("tablist")).toBeDefined();
+  });
+
+  it("takes the window's chrome down at the gallery, and puts it back after", async () => {
+    // The gallery demos TabStrips of its own — even one labelled Open tabs —
+    // so "no tablist anywhere" is not the claim. The claim is about the
+    // window's: queried inside the window host with hidden elements included,
+    // an unmounted strip is absent while a merely hidden one would still be
+    // found. The bodies stay mounted either way; that is what keeps the
+    // session alive across the trip.
+    const view = render(<NextApp onExit={() => null} />);
+    // The hidden wrapper around the Window — the host whose contents survive
+    // the gallery trip. Structural on purpose: it is this file's subject.
+    const windowHost = (view.container.firstElementChild as HTMLElement)
+      .firstElementChild as HTMLElement;
+    await within(windowHost).findByRole("tablist", { name: "Open tabs" });
+
+    window.location.hash = "#gallery";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await screen.findByRole("heading", { name: /design system/i });
+    expect(windowHost.hidden).toBe(true);
+    expect(within(windowHost).queryByRole("tablist", { hidden: true })).toBeNull();
+    expect(windowHost.textContent).toContain("is not in the new design yet");
+
+    window.location.hash = "";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await within(windowHost).findByRole("tablist", { name: "Open tabs" });
+  });
+
+  it("hands onExit the route and the cluster it is leaving", async () => {
+    // Classic reopens at the place the new design was on, so the way out has
+    // to carry more than a route: without the cluster, "Open in classic" from
+    // a pod list would land classic wherever it happened to be last. Boot's
+    // Default workspace makes the one context active, so no seeding is needed.
+    const onExit = vi.fn(() => null);
+    listContexts.mockResolvedValue({
+      contexts: [{ name: "prod", stableId: "prod", cluster: "prod", server: "", isCurrent: false }],
+    });
+    render(<NextApp onExit={onExit} />);
+    await screen.findByRole("tablist");
+    await userEvent.click(screen.getByRole("button", { name: /open in classic/i }));
+    expect(onExit).toHaveBeenCalledWith("/", "prod");
   });
 });
