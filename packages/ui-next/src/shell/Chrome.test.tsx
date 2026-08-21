@@ -93,6 +93,16 @@ describe("Chrome", () => {
     expect(document.querySelector("[data-native-lights]")).toBeNull();
   });
 
+  it("never doubles up: a caller asking the kit for the picture under Tauri+Apple gets no gap too", () => {
+    // `controls="macos"` under real Tauri on Apple asks the kit to draw its
+    // own three lights. If the gap were derived independently of `controls`,
+    // this is exactly the case that redraws both — the doubling `ec024b5`
+    // exists to remove. desktop/platform default to true in beforeEach.
+    chrome({ controls: "macos" });
+    expect(document.querySelector("[data-native-lights]")).toBeNull();
+    expect(document.querySelectorAll("[data-light]")).toHaveLength(3);
+  });
+
   it("zooms through uiScale", async () => {
     chrome();
     await userEvent.click(screen.getByRole("button", { name: "Zoom in" }));

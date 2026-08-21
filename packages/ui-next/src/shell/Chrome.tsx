@@ -62,11 +62,16 @@ export function Chrome({ controls, clusterName, onToggleTheme, onNewWorkspace }:
   // in its message would otherwise be whatever it was when the dialog opened.
   const target = workspaces.find((w) => w.id === removing) ?? null;
   const desktop = isTauri();
-  // The overlay titlebar keeps macOS's real traffic lights. Painting the
-  // picture too drew two sets on a real machine (found in smoke testing), so
-  // the caller never asks for the picture here, and this bar clears the
-  // natives with a gap that drags like the rest of the bare titlebar.
-  const nativeLights = desktop && isApplePlatform();
+  // The overlay titlebar keeps macOS's real traffic lights whenever the
+  // window is Tauri+Apple, regardless of `controls`. The kit draws its own
+  // picture of them only when `controls === "macos"`; that flag and this gap
+  // must never both be true, or the OS's lights and the kit's painted ones
+  // stack (the doubling `ec024b5` removed). Deriving `nativeLights` from
+  // `controls` here — instead of a caller having to keep the two hand-synced
+  // — is what makes that invariant hold no matter what `controls` a caller
+  // passes: this bar reserves the gap exactly when it is NOT asking the kit
+  // for the picture but the OS is drawing the real thing anyway.
+  const nativeLights = controls !== "macos" && desktop && isApplePlatform();
 
   function askRemove(id: string) {
     const w = workspaces.find((x) => x.id === id);
