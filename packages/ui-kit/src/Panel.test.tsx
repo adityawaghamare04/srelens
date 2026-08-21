@@ -54,4 +54,13 @@ describe("Panel", () => {
     );
     expect(container.querySelector(".card-head")).toBeNull();
   });
+  it("renders the title as a section heading", () => {
+    // The classic SectionPanel this replaces rendered its title as an h2, and
+    // its call sites are real sections of a page — ClusterOverview's among
+    // them. A div would drop every one of them out of the document outline,
+    // which is the same loss Screen's h1 exists to avoid. No level prop: no
+    // SectionPanel in the app nests inside another. (#325 review)
+    render(<Panel title="Cluster">body</Panel>);
+    expect(screen.getByRole("heading", { level: 2, name: "Cluster" })).toBeDefined();
+  });
 });
