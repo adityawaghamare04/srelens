@@ -44,7 +44,14 @@ export function Window({ ported, onOpenInClassic, onOpenGallery }: WindowProps) 
         if (cancelled) return;
         found = outcome.contexts ?? [];
         const saved = loadTabsState();
-        setState(saved ? reconcile(saved, found) : defaultState(found));
+        if (saved && outcome.error) {
+          // The list failed, not the clusters: reconciling against nothing would
+          // strip every workspace's cluster ids and the next change would persist
+          // that. Trust the disk until the backend answers.
+          setState(saved);
+        } else {
+          setState(saved ? reconcile(saved, found) : defaultState(found));
+        }
       } catch (error) {
         if (cancelled) return;
         console.error("could not restore the workspaces", error);

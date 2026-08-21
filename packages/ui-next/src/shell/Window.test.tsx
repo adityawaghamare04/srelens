@@ -74,6 +74,20 @@ describe("Window boot", () => {
     expect(store.getState().workspaces[0].clusters).toEqual([]);
   });
 
+  it("keeps the saved workspaces untouched when the cluster list errors", async () => {
+    const saved = {
+      workspaces: [{ id: "w1", name: "Team", clusters: ["prod"], tabs: [makeTab("/")], activeId: "", closed: [] }],
+      currentId: "w1",
+    };
+    saved.workspaces[0].activeId = saved.workspaces[0].tabs[0].id;
+    loadTabsState.mockReturnValue(saved);
+    listContexts.mockResolvedValue({ error: "kubeconfig unreadable" });
+    render(<Window ported={[]} onOpenInClassic={() => {}} />);
+    await screen.findByRole("tablist");
+    // reconcile(saved, []) would have stripped "prod"; a transient failure must not.
+    expect(store.currentWorkspace().clusters).toEqual(["prod"]);
+  });
+
   it("shows a loading state rather than the wrong tabs before boot resolves", () => {
     let resolve!: (v: unknown) => void;
     listContexts.mockReturnValue(new Promise((r) => (resolve = r)));
