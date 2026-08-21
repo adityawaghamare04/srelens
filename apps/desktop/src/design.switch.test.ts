@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const { isTauriMock, isApplePlatformMock, setTitleBarStyleMock, notifyErrorMock } = vi.hoisted(() => ({
+const { isTauriMock, isApplePlatformMock, setTitleBarStyleMock, setTitleMock, notifyErrorMock } = vi.hoisted(() => ({
   isTauriMock: vi.fn(),
   isApplePlatformMock: vi.fn(),
   setTitleBarStyleMock: vi.fn(),
+  setTitleMock: vi.fn(),
   notifyErrorMock: vi.fn(),
 }));
 vi.mock("@srelens/core", async (importOriginal) => ({
@@ -13,7 +14,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   notify: { error: notifyErrorMock, success: vi.fn(), info: vi.fn() },
 }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ setDecorations: vi.fn(), setTitleBarStyle: setTitleBarStyleMock }),
+  getCurrentWindow: () => ({ setDecorations: vi.fn(), setTitleBarStyle: setTitleBarStyleMock, setTitle: setTitleMock }),
 }));
 
 import { DESIGN_KEY, switchDesign } from "./design";
@@ -25,6 +26,7 @@ beforeEach(() => {
   localStorage.clear();
   reload.mockClear();
   setTitleBarStyleMock.mockReset().mockResolvedValue(undefined);
+  setTitleMock.mockReset().mockResolvedValue(undefined);
   isApplePlatformMock.mockReset().mockReturnValue(true);
   notifyErrorMock.mockClear();
   isTauriMock.mockReturnValue(true);
@@ -56,10 +58,12 @@ describe("switchDesign", () => {
 
   it("hands the system titlebar back when leaving the new design on Apple", async () => {
     // Classic renders under system decorations; an overlay left behind there
-    // would double the chrome. Same failure policy as any cosmetic step:
-    // attempted, never allowed to block the switch.
+    // would double the chrome — and the native title cleared for the overlay
+    // has to come back, since classic draws no name of its own. Same failure
+    // policy as any cosmetic step: attempted, never allowed to block.
     await switchDesign("classic");
     expect(setTitleBarStyleMock).toHaveBeenCalledWith("visible");
+    expect(setTitleMock).toHaveBeenCalledWith("srelens");
     expect(reload).toHaveBeenCalledTimes(1);
   });
 

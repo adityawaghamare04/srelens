@@ -82,7 +82,13 @@ export async function applyNextDesignChrome(): Promise<void> {
   if (!isTauri() || !drawsOwnChrome()) return;
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
-    await getCurrentWindow().setTitleBarStyle("overlay");
+    const win = getCurrentWindow();
+    // An overlay style keeps macOS painting the native title over the
+    // webview — "srelens" from tauri.conf.json landed square on the workspace
+    // switcher — so the name is cleared and the design's own Titlebar speaks
+    // for the window. switchDesign("classic") gives it back.
+    await win.setTitle("");
+    await win.setTitleBarStyle("overlay");
   } catch {
     // Wrong chrome is a blemish; a failed boot is a broken app.
   }
@@ -103,10 +109,14 @@ export async function switchDesign(design: Design): Promise<SwitchResult> {
     try {
       // Leaving the new design means handing the system titlebar back: classic
       // renders under the real decorations, and an overlay left behind would
-      // double the chrome. Going the other way dresses nothing here — the next
-      // boot's applyNextDesignChrome owns that direction.
+      // double the chrome. The native title comes back with it — it was
+      // cleared for the overlay, and classic draws no name of its own. Going
+      // the other way dresses nothing here — the next boot's
+      // applyNextDesignChrome owns that direction.
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().setTitleBarStyle("visible");
+      const win = getCurrentWindow();
+      await win.setTitle("srelens");
+      await win.setTitleBarStyle("visible");
     } catch {
       // Wrong chrome is a blemish; not switching at all is a broken setting.
     }

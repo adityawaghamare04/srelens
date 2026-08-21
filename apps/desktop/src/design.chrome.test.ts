@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 
-const { isTauriMock, isApplePlatformMock, setTitleBarStyleMock } = vi.hoisted(() => ({
+const { isTauriMock, isApplePlatformMock, setTitleBarStyleMock, setTitleMock } = vi.hoisted(() => ({
   isTauriMock: vi.fn(),
   isApplePlatformMock: vi.fn(),
   setTitleBarStyleMock: vi.fn(),
+  setTitleMock: vi.fn(),
 }));
 vi.mock("@srelens/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@srelens/core")>()),
@@ -11,7 +12,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   isApplePlatform: (platform?: string) => isApplePlatformMock(platform),
 }));
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: () => ({ setTitleBarStyle: setTitleBarStyleMock }),
+  getCurrentWindow: () => ({ setTitleBarStyle: setTitleBarStyleMock, setTitle: setTitleMock }),
 }));
 
 import { applyNextDesignChrome, drawsOwnChrome } from "./design";
@@ -25,6 +26,7 @@ beforeEach(() => {
     platform === undefined ? true : /mac|iphone|ipad/i.test(platform),
   );
   setTitleBarStyleMock.mockReset().mockResolvedValue(undefined);
+  setTitleMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("drawsOwnChrome", () => {
@@ -49,19 +51,29 @@ describe("applyNextDesignChrome", () => {
     expect(setTitleBarStyleMock).toHaveBeenCalledWith("overlay");
   });
 
+  it("clears the native title, which macOS keeps painting over the overlay", async () => {
+    // Found on a real machine: with an overlay style the system still draws
+    // the window's own title — "srelens" from tauri.conf.json — on top of the
+    // webview, landing square on the workspace switcher.
+    await applyNextDesignChrome();
+    expect(setTitleMock).toHaveBeenCalledWith("");
+  });
+
   it("does nothing off Apple, where the mock's traffic lights would lie", async () => {
     isApplePlatformMock.mockReturnValue(false);
     await applyNextDesignChrome();
     expect(setTitleBarStyleMock).not.toHaveBeenCalled();
+    expect(setTitleMock).not.toHaveBeenCalled();
   });
 
   it("does nothing on web, where there is no window to dress", async () => {
     isTauriMock.mockReturnValue(false);
     await applyNextDesignChrome();
     expect(setTitleBarStyleMock).not.toHaveBeenCalled();
+    expect(setTitleMock).not.toHaveBeenCalled();
   });
 
-  it("survives a rejecting setTitleBarStyle rather than breaking boot", async () => {
+  it("survives a rejecting window call rather than breaking boot", async () => {
     // A build without `core:window:allow-set-title-bar-style` granted throws
     // here. The overlay is cosmetic; a rejected promise escaping this would
     // have left bootstrap awaiting forever and the window blank.
