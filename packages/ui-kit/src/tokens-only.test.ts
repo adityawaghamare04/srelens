@@ -65,3 +65,24 @@ describe("the design system", () => {
     expect(offenders, `service-layer imports in: ${offenders.join(", ")}`).toEqual([]);
   });
 });
+
+/**
+ * The toolbar grows rather than clipping.
+ *
+ * `.toolbar` is worn by both `Screen`'s title bar and a standalone `Toolbar`.
+ * A fixed height suits the first and breaks the second: the call sites this
+ * replaces — `ResourceBrowser` and `HelmReleasesView` — pass `flex-wrap` and
+ * hold a namespace picker, a search box and actions, which wrap at narrow
+ * widths. A second row inside a 34px box overflows it and lands on the content
+ * below, where the classic toolbar simply got taller. A minimum leaves a
+ * one-line toolbar looking exactly as it did. (#325 review)
+ */
+describe("the toolbar's height", () => {
+  it("is a minimum, not a fixed size", () => {
+    const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+    const rule = css.slice(css.indexOf("  .toolbar {"));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("min-height");
+    expect(body).not.toMatch(/[^-]height:/);
+  });
+});
