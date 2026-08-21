@@ -55,7 +55,10 @@ async function bootstrap(root: HTMLElement): Promise<void> {
     createRoot(root).render(
       <NextApp
         ported={PORTED_SCREENS.map((s) => s.name)}
-        controls={drawsOwnChrome() ? "macos" : "none"}
+        // The overlay keeps macOS's real traffic lights, so the painted set
+        // would double them (found in smoke testing); the picture is only for
+        // an Apple browser, which has no window chrome of its own in the page.
+        controls={drawsOwnChrome() && !isTauri() ? "macos" : "none"}
         onToggleTheme={toggleNextDesignTheme}
         onExit={async (route, context) => {
           // Written before the switch, so classic knows where to reopen even

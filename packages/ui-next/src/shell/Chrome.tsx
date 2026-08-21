@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ConfirmDialog, IconButton, Titlebar, WorkspaceSwitcher } from "@srelens/ui-kit";
-import { applyUiScale, getUiScale, isTauri, setUiScale, stepUiScale } from "@srelens/core";
+import { applyUiScale, getUiScale, isApplePlatform, isTauri, setUiScale, stepUiScale } from "@srelens/core";
 import { Icons } from "../lib/icons";
 import { openTab, removeWorkspace, switchWorkspace, useTabs } from "../lib/tabsStore";
 
@@ -62,6 +62,11 @@ export function Chrome({ controls, clusterName, onToggleTheme, onNewWorkspace }:
   // in its message would otherwise be whatever it was when the dialog opened.
   const target = workspaces.find((w) => w.id === removing) ?? null;
   const desktop = isTauri();
+  // The overlay titlebar keeps macOS's real traffic lights. Painting the
+  // picture too drew two sets on a real machine (found in smoke testing), so
+  // the caller never asks for the picture here, and this bar clears the
+  // natives with a gap that drags like the rest of the bare titlebar.
+  const nativeLights = desktop && isApplePlatform();
 
   function askRemove(id: string) {
     const w = workspaces.find((x) => x.id === id);
@@ -78,19 +83,27 @@ export function Chrome({ controls, clusterName, onToggleTheme, onNewWorkspace }:
         controls={controls}
         label="Window"
         leading={
-          <WorkspaceSwitcher
-            icon={Icons.workspace}
-            workspaces={workspaces.map((w) => ({
-              id: w.id,
-              name: w.name,
-              clusters: w.clusters.length,
-              tabs: w.tabs.length,
-            }))}
-            activeId={workspace.id}
-            onSelect={switchWorkspace}
-            onRemove={askRemove}
-            onCreate={onNewWorkspace}
-          />
+          <>
+            {nativeLights && (
+              // Clears macOS's own traffic lights, which the overlay keeps.
+              // Carries the drag attribute so the dead space they leave still
+              // moves the window.
+              <span aria-hidden data-native-lights data-tauri-drag-region className="w-16 shrink-0 self-stretch" />
+            )}
+            <WorkspaceSwitcher
+              icon={Icons.workspace}
+              workspaces={workspaces.map((w) => ({
+                id: w.id,
+                name: w.name,
+                clusters: w.clusters.length,
+                tabs: w.tabs.length,
+              }))}
+              activeId={workspace.id}
+              onSelect={switchWorkspace}
+              onRemove={askRemove}
+              onCreate={onNewWorkspace}
+            />
+          </>
         }
         title={clusterName ?? "srelens"}
         actions={

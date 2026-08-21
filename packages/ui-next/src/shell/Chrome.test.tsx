@@ -28,9 +28,10 @@ if (!("ResizeObserver" in globalThis)) {
 // zoom. Both are mocked: this suite is about the buttons calling the right
 // thing with the right number, and `stepUiScale` stays real so the number is
 // the one the app would use.
-const { scale, desktop } = vi.hoisted(() => ({
+const { scale, desktop, platform } = vi.hoisted(() => ({
   scale: { get: vi.fn(() => 100), set: vi.fn((n: number) => n), apply: vi.fn() },
   desktop: vi.fn(() => true),
+  platform: vi.fn(() => true),
 }));
 vi.mock("@srelens/core", async (orig) => ({
   ...(await orig<typeof import("@srelens/core")>()),
@@ -38,6 +39,7 @@ vi.mock("@srelens/core", async (orig) => ({
   setUiScale: scale.set,
   applyUiScale: scale.apply,
   isTauri: desktop,
+  isApplePlatform: platform,
 }));
 
 const ctx = (id: string) => ({ name: id, stableId: id, cluster: id, server: "", isCurrent: false });
@@ -48,6 +50,7 @@ beforeEach(() => {
   // `clearAllMocks` forgets the calls, not the implementations — so a test that
   // asked for web mode would leak into the next one without this.
   desktop.mockReturnValue(true);
+  platform.mockReturnValue(true);
 });
 
 const chrome = (props: Partial<Parameters<typeof Chrome>[0]> = {}) =>
@@ -64,6 +67,30 @@ describe("Chrome", () => {
     chrome({ clusterName: "prod" });
     expect(screen.getByRole("button", { name: /Default/ })).toBeDefined();
     expect(screen.getByText("prod")).toBeDefined();
+  });
+
+  it("leaves room for the real traffic lights the overlay keeps", () => {
+    // Found on a real machine: with an overlay titlebar, macOS's own traffic
+    // lights stay and the painted ones doubled them. Under the overlay this
+    // bar paints none and starts its content past the natives instead.
+    chrome({ controls: "none" });
+    const gap = document.querySelector("[data-native-lights]");
+    expect(gap).not.toBeNull();
+    expect(gap?.hasAttribute("data-tauri-drag-region")).toBe(true);
+  });
+
+  it("paints the picture only where no real window has lights", () => {
+    // An Apple browser: no native lights in the page, so the kit's picture
+    // shows and the gap has nothing to clear.
+    desktop.mockReturnValue(false);
+    chrome({ controls: "macos" });
+    expect(document.querySelector("[data-native-lights]")).toBeNull();
+  });
+
+  it("gives a non-Apple window neither picture nor gap", () => {
+    platform.mockReturnValue(false);
+    chrome({ controls: "none" });
+    expect(document.querySelector("[data-native-lights]")).toBeNull();
   });
 
   it("zooms through uiScale", async () => {
