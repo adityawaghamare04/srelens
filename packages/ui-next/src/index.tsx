@@ -1,6 +1,8 @@
 import { useState, useSyncExternalStore } from "react";
 import { Gallery } from "@srelens/ui-kit/gallery";
 
+export { ConsoleProvider, useConsole, type ConsoleValue } from "./console";
+
 function subscribeToHash(onChange: () => void): () => void {
   window.addEventListener("hashchange", onChange);
   return () => window.removeEventListener("hashchange", onChange);

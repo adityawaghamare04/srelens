@@ -1,0 +1,214 @@
+import { useId, type KeyboardEvent, type ReactNode } from "react";
+import { EmptyState } from "./EmptyState";
+import { StatusPill, type StatusKind } from "./StatusPill";
+import { Tabs, type TabItem } from "./Tabs";
+import { cx } from "./cx";
+import { filled } from "./slot";
+import { toneColor, type Tone } from "./tone";
+
+export interface InspectorFact {
+  /** What the figure is — "Ready", "Restarts", "Age". Always shown. */
+  label: string;
+  value: ReactNode;
+  /** Tints the figure. Emphasis only: the label and value carry the meaning. */
+  tone?: Tone;
+}
+
+export interface InspectorProps {
+  /** The subject's name — the heading of the peek, and the panel's own name. */
+  name: ReactNode;
+  /** The line beneath it, saying what the subject is (e.g. "Deployment · checkout"). */
+  subtitle?: ReactNode;
+  /** Marks the subject as one the caller has singled out. */
+  flagged?: boolean;
+  /** What being flagged means, for anyone who cannot see the dot. */
+  flaggedLabel?: string;
+  /** The subject's state, in words. */
+  status?: ReactNode;
+  statusKind?: StatusKind;
+  /** The figures read across the header under the status. */
+  facts?: InspectorFact[];
+  /** Controls the caller owns, shown at the top right before Close. */
+  actions?: ReactNode;
+  /** Omit when something outside already offers a way out (a Drawer does). */
+  onClose?: () => void;
+  /** The panes on offer. No tabs, no strip. */
+  tabs?: TabItem[];
+  activeTab?: string;
+  onTabChange?: (id: string) => void;
+  /** Names the strip for assistive technology (e.g. "Resource views"). */
+  tabsLabel?: string;
+  /** The active pane. */
+  children?: ReactNode;
+  /** What to say when the active pane has nothing in it. */
+  emptyLabel?: ReactNode;
+  /** The bar across the bottom — the actions that apply to the whole subject. */
+  footer?: ReactNode;
+  className?: string;
+}
+
+/**
+ * The peek: one subject, identified at the top, its panes beneath, its actions
+ * along the bottom. Selecting a row fills it, and it never navigates — the full
+ * view is a control in the header, which is the caller's to place.
+ *
+ * The mock's version is a pane and a Kubernetes workload viewer welded
+ * together: it reads a `Workload`, calls `describe()` for the detail, and
+ * hard-codes five panes of pods, containers, conditions and events. None of
+ * that can come into the kit, and cutting it out is not a loss — the header is
+ * a name, a subtitle, a state and some figures whatever the subject is, and the
+ * panes are content the caller already has in hand. So the panes arrive as
+ * children and the figures as {@link InspectorFact}s, the same line NavIcon
+ * drew when it stopped knowing that pods are boxes. (#320)
+ *
+ * Sizing and docking are not here either. The mock drags its own left edge and
+ * remembers the width in localStorage; the kit already has that, with focus
+ * handling and an Escape stack besides, in `Drawer`. Two components owning one
+ * drag is how they drift, so this one is the contents and the caller picks the
+ * container — a flex sibling in a `.panes` row, or a `Drawer` around it, in
+ * which case its `onClose` is left off so there is only one Close. That is also
+ * why it is a named region rather than the mock's `aside`: a region nests
+ * correctly inside whatever landmark it lands in, where a second complementary
+ * beside Drawer's would just be noise.
+ *
+ * The strip is the kit's `Tabs`, not the mock's segmented control, which is a
+ * row of buttons with no keyboard contract at all. The look changes; a tablist
+ * whose arrow keys work is worth more than the 7px radius.
+ */
+export function Inspector({
+  name,
+  subtitle,
+  flagged = false,
+  flaggedLabel = "Needs attention",
+  status,
+  statusKind = "neutral",
+  facts = [],
+  actions,
+  onClose,
+  tabs = [],
+  activeTab,
+  onTabChange,
+  tabsLabel,
+  children,
+  emptyLabel = "Nothing to show",
+  footer,
+  className,
+}: InspectorProps) {
+  const headingId = useId();
+  const active = activeTab ?? tabs[0]?.id;
+  const activeLabel = tabs.find((t) => t.id === active)?.label;
+
+  function onKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key !== "Escape" || !onClose || event.defaultPrevented) return;
+    // A field inside a pane owns its own Escape — a filter box clearing itself
+    // should not also close the panel around it. Drawer bails on the same set,
+    // and for the same reason.
+    const el = event.target as HTMLElement | null;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) {
+      return;
+    }
+    // Handled here, so a Drawer or a dialog further out does not close as well
+    // on the one keypress. Listening on the window instead is what makes two
+    // panels back out together.
+    event.preventDefault();
+    onClose();
+  }
+
+  return (
+    <section
+      aria-labelledby={headingId}
+      className={cx("pane", className)}
+      onKeyDown={onKeyDown}
+    >
+      <header className="rule-b px-3 py-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              {flagged && (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: toneColor("sev") }}
+                  />
+                  {/* The mock's dot says "this one" in colour alone, which is
+                      nothing to a screen reader and nothing to a colour-blind
+                      reader either. The word is the marker; the dot is how it
+                      looks. */}
+                  <span className="sr-only">{flaggedLabel}</span>
+                </>
+              )}
+              <h2 id={headingId} className="truncate text-[0.875rem] font-semibold">
+                {name}
+              </h2>
+            </div>
+            {filled(subtitle) && <p className="path mt-px truncate">{subtitle}</p>}
+          </div>
+          {(filled(actions) || onClose) && (
+            <div data-slot="inspector-actions" className="flex shrink-0 items-center gap-1">
+              {actions}
+              {onClose && (
+                <button type="button" className="icon-btn" aria-label="Close inspector" onClick={onClose}>
+                  {/* Inline rather than an icon-set import: the kit takes no
+                      dependency on lucide, and this is the only glyph it needs. */}
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M18 6 6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {(filled(status) || facts.length > 0) && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+            {filled(status) && <StatusPill status={status} kind={statusKind} />}
+            {facts.length > 0 && (
+              // A description list, because that is what these are. The mock
+              // renders "9/12 ready" and then "6m" with no word at all beside
+              // it, and a bare figure in a header is unreadable to anyone who
+              // did not already know which column it came from.
+              <dl className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                {facts.map((fact) => (
+                  <div key={fact.label} className="flex items-baseline gap-1">
+                    <dt className="path text-faint">{fact.label}</dt>
+                    <dd
+                      className="path"
+                      style={fact.tone ? { color: toneColor(fact.tone) } : undefined}
+                    >
+                      {fact.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </div>
+        )}
+      </header>
+
+      {tabs.length > 0 && (
+        <div className="rule-b px-2 py-1.5">
+          <Tabs tabs={tabs} active={active!} onChange={onTabChange ?? (() => {})} label={tabsLabel} />
+        </div>
+      )}
+
+      <div
+        className="pane-body"
+        // Named rather than pointed at: `Tabs` owns the strip and puts no ids
+        // on its buttons, so `aria-labelledby` has nothing to reference. The
+        // panel still says which pane it is, which is the part a reader needs.
+        role={tabs.length > 0 ? "tabpanel" : undefined}
+        aria-label={tabs.length > 0 ? activeLabel : undefined}
+        // A scrolling region has to be reachable, or its content is unreadable
+        // to anyone driving the page from the keyboard.
+        tabIndex={tabs.length > 0 ? 0 : undefined}
+      >
+        {filled(children) ? children : <EmptyState title={emptyLabel} />}
+      </div>
+
+      {filled(footer) && (
+        <footer className="rule-t flex items-center gap-1 px-2 py-1.5">{footer}</footer>
+      )}
+    </section>
+  );
+}
