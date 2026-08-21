@@ -97,4 +97,31 @@ describe("Meter", () => {
     expect(container.querySelector('[data-slot="meter-detail"]')).toBeNull();
     expect(container.textContent?.match(/42%/g)).toHaveLength(1);
   });
+  it("rounds the percentage it prints, captioned or not", () => {
+    // The figures come from ratios — `percent(part, total)` in ClusterOverview
+    // returns `(part / total) * 100` — so 1 of 3 is 33.33333333333333. The
+    // classic StatusMeter this replaces printed `toFixed(0)`. (#325 review)
+    const bare = render(<Meter value={(1 / 3) * 100} ariaLabel="CPU" />);
+    expect(bare.container.textContent).toContain("33%");
+    expect(bare.container.textContent).not.toContain("33.3");
+    const labelled = render(<Meter value={(1 / 3) * 100} ariaLabel="CPU" label="CPU" />);
+    expect(labelled.container.textContent).toContain("33%");
+    expect(labelled.container.textContent).not.toContain("33.3");
+  });
+
+  it("rounds what it announces too", () => {
+    // Fourteen decimal places read aloud is worse than on screen.
+    render(<Meter value={(1 / 3) * 100} ariaLabel="CPU" />);
+    const meter = screen.getByRole("meter", { name: "CPU" });
+    expect(meter.getAttribute("aria-valuetext")).toBe("33%");
+    expect(meter.getAttribute("aria-valuenow")).toBe("33");
+  });
+
+  it("keeps the unrounded value for the bar itself", () => {
+    // Rounding is for reading. The geometry keeps its precision. (#325 review)
+    const { container } = render(<Meter value={(1 / 3) * 100} ariaLabel="CPU" />);
+    expect(container.querySelector<HTMLElement>(".h-full")?.style.width).toBe(
+      `${(1 / 3) * 100}%`,
+    );
+  });
 });

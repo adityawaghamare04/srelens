@@ -44,6 +44,11 @@ type MeterProps = {
 export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
   const resolved: Tone = tone ?? (value > 80 ? "sev" : value > 65 ? "warn" : "ok");
   const width = Math.min(Math.max(value, 0), 100);
+  // These figures are ratios — a third of three pods is 33.33333333333333 —
+  // and fourteen decimal places crowd the bar on screen and are worse read
+  // aloud. Rounded for reading only; the bar keeps the full precision, and
+  // rounding does not hide an over-limit pod the way clamping would. (#325 review)
+  const shown = Math.round(value);
   const bar = (
     <div className="flex items-center gap-2">
       <div
@@ -57,10 +62,10 @@ export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
         // silently or skip the element. The real figure goes in aria-valuetext,
         // which is free text, so nothing is hidden from a screen reader that a
         // sighted reader can see. (#317 review)
-        aria-valuenow={width}
+        aria-valuenow={Math.round(width)}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuetext={`${value}%`}
+        aria-valuetext={`${shown}%`}
       >
         <div
           className="h-full rounded-full"
@@ -68,7 +73,7 @@ export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
         />
       </div>
       {!filled(label) && (
-        <span className="num w-9 shrink-0 text-right text-[0.6875rem] text-muted">{value}%</span>
+        <span className="num w-9 shrink-0 text-right text-[0.6875rem] text-muted">{shown}%</span>
       )}
     </div>
   );
@@ -86,7 +91,7 @@ export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
           className="flex items-baseline justify-between gap-2 text-[0.6875rem]"
         >
           <span className="truncate text-muted">{label}</span>
-          <span className="num shrink-0">{value}%</span>
+          <span className="num shrink-0">{shown}%</span>
         </div>
       )}
       {bar}
