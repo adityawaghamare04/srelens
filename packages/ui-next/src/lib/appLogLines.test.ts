@@ -28,20 +28,22 @@ describe("logLineLevel", () => {
 });
 
 describe("parseAppLog", () => {
-  it("splits the timestamp, the level and the message apart", () => {
+  it("puts only the time in ts — the date stays in raw", () => {
     const [entry] = parseAppLog(line("WARN", "context prod is unreachable"));
-    expect(entry).toEqual({
-      ts: "2026-08-21 09:12:03",
-      level: "WARN",
-      message: "context prod is unreachable",
-      raw: line("WARN", "context prod is unreachable"),
-    });
+    expect(entry.ts).toBe("09:12:03");
+    expect(entry.raw).toContain("2026-08-21");
+  });
+
+  it("extracts the log target into source", () => {
+    const [entry] = parseAppLog(line("INFO", "connected to prod"));
+    expect(entry.source).toBe("srelens::cluster");
   });
 
   it("keeps a line the logger did not write, whole", () => {
     const [entry] = parseAppLog("    at srelens::cluster::connect");
     expect(entry).toEqual({
       ts: "",
+      source: "",
       level: "INFO",
       message: "at srelens::cluster::connect",
       raw: "    at srelens::cluster::connect",
@@ -71,41 +73,49 @@ describe("filterLines", () => {
   );
 
   it("keeps everything at level 'all' with no text", () => {
-    expect(filterLines(lines, "", "all")).toHaveLength(3);
+    expect(filterLines(lines, "", "all").lines).toHaveLength(3);
+  });
+
+  it("reports total equal to the shown count when nothing is capped", () => {
+    expect(filterLines(lines, "", "all").total).toBe(3);
   });
 
   it("filters by level", () => {
-    expect(filterLines(lines, "", "ERROR").map((e) => e.message)).toEqual([
+    expect(filterLines(lines, "", "ERROR").lines.map((e) => e.message)).toEqual([
       "RBAC denied for Pods",
     ]);
   });
 
   it("filters by text, case-insensitively", () => {
-    expect(filterLines(lines, "RBAC", "all").map((e) => e.message)).toEqual([
+    expect(filterLines(lines, "RBAC", "all").lines.map((e) => e.message)).toEqual([
       "RBAC denied for Pods",
     ]);
-    expect(filterLines(lines, "rbac", "all").map((e) => e.message)).toEqual([
+    expect(filterLines(lines, "rbac", "all").lines.map((e) => e.message)).toEqual([
       "RBAC denied for Pods",
     ]);
   });
 
   it("applies text and level together", () => {
-    expect(filterLines(lines, "prod", "WARN").map((e) => e.message)).toEqual([
+    expect(filterLines(lines, "prod", "WARN").lines.map((e) => e.message)).toEqual([
       "slow response from prod",
     ]);
-    expect(filterLines(lines, "prod", "ERROR")).toEqual([]);
+    expect(filterLines(lines, "prod", "ERROR").lines).toEqual([]);
+    expect(filterLines(lines, "prod", "ERROR").total).toBe(0);
   });
 
-  it("keeps the newest MAX_RENDERED of a log that exceeds the cap", () => {
+  it("keeps the newest MAX_RENDERED of a log that exceeds the cap, and reports the pre-cap total", () => {
     const many = parseAppLog(
       Array.from({ length: MAX_RENDERED + 1 }, (_, i) => line("INFO", `entry ${i}`)).join("\n"),
     );
-    const capped = filterLines(many, "", "all");
+    const { lines: capped, total } = filterLines(many, "", "all");
     expect(MAX_RENDERED).toBe(5000);
     expect(capped).toHaveLength(MAX_RENDERED);
     // The oldest is the one dropped, so the window ends at the newest line.
     expect(capped[0].message).toBe("entry 1");
     expect(capped[capped.length - 1].message).toBe(`entry ${MAX_RENDERED}`);
+    // total is the pre-cap match count, not the (already-capped) shown count —
+    // this is what lets the screen tell a real cap apart from zero matches.
+    expect(total).toBe(MAX_RENDERED + 1);
   });
 });
 

@@ -54,7 +54,8 @@ describe("AppLog", () => {
       "INFO connected to prod",
       "ERROR RBAC denied for Pods",
     ]);
-    expect(within(region).getByText("2026-08-21 09:12:03")).toBeTruthy();
+    expect(within(region).getByText("09:12:03")).toBeTruthy();
+    expect(within(region).getAllByText("srelens::cluster")).not.toHaveLength(0);
   });
 
   it("says so when the log has nothing in it", async () => {
@@ -126,7 +127,23 @@ describe("AppLog", () => {
 
     await userEvent.clear(field);
     await userEvent.type(field, "no such line");
-    expect(screen.getByText("No lines match (showing at most 5 000)")).toBeTruthy();
+    expect(screen.getByText("No lines match")).toBeTruthy();
     expect(rendered(region)).toEqual([]);
+  });
+
+  it("says how many lines are shown when the cap truncates real matches", async () => {
+    const many = Array.from(
+      { length: 5001 },
+      (_, i) => `[2026-08-21][09:12:03][srelens::cluster][INFO] entry ${i}`,
+    ).join("\n");
+    core.readAppLog.mockResolvedValue(many);
+
+    render(<AppLog route="/logs" />);
+    const region = await screen.findByRole("log", { name: "Application log" });
+
+    // 5000 shown of 5001 real matches — not "no lines match", the opposite
+    // state, and not silent either: a truncated log must not look complete.
+    expect(await screen.findByText(/5 000 of 5 001 lines/)).toBeTruthy();
+    expect(rendered(region)).toHaveLength(5000);
   });
 });

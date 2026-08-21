@@ -12,6 +12,7 @@ import {
   Database,
   FileCog,
   FilePlus,
+  FolderOpen,
   FolderTree,
   Gauge,
   GitBranch,
@@ -27,6 +28,7 @@ import {
   Plus,
   Puzzle,
   RadioTower,
+  RefreshCw,
   Route,
   ScrollText,
   Search,
@@ -159,6 +161,11 @@ export const Icons = {
   helmreleases: ShipWheel,
   toolbox: Wrench,
   newresource: FilePlus,
+
+  // The application log screen's own actions.
+  refresh: RefreshCw,
+  copy: Copy,
+  reveal: FolderOpen,
 
   /** What a kind with no glyph of its own gets — a CRD, most often. */
   fallback: Circle,

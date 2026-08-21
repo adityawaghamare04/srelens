@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { Copy, FolderOpen, RefreshCw } from "lucide-react";
 import { appLogPath, isTauri, readAppLog, revealAppLog } from "@srelens/core";
 import {
   EmptyState,
@@ -12,7 +11,8 @@ import {
   Select,
 } from "@srelens/ui-kit";
 import { useResource } from "../lib/useResource";
-import { LEVELS, MAX_RENDERED, filterLines, parseAppLog, type Level } from "../lib/appLogLines";
+import { Icons } from "../lib/icons";
+import { LEVELS, filterLines, parseAppLog, type Level } from "../lib/appLogLines";
 
 const LEVEL_OPTIONS = [
   { value: "all", label: "All levels" },
@@ -20,12 +20,13 @@ const LEVEL_OPTIONS = [
 ];
 
 /**
- * The cap, grouped the way the design writes numbers, derived from the cap
- * itself so the sentence and the slice cannot drift apart. Grouped by hand
- * rather than through `toLocaleString`, which would put a comma in it under one
- * locale and a full stop under another.
+ * Grouped the way the design writes numbers — a space every three digits, by
+ * hand rather than through `toLocaleString`, which would put a comma in it
+ * under one locale and a full stop under another.
  */
-const CAP_TEXT = String(MAX_RENDERED).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+function groupNumber(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
 
 /**
  * srelens's own log: the tail of the rotating file it writes as it runs,
@@ -42,10 +43,6 @@ const CAP_TEXT = String(MAX_RENDERED).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
  * has no log to show and says so rather than failing a read: `isTauri` is
  * checked inside the loader as well as in the render, so the web branch never
  * so much as schedules a command the backend cannot answer.
- *
- * The three glyphs come straight from lucide rather than from the shell's
- * `Icons` map, which is the vocabulary of the chrome — the sidebar's kinds and
- * the titlebar's actions — and has no entry for refresh, copy or reveal.
  */
 export function AppLog(_props: { route: string }) {
   const [text, setText] = useState("");
@@ -64,7 +61,10 @@ export function AppLog(_props: { route: string }) {
 
   const [raw = "", path = ""] = log.data ?? [];
   const lines = useMemo(() => parseAppLog(raw), [raw]);
-  const filtered = useMemo(() => filterLines(lines, text, level), [lines, text, level]);
+  const { lines: filtered, total } = useMemo(
+    () => filterLines(lines, text, level),
+    [lines, text, level],
+  );
 
   async function copyPath() {
     try {
@@ -102,13 +102,13 @@ export function AppLog(_props: { route: string }) {
       actions={
         <>
           <IconButton
-            icon={RefreshCw}
+            icon={Icons.refresh}
             label="Refresh"
             onClick={log.reload}
             disabled={log.status === "loading"}
           />
           <IconButton
-            icon={Copy}
+            icon={Icons.copy}
             label="Copy path"
             // The name stays short; the tooltip says which path, since the
             // screen has nowhere else to show it.
@@ -116,7 +116,7 @@ export function AppLog(_props: { route: string }) {
             onClick={() => void copyPath()}
             disabled={!path}
           />
-          <IconButton icon={FolderOpen} label="Reveal" onClick={() => void revealAppLog()} />
+          <IconButton icon={Icons.reveal} label="Reveal" onClick={() => void revealAppLog()} />
         </>
       }
     >
@@ -154,14 +154,32 @@ export function AppLog(_props: { route: string }) {
               hint="srelens writes to this file as it runs; there is nothing in it so far."
             />
           ) : filtered.length === 0 ? (
-            <EmptyState title={`No lines match (showing at most ${CAP_TEXT})`} />
+            <EmptyState title="No lines match" />
           ) : (
-            filtered.map((line, i) => (
-              // The index is the key: two identical lines a second apart are
-              // ordinary in a log, so nothing in the entry is a stable
-              // identity, and the list is rebuilt whole on every filter change.
-              <LogLine key={i} ts={line.ts} level={line.level} message={line.message} />
-            ))
+            <>
+              {total > filtered.length && (
+                // The cap bit: more lines matched than fit on screen. Said
+                // here rather than folded into the empty state above, because
+                // this is the one place a truncated log must not look
+                // complete — silence here would be the same defect the empty
+                // state's wrong wording used to cause the other way round.
+                <div className="px-2.5 py-1 text-[0.75rem] text-muted">
+                  Showing the newest {groupNumber(filtered.length)} of {groupNumber(total)} lines
+                </div>
+              )}
+              {filtered.map((line, i) => (
+                // The index is the key: two identical lines a second apart are
+                // ordinary in a log, so nothing in the entry is a stable
+                // identity, and the list is rebuilt whole on every filter change.
+                <LogLine
+                  key={i}
+                  ts={line.ts}
+                  source={line.source}
+                  level={line.level}
+                  message={line.message}
+                />
+              ))}
+            </>
           )}
         </div>
       )}

@@ -24,8 +24,20 @@ export const MAX_RENDERED = 5000;
 
 /** One parsed entry: the columns `LogLine` draws, plus the text it came from. */
 export interface AppLogLine {
-  /** `[date][time]` joined with a space, or `""` for a line with no prefix. */
+  /**
+   * The time from a `[date][time]` prefix — the clock only, no date. `LogLine`
+   * renders `ts` into a fixed ~12-character column; the date would eat that
+   * whole and truncate the one thing a triager reads. The date is not lost —
+   * it stays in `raw`, which Copy and the text filter both expose. `""` for a
+   * line with no prefix.
+   */
   ts: string;
+  /**
+   * The log target — third bracket of `[date][time][target][LEVEL]`, e.g.
+   * `srelens::cluster`. `LogLine`'s `source` gutter renders it; `""` for a
+   * line with no prefix.
+   */
+  source: string;
   level: Level;
   /** The text after the level bracket — a line with no bracket in full. */
   message: string;
@@ -46,6 +58,9 @@ const LEVEL_RE = /\]\[(TRACE|DEBUG|INFO|WARN|ERROR)\]/;
 /** `[date][time]` at the head of a line, if it has one. */
 const TS_RE = /^\[([^\]]*)\]\[([^\]]*)\]/;
 
+/** The third bracket — the log target — when the line opens with three. */
+const SOURCE_RE = /^\[[^\]]*\]\[[^\]]*\]\[([^\]]*)\]/;
+
 /** The level of a `[date][time][target][LEVEL] message` line (INFO if absent). */
 export function logLineLevel(line: string): Level {
   const match = line.match(LEVEL_RE);
@@ -65,13 +80,15 @@ export function parseAppLog(raw: string): AppLogLine[] {
     .filter((line) => line.trim() !== "")
     .map((line) => {
       const ts = line.match(TS_RE);
+      const source = line.match(SOURCE_RE);
       const level = line.match(LEVEL_RE);
       // After the level bracket when there is one; otherwise after the
       // timestamp, so a prefixed line the level regex missed still loses its
       // prefix rather than repeating it in the message column.
       const from = level ? level.index! + level[0].length : (ts?.[0].length ?? 0);
       return {
-        ts: ts ? `${ts[1]} ${ts[2]}` : "",
+        ts: ts ? ts[2] : "",
+        source: source ? source[1] : "",
         level: (level?.[1] as Level) ?? "INFO",
         message: line.slice(from).trim(),
         raw: line,
@@ -79,8 +96,23 @@ export function parseAppLog(raw: string): AppLogLine[] {
     });
 }
 
+/** The lines a filter leaves, capped, plus how many actually matched. */
+export interface FilteredLines {
+  /** Newest {@link MAX_RENDERED} of the matches, oldest dropped. */
+  lines: AppLogLine[];
+  /**
+   * How many lines matched before the cap trimmed them — `lines.length` when
+   * nothing was capped, larger than it when the cap bit. This is what lets a
+   * screen tell "your filter matched nothing" apart from "your filter matched
+   * more than we can render"; a caller that only sees `lines` cannot, because
+   * both end up looking at an empty or a 5000-long array.
+   */
+  total: number;
+}
+
 /**
- * The lines a filter leaves, newest {@link MAX_RENDERED} of them.
+ * The lines a filter leaves, newest {@link MAX_RENDERED} of them, and the
+ * pre-cap match count.
  *
  * The text is matched against the whole original line rather than the message,
  * so searching for a target (`srelens::cluster`) or a timestamp still works —
@@ -95,12 +127,14 @@ export function filterLines(
   lines: AppLogLine[],
   text: string,
   level: Level | "all",
-): AppLogLine[] {
+): FilteredLines {
   const query = text.toLowerCase();
   const matches = lines.filter((line) => {
     if (level !== "all" && line.level !== level) return false;
     if (query && !line.raw.toLowerCase().includes(query)) return false;
     return true;
   });
-  return matches.length > MAX_RENDERED ? matches.slice(matches.length - MAX_RENDERED) : matches;
+  const capped =
+    matches.length > MAX_RENDERED ? matches.slice(matches.length - MAX_RENDERED) : matches;
+  return { lines: capped, total: matches.length };
 }
