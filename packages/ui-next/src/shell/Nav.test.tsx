@@ -121,18 +121,22 @@ describe("Nav", () => {
     expect(screen.queryByRole("treeitem", { name: "Pods" })).toBeNull();
   });
 
-  it("reports a failed CRD discovery, and retries it", async () => {
+  it("keeps the whole tree when CRD discovery fails, and retries from inside Custom resources", async () => {
     listCrds.mockResolvedValue({ error: "crds forbidden" });
     render(<Nav contexts={[PROD]} />);
 
-    const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("crds forbidden");
-
-    listCrds.mockResolvedValue({ crds: [] });
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-
+    // The built-ins are not RBAC-gated the way CRD discovery is: an ordinary
+    // user who cannot list CRDs must still get Pods and the rest of the tree.
     expect(await screen.findByRole("treeitem", { name: "Pods" })).toBeTruthy();
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: "Custom resources" }));
+    const retry = await screen.findByRole("treeitem", { name: "Custom resources unavailable — retry" });
+
+    const before = currentWorkspace().tabs.length;
+    await userEvent.click(retry);
+
     expect(listCrds).toHaveBeenCalledTimes(2);
+    expect(currentWorkspace().tabs).toHaveLength(before);
   });
 
   it("asks the new cluster for its CRDs when the cluster changes", async () => {
@@ -144,5 +148,23 @@ describe("Nav", () => {
     rerender(<Nav contexts={[PROD, other]} />);
 
     await vi.waitFor(() => expect(listCrds).toHaveBeenCalledWith("staging"));
+  });
+
+  it("stays folded shut across a remount once the user has closed every group", async () => {
+    const { unmount } = render(<Nav contexts={[PROD]} />);
+    await screen.findByRole("treeitem", { name: "Pods" });
+
+    for (const label of ["Cluster", "Workloads", "Config", "Network", "Storage", "Access control", "Investigate"]) {
+      await userEvent.click(screen.getByRole("treeitem", { name: label }));
+    }
+    expect(screen.queryByRole("treeitem", { name: "Pods" })).toBeNull();
+
+    unmount();
+    render(<Nav contexts={[PROD]} />);
+
+    // A remount must not read "every group closed" as "nothing has been
+    // seeded yet" and reopen all six — that is the state the user just put
+    // the sidebar in on purpose.
+    expect(screen.queryByRole("treeitem", { name: "Pods" })).toBeNull();
   });
 });

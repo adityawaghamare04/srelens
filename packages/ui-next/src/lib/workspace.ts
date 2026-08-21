@@ -39,9 +39,34 @@ export function getView(): WorkspaceView {
   return view;
 }
 
+/**
+ * Whether {@link seedExpandedOnce} has already run for this window's
+ * lifetime. Module-level rather than a ref kept on `Nav`: a ref resets every
+ * time the component remounts, so a ref-guarded seed cannot tell "nothing has
+ * opened a group yet" from "the user just closed all of them" — both show up
+ * as an empty `expanded` on the next mount. A flag that survives remounts is
+ * what makes the two distinguishable. `resetView` clears it alongside the
+ * rest of the view because tests use one call to `resetView` as "a fresh
+ * window"; production never calls `resetView` at all.
+ */
+let seeded = false;
+
 export function resetView(): void {
+  seeded = false;
   if (isInitial(view)) return;
   emit(initial());
+}
+
+/**
+ * Seeds `expanded` with `ids`, but only the first time this is ever called
+ * for the running window — not once per mount of whatever calls it. Everything
+ * else about the sidebar's folds already works whether `Nav` is mounted once
+ * or remounted a dozen times; this is the one piece of it that must not.
+ */
+export function seedExpandedOnce(ids: string[]): void {
+  if (seeded) return;
+  seeded = true;
+  if (view.expanded.length === 0) setExpanded(ids);
 }
 
 export function subscribe(listener: () => void): () => void {

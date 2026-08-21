@@ -129,6 +129,10 @@ describe("routeForNode", () => {
     expect(routeForNode("crdgroup:x", crds)).toBeNull();
     expect(routeForNode("workloads", crds)).toBeNull();
   });
+
+  it("has nothing to open for the CRD-discovery retry leaf", () => {
+    expect(routeForNode("crd-error", crds)).toBeNull();
+  });
 });
 
 describe("INVESTIGATE", () => {

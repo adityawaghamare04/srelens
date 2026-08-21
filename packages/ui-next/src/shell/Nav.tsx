@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listCrds, type ClusterContext, type CrdRef } from "@srelens/core";
 import { Mark, ResourceTree, Sidebar, StatusPill, type ResourceNode, type StatusKind } from "@srelens/ui-kit";
 import { Icons } from "../lib/icons";
@@ -6,7 +6,10 @@ import { useMark } from "../lib/marks";
 import { openTab, useActiveCluster, useTabs } from "../lib/tabsStore";
 import { crdNodes, glyph, INVESTIGATE, kindNodes, NAV_GROUPS, routeForNode } from "../lib/tree";
 import { useResource } from "../lib/useResource";
-import { getView, setExpanded, toggleExpanded, useWorkspaceView, type LinkState } from "../lib/workspace";
+import { seedExpandedOnce, toggleExpanded, useWorkspaceView, type LinkState } from "../lib/workspace";
+
+/** The one leaf the "Custom resources" group holds when discovery has failed. */
+const CRD_ERROR_ID = "crd-error";
 
 export interface NavProps {
   /** Every cluster the machine knows. The active one is looked up in here by `stableId`. */
@@ -67,10 +70,12 @@ function nodeForRoute(nodes: ResourceNode[], crds: CrdRef[], route: string): str
  *
  * And the folds are stored, not defaulted. The kit's tree takes `expanded` as
  * the whole truth when it is given at all, so an empty list would mean every
- * group shut on first launch; the workspace view is therefore seeded once per
- * mount with the groups that should stand open. Once per mount rather than
- * whenever the list is empty, because "the user closed all six" is a state the
- * sidebar has to be able to stay in.
+ * group shut on first launch; the workspace view is therefore seeded, once
+ * ever for the window's lifetime (`seedExpandedOnce`, in `workspace.ts`) with
+ * the groups that should stand open. Once ever rather than once per mount,
+ * because "the user closed all six" is a state the sidebar has to be able to
+ * stay in across a remount, and a per-mount guard cannot tell that state apart
+ * from "nothing has opened anything yet" — both leave `expanded` empty.
  */
 export function Nav({ contexts }: NavProps) {
   const activeCluster = useActiveCluster();
@@ -98,10 +103,21 @@ export function Nav({ contexts }: NavProps) {
   );
   const crds = useMemo(() => discovery.data ?? [], [discovery.data]);
 
+  // A failed discovery is not rendered as the tree-level `error` — that kit
+  // prop replaces the whole tree with an announced failure, and CRD discovery
+  // commonly fails for a reason that has nothing to do with the built-in
+  // kinds (ordinary RBAC does not grant list on CRDs). The built-ins and
+  // Investigate must survive that; only "Custom resources" loses its
+  // contents, to one leaf that retries.
+  const crdChildren: ResourceNode[] =
+    discovery.status === "error"
+      ? [{ id: CRD_ERROR_ID, label: "Custom resources unavailable — retry", icon: Icons.warn }]
+      : crdNodes(crds);
+
   const nodes = useMemo<ResourceNode[]>(
     () => [
       ...kindNodes(),
-      { id: "crds", label: "Custom resources", icon: Icons.crds, defaultExpanded: false, children: crdNodes(crds) },
+      { id: "crds", label: "Custom resources", icon: Icons.crds, defaultExpanded: false, children: crdChildren },
       {
         id: "investigate",
         label: "Investigate",
@@ -109,14 +125,11 @@ export function Nav({ contexts }: NavProps) {
         children: INVESTIGATE.map((i) => ({ id: `route:${i.route}`, label: i.label, icon: glyph(i.id) })),
       },
     ],
-    [crds],
+    [crds, crdChildren],
   );
 
-  const seeded = useRef(false);
   useEffect(() => {
-    if (seeded.current) return;
-    seeded.current = true;
-    if (getView().expanded.length === 0) setExpanded(DEFAULT_EXPANDED);
+    seedExpandedOnce(DEFAULT_EXPANDED);
   }, []);
 
   const link = ctx ? (view.links[ctx.stableId] ? LINK[view.links[ctx.stableId].state] : UNKNOWN) : UNKNOWN;
@@ -153,21 +166,20 @@ export function Nav({ contexts }: NavProps) {
           nodes={nodes}
           active={nodeForRoute(nodes, crds, route)}
           onActivate={(id) => {
+            // Handled before `routeForNode` is even consulted: the retry leaf
+            // is not a destination, it is the group's own failure reporting
+            // itself, and `routeForNode` returns `null` for it precisely so a
+            // caller that forgot this branch opens no tab either.
+            if (id === CRD_ERROR_ID) {
+              discovery.reload();
+              return;
+            }
             const next = routeForNode(id, crds);
             if (next) openTab(next, { preview: true, clusterName: ctx.name });
           }}
           expanded={view.expanded}
           onExpandedChange={toggleExpanded}
           query={query}
-          error={
-            discovery.status === "error"
-              ? {
-                  title: "Could not read this cluster",
-                  detail: discovery.error,
-                  onRetry: discovery.reload,
-                }
-              : undefined
-          }
         />
       )}
     </Sidebar>
