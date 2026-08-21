@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Popover } from "radix-ui";
 import { Command } from "cmdk";
 import { cx } from "./cx";
+import { filled } from "./slot";
 
 export interface ComboboxOption {
   value: string;
@@ -14,6 +15,8 @@ export function optionLabel(option: ComboboxOption): string {
 }
 
 export interface PickerProps {
+  /** A row under the list, ruled off from it — counts and list-wide actions. */
+  footer?: ReactNode;
   /** What the trigger says about the current state — a value, a count, a stand-in. */
   summary: string;
   ariaLabel?: string;
@@ -44,7 +47,7 @@ export interface PickerProps {
  * solved. What is ours is the seam: which classes it wears, and the render prop
  * below. (#318)
  */
-export function Picker({ summary, ariaLabel, searchPlaceholder = "Search…", className, children }: PickerProps) {
+export function Picker({ summary, ariaLabel, searchPlaceholder = "Search…", className, footer, children }: PickerProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -94,6 +97,11 @@ export function Picker({ summary, ariaLabel, searchPlaceholder = "Search…", cl
               <Command.Empty className="px-3 py-4 text-center text-[0.75rem] text-faint">No results</Command.Empty>
               {children(() => setOpen(false))}
             </Command.List>
+            {filled(footer) && (
+              // Ruled off above rather than below: it belongs to the list, and
+              // the rule is what stops it reading as one more option.
+              <div className="rule-t flex items-center gap-1.5 px-2 py-1.5">{footer}</div>
+            )}
           </Command>
         </Popover.Content>
       </Popover.Portal>
@@ -102,6 +110,23 @@ export function Picker({ summary, ariaLabel, searchPlaceholder = "Search…", cl
 }
 
 export interface PickerRowProps {
+  /**
+   * `check` for a list where one option wins, `box` for one where each is
+   * independent. The design draws the two differently because they mean
+   * different things, and a check mark on a multi-select reads as "this is the
+   * one" rather than "this is on". (#328)
+   */
+  mark?: "check" | "box";
+  /**
+   * Pinned to the row's end — a count, or an action on the option.
+   *
+   * An interactive one is a control inside a `role="option"`, which ARIA would
+   * rather it were not. It sits inside the row anyway because cmdk hides
+   * filtered rows by hiding the item, and a sibling would stay behind when its
+   * option was filtered away. The row carries an explicit `aria-label` so at
+   * least the option's own name stays clean. (#328)
+   */
+  trailing?: ReactNode;
   /** Identifies the row to cmdk's filter, and must be unique within the list. */
   value: string;
   label: string;
@@ -110,7 +135,7 @@ export interface PickerRowProps {
 }
 
 /** One row: a check that holds its column whether or not it is showing, and a label. */
-export function PickerRow({ value, label, checked, onSelect }: PickerRowProps) {
+export function PickerRow({ value, label, checked, onSelect, mark = "check", trailing }: PickerRowProps) {
   return (
     <Command.Item
       value={value}
@@ -118,6 +143,10 @@ export function PickerRow({ value, label, checked, onSelect }: PickerRowProps) {
       // whose label bears no resemblance to its value is still searchable.
       keywords={[label]}
       onSelect={onSelect}
+      // Named explicitly, because the name is otherwise computed from
+      // everything inside the row — so a trailing count or action would be read
+      // out as part of the option ("alpha only", "Everything 3").
+      aria-label={label}
       data-on={checked}
       // cmdk owns `aria-selected` on these rows and uses it for the highlight
       // that follows the pointer and the arrow keys, so it cannot also carry
@@ -130,20 +159,45 @@ export function PickerRow({ value, label, checked, onSelect }: PickerRowProps) {
       // same feedback the mouse does, which a plain `:hover` cannot give it.
       className="ns-row data-[selected=true]:bg-[var(--field)]"
     >
-      <svg
-        width="12"
-        height="12"
-        viewBox="0 0 24 24"
-        fill="none"
-        aria-hidden="true"
-        // Always rendered, never removed: the labels line up in a column, and a
-        // check appearing would otherwise shove the row it belongs to sideways.
-        className={cx("shrink-0", checked ? "opacity-100" : "opacity-0")}
-        style={{ color: "var(--accent)" }}
-      >
-        <path d="M20 6 9 17l-5-5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      <span className="truncate">{label}</span>
+      {mark === "box" ? (
+        <span
+          data-box
+          aria-hidden="true"
+          className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border"
+          style={{
+            borderColor: checked ? "var(--accent)" : "var(--rule-strong)",
+            background: checked ? "var(--accent)" : "transparent",
+          }}
+        >
+          {checked && (
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M20 6 9 17l-5-5"
+                stroke="var(--accent-ink)"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+        </span>
+      ) : (
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+          // Always rendered, never removed: the labels line up in a column, and
+          // a check appearing would otherwise shove its row sideways.
+          className={cx("shrink-0", checked ? "opacity-100" : "opacity-0")}
+          style={{ color: "var(--accent)" }}
+        >
+          <path d="M20 6 9 17l-5-5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      <span className="flex-1 truncate">{label}</span>
+      {filled(trailing) && trailing}
     </Command.Item>
   );
 }
