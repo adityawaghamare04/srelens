@@ -59,12 +59,12 @@ export type SwitchResult = { ok: true } | { ok: false; reason: string };
 /**
  * Whether the new design draws its own titlebar yet.
  *
- * It does not: `NextApp` is a heading, a paragraph and a button. Dropping the
- * system decorations now would leave a frameless window with no drag region and
- * no window controls — unmovable, unminimisable, and closable only by quitting
- * the app. The design's own titlebar lands with its shell; this flips then, and
- * needs an answer for Windows and Linux at the same time, since the mock's
- * traffic lights are macOS-shaped.
+ * It does not: `NextApp` is the tab strip over the tab bodies, and nothing
+ * above it. Dropping the system decorations now would leave a frameless window
+ * with no drag region and no window controls — unmovable, unminimisable, and
+ * closable only by quitting the app. The design's own titlebar lands with the
+ * rest of the chrome; this flips then, and needs an answer for Windows and
+ * Linux at the same time, since the mock's traffic lights are macOS-shaped.
  */
 const NEXT_DESIGN_DRAWS_ITS_OWN_CHROME = false;
 
@@ -127,3 +127,11 @@ export function applyNextDesignTheme(): () => void {
   query.addEventListener("change", apply);
   return () => query.removeEventListener("change", apply);
 }
+
+/**
+ * Which screens exist in the new design. Classic's Settings shows this beside
+ * the toggle so the choice is informed before it is made, and the new design's
+ * Placeholder shows it so the user knows what is there. One list, read by both,
+ * so they cannot drift. A screen is added here in the PR that ports it.
+ */
+export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [];

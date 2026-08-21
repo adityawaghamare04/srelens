@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { DESIGN_KEY, loadDesign, saveDesign } from "./design";
+import { DESIGN_KEY, PORTED_SCREENS, loadDesign, saveDesign } from "./design";
 
 beforeEach(() => localStorage.clear());
 
@@ -46,5 +46,14 @@ describe("the design preference", () => {
     } finally {
       Storage.prototype.setItem = original;
     }
+  });
+});
+
+describe("the list of ported screens", () => {
+  it("exports the list of ported screens, empty until a screen lands", () => {
+    // One list, read by classic's Settings and by the new design's Placeholder,
+    // so the two cannot disagree about what has been ported. A screen is added
+    // here in the PR that ports it.
+    expect(PORTED_SCREENS).toEqual([]);
   });
 });
