@@ -61,6 +61,7 @@ import { Titlebar } from "../Titlebar";
 import { Toast } from "../Toast";
 import { Toolbar } from "../Toolbar";
 import { Tooltip } from "../Tooltip";
+import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
 import { WorkspaceTree } from "../WorkspaceTree";
 import type { Tone } from "../tone";
 
@@ -133,6 +134,7 @@ export function Gallery() {
   const [ns, setNs] = useState("kube-system");
   const [tab, setTab] = useState("pods");
   const [drawer, setDrawer] = useState(false);
+  const [workspace, setWorkspace] = useState("local");
   const [boxes, setBoxes] = useState({ a: true, b: false });
   const [refresh, setRefresh] = useState("30");
   const [live, setLive] = useState(true);
@@ -1546,6 +1548,34 @@ export function Gallery() {
             <p className="relative p-3 text-[0.75rem] text-muted">and another</p>
           </div>
         </div>
+      </section>
+      <section>
+        <h2>WorkspaceSwitcher</h2>
+        {/* The chip is a button, not the mock's span: a workspace switch
+            changes which clusters are in reach and which tabs are open, so the
+            control for it has to be reachable. */}
+        <WorkspaceSwitcher
+          workspaces={[
+            { id: "prod", name: "Production", clusters: 2, tabs: 11 },
+            { id: "local", name: "Local & staging", clusters: 5, tabs: 2 },
+            { id: "platform", name: "Platform", clusters: 4, tabs: 3 },
+          ]}
+          activeId={workspace}
+          onSelect={setWorkspace}
+          onRemove={() => {}}
+          onCreate={() => {}}
+        />
+        <p className="text-[0.75rem] text-muted">in: {workspace}</p>
+        {/* The last workspace offers no remove — there would be nothing left
+            to be in — and one of each counts in the singular. */}
+        <WorkspaceSwitcher
+          workspaces={[{ id: "solo", name: "Solo", clusters: 1, tabs: 1 }]}
+          activeId="solo"
+          onSelect={() => {}}
+          onRemove={() => {}}
+        />
+        {/* Nothing yet: the chip falls back to the empty label. */}
+        <WorkspaceSwitcher workspaces={[]} activeId="" onSelect={() => {}} />
       </section>
     </div>
   );

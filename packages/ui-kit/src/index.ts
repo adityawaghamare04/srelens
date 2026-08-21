@@ -61,6 +61,7 @@ export { Titlebar, type TitlebarProps } from "./Titlebar";
 export { Toast, type ToastProps } from "./Toast";
 export { Toolbar, type ToolbarProps } from "./Toolbar";
 export { Tooltip, type TooltipProps } from "./Tooltip";
+export { WorkspaceSwitcher, type WorkspaceSummary, type WorkspaceSwitcherProps } from "./WorkspaceSwitcher";
 export { type ClusterLink, type WorkspaceCluster, WorkspaceTree, type WorkspaceTreeProps } from "./WorkspaceTree";
 export { cx } from "./cx";
 export { toneColor, toneWash, type Tone } from "./tone";
