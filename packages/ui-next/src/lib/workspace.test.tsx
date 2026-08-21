@@ -5,14 +5,14 @@ import * as ws from "./workspace";
 beforeEach(() => ws.resetView());
 
 describe("workspace view", () => {
-  it("starts with no active cluster, no links, nothing expanded", () => {
-    expect(ws.getView()).toEqual({ activeCluster: null, links: {}, expanded: [] });
+  it("starts with no links and nothing expanded", () => {
+    expect(ws.getView()).toEqual({ links: {}, expanded: [] });
   });
 
-  it("sets the active cluster and tells the hook", () => {
+  it("tells the hook when a link changes", () => {
     const { result } = renderHook(() => ws.useWorkspaceView());
-    act(() => ws.setActiveCluster("prod"));
-    expect(result.current.activeCluster).toBe("prod");
+    act(() => ws.setLink("prod", "connected"));
+    expect(result.current.links.prod).toEqual({ state: "connected" });
   });
 
   it("records a link state per cluster, with an error when there is one", () => {
@@ -48,7 +48,6 @@ describe("workspace view", () => {
     const { result } = renderHook(() => ws.useWorkspaceView());
     void result;
     const off = ws.subscribe(() => n++);
-    ws.setActiveCluster(null);
     ws.setLink("a", "connected");
     ws.setLink("a", "connected");
     expect(n).toBe(1);
@@ -72,7 +71,7 @@ describe("workspace view", () => {
     const off = ws.subscribe(() => n++);
     ws.resetView();
     expect(n).toBe(0);
-    ws.setActiveCluster("prod");
+    ws.setLink("prod", "connected");
     ws.resetView();
     expect(n).toBe(2);
     off();

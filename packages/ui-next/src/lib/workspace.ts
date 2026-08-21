@@ -3,8 +3,6 @@ import { useSyncExternalStore } from "react";
 export type LinkState = "connected" | "connecting" | "disconnected" | "error";
 
 export interface WorkspaceView {
-  /** The cluster the sidebar and status bar are about. A `stableId`. */
-  activeCluster: string | null;
   /** Per cluster. Derived from `ClusterInfo.reachable` and in-flight connects; never persisted. */
   links: Record<string, { state: LinkState; error?: string }>;
   /** Which sidebar sections are open. Not persisted. */
@@ -13,13 +11,13 @@ export interface WorkspaceView {
 
 /**
  * What the current workspace looks like right now, as distinct from what it
- * contains. The tab store owns clusters and tabs and is written to disk; this
- * owns the active cluster, whether each cluster is reachable, and which
- * sections are open — none of which should outlive the window, because a
+ * contains. The tab store owns clusters, tabs and the active cluster and is
+ * written to disk; this owns whether each cluster is reachable and which
+ * sections are open — neither of which should outlive the window, because a
  * cluster's reachability is a fact about now and an expanded section is a
  * fact about this sitting.
  */
-const initial = (): WorkspaceView => ({ activeCluster: null, links: {}, expanded: [] });
+const initial = (): WorkspaceView => ({ links: {}, expanded: [] });
 let view: WorkspaceView = initial();
 const listeners = new Set<() => void>();
 
@@ -34,7 +32,7 @@ function sameExpanded(a: readonly string[], b: readonly string[]): boolean {
 }
 
 function isInitial(v: WorkspaceView): boolean {
-  return v.activeCluster === null && Object.keys(v.links).length === 0 && v.expanded.length === 0;
+  return Object.keys(v.links).length === 0 && v.expanded.length === 0;
 }
 
 export function getView(): WorkspaceView {
@@ -53,11 +51,6 @@ export function subscribe(listener: () => void): () => void {
 
 export function useWorkspaceView(): WorkspaceView {
   return useSyncExternalStore(subscribe, getView, getView);
-}
-
-export function setActiveCluster(id: string | null): void {
-  if (view.activeCluster === id) return;
-  emit({ ...view, activeCluster: id });
 }
 
 export function setLink(id: string, state: LinkState, error?: string): void {

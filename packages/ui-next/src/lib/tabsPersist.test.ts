@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { ClusterContext } from "@srelens/core";
 import { defaultState, makeTab, type TabsState } from "./tabs";
 import {
   STORAGE_KEY, STORAGE_VERSION, flushSave, loadTabsState, parseStoredState, saveTabsState, scheduleSave,
@@ -15,6 +16,10 @@ function memory(): Storage & { data: Map<string, string> } {
     removeItem: (k) => void data.delete(k),
   };
 }
+
+const ctx = (id: string): ClusterContext => ({
+  name: id, stableId: id, cluster: id, server: `https://${id}`, isCurrent: false,
+});
 
 const valid = (): TabsState => {
   const s = defaultState([]);
@@ -93,6 +98,21 @@ describe("parseStoredState", () => {
     delete doc.version;
     expect(parseStoredState(JSON.stringify(doc))).toBeNull();
     expect(parseStoredState(JSON.stringify({ ...doc, version: "1" }))).toBeNull();
+  });
+
+  it("round-trips activeCluster and drops one that is not a string", () => {
+    const s = defaultState([ctx("a")]);
+    s.workspaces[0].activeCluster = "a";
+    expect(parseStoredState(JSON.stringify({ version: 1, ...s }))?.workspaces[0].activeCluster).toBe("a");
+    const raw = JSON.stringify({ version: 1, ...s }).replace('"activeCluster":"a"', '"activeCluster":7');
+    expect(parseStoredState(raw)?.workspaces[0].activeCluster).toBeUndefined();
+  });
+
+  it("drops an activeCluster that names a cluster the workspace does not have", () => {
+    const s = defaultState([ctx("a")]);
+    s.workspaces[0].activeCluster = "a";
+    const raw = JSON.stringify({ version: 1, ...s }).replace('"activeCluster":"a"', '"activeCluster":"gone"');
+    expect(parseStoredState(raw)?.workspaces[0].activeCluster).toBeUndefined();
   });
 
   it("drops fields it does not know and tabs that are malformed", () => {
