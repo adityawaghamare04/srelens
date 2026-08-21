@@ -36,12 +36,20 @@ describe("marks", () => {
 describe("marks the shell reads", () => {
   beforeEach(() => loadMarks(fakeStorage()));
 
-  it("keeps a renamed cluster's colours but not its stale name", () => {
+  it("lets a customised name outlive a rename, and follows the kubeconfig until there is one", () => {
     const s = fakeStorage();
     loadMarks(s);
-    setMark("prod", { ...defaultMark("prod-eu"), color: "var(--ok)" }, s);
+    // Nothing stored: the mark is called whatever the kubeconfig calls it, and
+    // it keeps up when that changes.
+    expect(getMark("prod", "prod-eu").name).toBe("prod-eu");
+    expect(getMark("prod", "prod-eu-1").name).toBe("prod-eu-1");
+
+    // Once the operator has typed a display name it is theirs, not a cache of
+    // the context's — the editor's name field would otherwise revert every
+    // keystroke to the kubeconfig's.
+    setMark("prod", { ...defaultMark("prod-eu"), name: "Production EU", color: "var(--ok)" }, s);
     const after = getMark("prod", "prod-eu-1");
-    expect(after.name).toBe("prod-eu-1");
+    expect(after.name).toBe("Production EU");
     expect(after.color).toBe("var(--ok)");
     expect(after.short).toBe("PE");
   });

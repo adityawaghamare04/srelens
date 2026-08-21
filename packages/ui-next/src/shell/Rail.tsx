@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ClusterContext } from "@srelens/core";
 import { Button, ClusterRail, CustomizeMark, Drawer, Mark, type ClusterRailItem } from "@srelens/ui-kit";
 import { getMark, resetMark, setMark, useMark } from "../lib/marks";
-import { getInfo, useInfo } from "../lib/probe";
+import { useInfos } from "../lib/probe";
 import { setActiveCluster, setWorkspaceClusters, useActiveCluster, useTabs } from "../lib/tabsStore";
 import { useWorkspaceView } from "../lib/workspace";
 
@@ -52,13 +52,14 @@ const MAX_IMAGE_BYTES = 64 * 1024;
  * event, not a ref; the drawer is where the two things this menu would offer —
  * customise, remove — already live, so the gesture opens it directly.
  *
- * `useMark` and `useInfo` are called once each rather than once per cluster:
- * the number of clusters changes between renders, so a hook per item would be a
- * hook count that changes with the list, which React refuses. Both subscribe to
- * their store whatever id they are asked about, so one call each is what
- * re-renders this rail when any mark or any probe changes, and the items then
- * read the plain `getMark`/`getInfo` beside it. The `useMark` call is not a
- * spare: the drawer's editor needs the live value anyway.
+ * The marks and the probes are read once for the whole list rather than once
+ * per cluster: the number of clusters changes between renders, so a hook per
+ * item would be a hook count that changes with the list, which React refuses.
+ * `useInfos` is the probe store's whole-record snapshot, which exists for this.
+ * The marks have no such hook, so the subscription rides on the `useMark` call
+ * the drawer's editor needs anyway — that hook subscribes whatever id it is
+ * asked about, so it re-renders this rail on any mark change and the items then
+ * read the plain `getMark` beside it.
  */
 export function Rail({ contexts, onConnect }: RailProps) {
   const { workspace } = useTabs();
@@ -71,19 +72,41 @@ export function Rail({ contexts, onConnect }: RailProps) {
 
   // One subscription each, standing in for the per-item hooks — see above.
   const value = useMark(target?.stableId ?? "", target?.name ?? "");
-  useInfo(null);
+  const infos = useInfos();
+
+  // A context can leave while its drawer is open — a kubeconfig rewritten under
+  // the app. The drawer is already gone by then, since `target` cannot resolve;
+  // this forgets which cluster it was about, so a context that comes back does
+  // not bring a panel nobody asked for back with it.
+  const stale = editing !== null && !byId.has(editing);
+  useEffect(() => {
+    if (stale) setEditing(null);
+  }, [stale]);
 
   const items: ClusterRailItem[] = [];
   for (const id of workspace.clusters) {
     const ctx = byId.get(id);
     if (!ctx) continue;
     const mark = getMark(id, ctx.name);
-    const info = getInfo(id);
+    const info = infos[id];
     const link = links[id];
     items.push({
       id,
       name: ctx.name,
-      mark: <Mark decorative name={mark.name} short={mark.short} color={mark.color} size="sm" />,
+      // Named by the mark, which is where the initials come from when there is
+      // no short text; the item's own `name` stays the context's, because that
+      // is what the rail is a list of.
+      mark: (
+        <Mark
+          decorative
+          name={mark.name}
+          short={mark.short}
+          color={mark.color}
+          imageSrc={mark.mark === "image" ? mark.imageSrc : undefined}
+          withBadge={mark.withText}
+          size="sm"
+        />
+      ),
       // The version first, because the server is the long half and the hint
       // truncates from the end.
       detail: [info?.version, ctx.server].filter(Boolean).join(" · "),

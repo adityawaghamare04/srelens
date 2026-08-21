@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { probeCluster, getInfo, useInfo, resetProbes } from "./probe";
+import { probeCluster, getInfo, useInfo, useInfos, resetProbes } from "./probe";
 import { getView, resetView } from "./workspace";
 
 const ctx = { name: "prod-eu", stableId: "prod", cluster: "c", server: "", isCurrent: false };
@@ -40,5 +40,22 @@ describe("useInfo", () => {
     expect(result.current?.version).toBe("v1.30.1");
     act(() => resetProbes());
     expect(result.current).toBeUndefined();
+  });
+});
+
+describe("useInfos", () => {
+  it("hands back the whole store, with a new identity only when a probe lands", async () => {
+    const { result, rerender } = renderHook(() => useInfos());
+    expect(result.current).toEqual({});
+    const before = result.current;
+    // The snapshot has to survive a render that changed nothing, or
+    // `useSyncExternalStore` re-renders forever.
+    rerender();
+    expect(result.current).toBe(before);
+
+    const connect = vi.fn().mockResolvedValue({ context: "prod-eu", reachable: true, version: "v1.31.0" });
+    await act(async () => { await probeCluster(ctx, connect as never); });
+    expect(result.current.prod?.version).toBe("v1.31.0");
+    expect(result.current).not.toBe(before);
   });
 });

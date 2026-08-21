@@ -129,19 +129,27 @@ function save(storage: Storage) {
 }
 
 /**
- * The cluster's mark, under the name it goes by *now*.
+ * The cluster's mark: the stored appearance if there is one, and otherwise a
+ * default seeded from the name the kubeconfig gives the context.
  *
- * A stored mark keeps its colours through a rename but never its stale name,
- * which is the display string the kit draws beside the square. `short` is not
- * re-derived: initials are the operator's to change, and silently rewriting
- * them on a rename would undo an edit nobody asked to undo.
+ * A stored mark comes back exactly as stored, `name` included. That name is a
+ * display name the operator typed, not a cache of the context's. This used to
+ * overwrite it with the `name` argument on the way out, which made the editor's
+ * name field inert: every keystroke was stored and then reverted on the very
+ * next read (#325 review). `short` is not re-derived either, for the same
+ * reason — an edit nobody asked to undo should not be undone.
+ *
+ * So a cluster renamed in the kubeconfig follows that rename only while nobody
+ * has customised it, which is the case the rename mattered for; once someone
+ * has named it themselves, that is its name.
  */
 export function getMark(stableId: string, name: string): MarkAppearance {
+  // Keyed on both, because the unstored answer depends on the name. A stored
+  // mark ignores it, and every key then hands back that same one object.
   const key = `${stableId}\u0000${name}`;
   const cached = snapshots.get(key);
   if (cached) return cached;
-  const stored = marks[stableId];
-  const mark = !stored ? defaultMark(name) : stored.name === name ? stored : { ...stored, name };
+  const mark = marks[stableId] ?? defaultMark(name);
   snapshots.set(key, mark);
   return mark;
 }
