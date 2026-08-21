@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, isValidElement, type ReactNode } from "react";
 
 /**
  * Whether an optional slot has anything in it.
@@ -17,9 +17,19 @@ import type { ReactNode } from "react";
  * with something in it is not.
  *
  * Zero survives: a count of 0 renders, and is usually the figure that matters
- * most. (#325 review)
+ * most.
+ *
+ * The three cases it knows are the three a caller writes by hand — a boolean, a
+ * list, a fragment. A component that decides to render nothing cannot be
+ * detected without rendering it, so a slot holding one still counts as filled;
+ * that is the boundary, not an oversight. (#325 review)
  */
 export function filled(node: ReactNode): boolean {
   if (Array.isArray(node)) return node.some((child) => filled(child));
+  // A fragment is a valid element whatever is inside it, so `<>{items.map(...)}</>`
+  // over an empty list looks like content until you open it.
+  if (isValidElement(node) && node.type === Fragment) {
+    return filled((node.props as { children?: ReactNode }).children);
+  }
   return node != null && node !== "" && typeof node !== "boolean";
 }

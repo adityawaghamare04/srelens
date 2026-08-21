@@ -40,4 +40,17 @@ describe("filled", () => {
     expect(filled([0])).toBe(true);
     expect(filled([[<span key="a" />]])).toBe(true);
   });
+  it("rejects a fragment that renders nothing", () => {
+    // `actions={<>{items.map(...)}</>}` groups conditional content, and an
+    // empty result is still a valid element. (#325 review)
+    expect(filled(<></>)).toBe(false);
+    expect(filled(<>{[]}</>)).toBe(false);
+    expect(filled(<>{false}</>)).toBe(false);
+    expect(filled(<><>{[]}</></>)).toBe(false);
+  });
+
+  it("accepts a fragment with anything renderable in it", () => {
+    expect(filled(<><span /></>)).toBe(true);
+    expect(filled(<>{false}<span /></>)).toBe(true);
+  });
 });

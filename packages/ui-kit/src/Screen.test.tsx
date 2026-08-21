@@ -91,4 +91,13 @@ describe("Screen", () => {
     );
     expect(container.querySelector('[data-slot="screen-actions"]')).toBeNull();
   });
+  it("treats an empty fragment of actions as no actions", () => {
+    // (#325 review)
+    const { container } = render(
+      <Screen title="Pods" actions={<></>}>
+        body
+      </Screen>,
+    );
+    expect(container.querySelector('[data-slot="screen-actions"]')).toBeNull();
+  });
 });
