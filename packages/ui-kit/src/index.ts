@@ -56,6 +56,7 @@ export { SurfaceToast, type SurfaceToastProps } from "./SurfaceToast";
 export { Switch, type SwitchProps } from "./Switch";
 export { Table, computeVisibleRange, filterTableData, nextSort, type Column, type TableProps, type TableSelection, type TableSort } from "./Table";
 export { Tabs, type TabItem, type TabsProps } from "./Tabs";
+export { TabStrip, type StripTab, type TabStripProps } from "./TabStrip";
 export { TextInput, type TextInputProps } from "./TextInput";
 export { Titlebar, type TitlebarProps } from "./Titlebar";
 export { Toast, type ToastProps } from "./Toast";
