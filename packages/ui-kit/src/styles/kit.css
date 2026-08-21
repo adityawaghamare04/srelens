@@ -247,6 +247,63 @@
     vertical-align: middle;
     white-space: nowrap;
   }
+  /* The data table's own parts. `.tbl` above already carries the surface —
+     sticky head, row rules, hover, the selected wash — so these are only what
+     a sortable, resizable, selectable table adds on top of it. (#319) */
+  .tbl-interactive tbody tr { cursor: pointer; }
+  /* Once widths are pinned the table stops fitting itself to its container and
+     takes the measured total instead, which is what stops columns shifting
+     while a long list scrolls (#298). */
+  .tbl-resized { table-layout: fixed; }
+  .tbl-check { width: 36px; text-align: center; }
+  .tbl-check input { accent-color: var(--accent); vertical-align: middle; }
+  /* Holds the space the virtualized rows would occupy, so the scrollbar
+     describes the whole list rather than the window being rendered. */
+  .tbl-spacer { border: 0 !important; }
+  .tbl-spacer:hover { background: transparent !important; }
+  .tbl-empty {
+    padding: 1.25rem 0.7rem;
+    text-align: center;
+    color: var(--ink-muted);
+    font-size: 0.75rem;
+  }
+  .th-head { display: flex; align-items: center; gap: 0.25rem; }
+  .th-filter {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 4px;
+    padding: 1px;
+    color: var(--ink-faint);
+    opacity: 0.65;
+  }
+  .th-filter:hover,
+  .th-filter:focus-visible { opacity: 1; color: var(--ink); }
+  .th-filter.is-active { opacity: 1; color: var(--accent); }
+  /* A grab strip on the column edge, positioned against the header cell —
+     which is a containing block already, being sticky. Wider than it looks,
+     because a 1px target is not one. */
+  .th-resize {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 7px;
+    height: 100%;
+    cursor: col-resize;
+    background: none;
+    border: 0;
+    padding: 0;
+  }
+  .th-resize::after {
+    content: "";
+    position: absolute;
+    top: 20%;
+    left: 3px;
+    width: 1px;
+    height: 60%;
+    background: var(--rule);
+  }
+  .th-resize:hover::after,
+  .th-resize:focus-visible::after { background: var(--accent); }
   .th-sort {
     display: inline-flex;
     align-items: center;
