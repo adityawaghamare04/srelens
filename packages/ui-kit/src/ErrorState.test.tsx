@@ -1,3 +1,4 @@
+import type { FormEvent } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ErrorState } from "./ErrorState";
@@ -99,5 +100,30 @@ describe("ErrorState", () => {
     expect(root.classList.contains("extra")).toBe(true);
     // Merged, not replacing the component's own layout classes.
     expect(root.className.trim()).not.toBe("extra");
+  });
+  it("does not submit a form it is standing in", () => {
+    // `Button` deliberately leaves `type` alone, so a bare one in a form is a
+    // submit button (bd24d1a). These two are this component's own, not the
+    // caller's, so it is this component that owes them a type: a failed load
+    // inside a form would otherwise retry and submit the form with it.
+    // (#325 review)
+    const onSubmit = vi.fn((e: FormEvent) => e.preventDefault());
+    render(
+      <form onSubmit={onSubmit}>
+        <ErrorState
+          title="Could not load pods"
+          onRetry={() => {}}
+          action={{ label: "Diagnose in Toolbox", onClick: () => {} }}
+        />
+      </form>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Diagnose in Toolbox" }));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+  it("treats a conditional detail that resolved to false as absent", () => {
+    // (#325 review)
+    const { container } = render(<ErrorState title="Could not load pods" detail={false} />);
+    expect(container.querySelector('[data-slot="detail"]')).toBeNull();
   });
 });

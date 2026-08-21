@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Button } from "./Button";
 import { cx } from "./cx";
+import { filled } from "./slot";
 
 export interface ErrorStateProps {
   title: ReactNode;
@@ -62,20 +63,24 @@ export function ErrorState({
         <path d="M12 9v4m0 4h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       </svg>
       <strong className="text-[0.875rem]">{title}</strong>
-      {detail != null && (
+      {filled(detail) && (
         <p data-slot="detail" className="text-[0.8125rem] leading-relaxed text-muted">
           {detail}
         </p>
       )}
       {(onRetry || action) && (
         <div data-slot="actions" className="flex flex-wrap justify-center gap-2">
+          {/* `Button` deliberately leaves `type` alone, so a bare one submits
+              the form it is standing in (bd24d1a). These two are this
+              component's own rather than the caller's, so setting it is this
+              component's job. (#325 review) */}
           {onRetry && (
-            <Button variant="secondary" size="sm" onClick={onRetry}>
+            <Button type="button" variant="secondary" size="sm" onClick={onRetry}>
               {retryLabel}
             </Button>
           )}
           {action && (
-            <Button variant="secondary" size="sm" onClick={action.onClick}>
+            <Button type="button" variant="secondary" size="sm" onClick={action.onClick}>
               {action.label}
             </Button>
           )}
