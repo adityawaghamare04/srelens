@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // `vi.hoisted` because `vi.mock` is hoisted above every declaration in the
@@ -33,12 +33,14 @@ if (!("ResizeObserver" in globalThis)) {
 }
 
 import { NextApp } from "./index";
+import { openTab, currentWorkspace } from "./lib/tabsStore";
 
 describe("NextApp", () => {
   // jsdom keeps one window.location for the whole file, so a test that
   // navigates hands the next one a gallery instead of the window.
   beforeEach(() => {
     window.location.hash = "";
+    listContexts.mockClear();
   });
 
   it("renders the window, with a tab strip and a home tab", async () => {
@@ -104,6 +106,33 @@ describe("NextApp", () => {
     // of the Placeholder's button rather than of a tablist, because the gallery
     // demonstrates the TabStrip and so has tablists — and tabs — of its own.
     expect(screen.queryByRole("button", { name: /open in classic/i })).toBeNull();
+  });
+
+  it("keeps the window mounted under the gallery, so the session survives the trip", async () => {
+    // Returning `<Gallery />` *instead of* the Window unmounted it, and coming
+    // back re-booted it: with session restore off the boot wrote a fresh
+    // default state and every tab of the session was gone; with it on, only
+    // whatever the 300ms debounce had already flushed came back.
+    render(<NextApp onExit={() => null} />);
+    await screen.findByRole("tablist");
+    act(() => openTab("/k/pods"));
+    const before = currentWorkspace().tabs.map((t) => t.id);
+    expect(before).toHaveLength(2);
+
+    window.location.hash = "#gallery";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await screen.findByRole("heading", { name: /design system/i });
+
+    window.location.hash = "";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await screen.findByRole("tablist");
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      expect.stringContaining("Control room"),
+      expect.stringContaining("Pods"),
+    ]);
+    expect(currentWorkspace().tabs.map((t) => t.id)).toEqual(before);
+    // The proof that it was never re-booted: boot is what lists the contexts.
+    expect(listContexts).toHaveBeenCalledTimes(1);
   });
 
   it("follows the hash after mount, not only on a fresh load", async () => {

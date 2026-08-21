@@ -5,11 +5,12 @@ import userEvent from "@testing-library/user-event";
 // `vi.hoisted` because `vi.mock` is hoisted above every declaration in the
 // file, and the tabsPersist factory reads these the moment `./Window` imports
 // the module — a plain `const` is still in its temporal dead zone by then.
-const { listContexts, loadTabsState, scheduleSave, installFlushOnUnload } = vi.hoisted(() => ({
+const { listContexts, loadTabsState, scheduleSave, installFlushOnUnload, flushSave } = vi.hoisted(() => ({
   listContexts: vi.fn(),
   loadTabsState: vi.fn(),
   scheduleSave: vi.fn(),
   installFlushOnUnload: vi.fn(() => () => {}),
+  flushSave: vi.fn(),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => {
@@ -17,7 +18,7 @@ vi.mock("@srelens/core", async (importOriginal) => {
   return { ...real, listContexts: (...a: unknown[]) => listContexts(...a) };
 });
 
-vi.mock("../lib/tabsPersist", () => ({ loadTabsState, scheduleSave, installFlushOnUnload, flushSave: () => {} }));
+vi.mock("../lib/tabsPersist", () => ({ loadTabsState, scheduleSave, installFlushOnUnload, flushSave }));
 
 // jsdom has no ResizeObserver; TabStrip's overflow Popover wants one.
 if (!("ResizeObserver" in globalThis)) {
@@ -38,6 +39,10 @@ beforeEach(() => {
   listContexts.mockReset().mockResolvedValue({ contexts: [ctx("prod")] });
   loadTabsState.mockReset().mockReturnValue(null);
   scheduleSave.mockReset();
+  // Cleared so "flushes on unload" can actually fail: a spy that is never
+  // cleared stays called from the first test in the file onwards.
+  installFlushOnUnload.mockClear();
+  flushSave.mockClear();
   store.setState(defaultState([]));
 });
 
@@ -78,11 +83,35 @@ describe("Window boot", () => {
     act(() => resolve({ contexts: [] }));
   });
 
+  it("still boots when reading the saved state throws", async () => {
+    // `loadTabsState` guards its own storage, but the boot body is what has to
+    // survive: an exception here rejected the IIFE, `setBooted(true)` never
+    // ran, and the spinner stayed up forever with no Placeholder and no way
+    // back to classic.
+    loadTabsState.mockImplementation(() => {
+      throw new DOMException("denied", "SecurityError");
+    });
+    await booted();
+    expect(store.getState().workspaces[0].clusters).toEqual(["prod"]);
+  });
+
   it("saves on every store change after boot, and flushes on unload", async () => {
     await booted();
     expect(installFlushOnUnload).toHaveBeenCalled();
     act(() => store.openTab("/k/pods"));
     expect(scheduleSave).toHaveBeenCalledWith(store.getState());
+  });
+
+  it("flushes the debounced save when it unmounts", async () => {
+    // Unmounting mid-debounce — the gallery round trip, a design switch —
+    // dropped up to 300ms of changes: the unload listener never fires, so
+    // taking it off without writing threw the pending state away.
+    const view = render(<Window ported={[]} onOpenInClassic={() => {}} />);
+    await waitFor(() => expect(screen.getByRole("tablist")).toBeDefined());
+    act(() => store.openTab("/k/pods"));
+    expect(flushSave).not.toHaveBeenCalled();
+    view.unmount();
+    expect(flushSave).toHaveBeenCalled();
   });
 });
 
@@ -116,6 +145,20 @@ describe("Window strip", () => {
     await booted();
     await userEvent.click(screen.getByRole("button", { name: /new tab/i }));
     expect(store.currentWorkspace().tabs.map((t) => t.route)).toEqual(["/", "/"]);
+  });
+
+  it("does not name an arbitrary cluster on a new tab", async () => {
+    // `contexts[0]` is whichever context the kubeconfig happens to list first
+    // — not the current one, and not necessarily even in this workspace — and
+    // `TabStrip` reads `sub` into the accessible name, so the tab announced
+    // itself as being on a cluster the user had not chosen. PR 2 wires the
+    // active cluster; until then a tab names no cluster at all.
+    listContexts.mockResolvedValue({ contexts: [ctx("prod", "prod-eu")] });
+    await booted();
+    await userEvent.click(screen.getByRole("button", { name: /new tab/i }));
+    const opened = store.currentWorkspace().tabs.at(-1)!;
+    expect(opened.sub).toBeUndefined();
+    expect(screen.getAllByRole("tab").at(-1)!.textContent).not.toContain("prod-eu");
   });
 
   it("hands the Placeholder the way back to classic", async () => {

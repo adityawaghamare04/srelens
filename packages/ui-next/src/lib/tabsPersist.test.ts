@@ -25,6 +25,33 @@ const valid = (): TabsState => {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => { flushSave(); vi.useRealTimers(); });
 
+const throwing = (which: "getItem" | "setItem"): Storage => ({
+  getItem: () => { if (which === "getItem") throw new DOMException("denied", "SecurityError"); return null; },
+  setItem: () => { if (which === "setItem") throw new DOMException("denied", "SecurityError"); },
+  removeItem: () => {},
+});
+
+describe("storage that refuses", () => {
+  // `settingsStorage` falls back to raw `localStorage` when the backend file
+  // is unavailable, and `localStorage` throws outright in a WebView with
+  // storage disabled. Every sibling helper in core wraps its access; these did
+  // not, so a throwing read rejected the Window's boot and left the spinner up
+  // forever, and a throwing write escaped a `setTimeout` and the
+  // `beforeunload` listener.
+  it("reads nothing rather than throwing when getItem refuses", () => {
+    expect(loadTabsState(throwing("getItem"), () => true)).toBeNull();
+  });
+
+  it("drops the write rather than throwing when setItem refuses", () => {
+    expect(() => saveTabsState(valid(), throwing("setItem"))).not.toThrow();
+  });
+
+  it("does not let a refused write escape the debounce", () => {
+    scheduleSave(valid(), throwing("setItem"));
+    expect(() => vi.runAllTimers()).not.toThrow();
+  });
+});
+
 describe("parseStoredState", () => {
   it("round-trips a state written by saveTabsState", () => {
     const storage = memory();
@@ -46,6 +73,26 @@ describe("parseStoredState", () => {
     const doc = JSON.parse(storage.getItem(STORAGE_KEY)!);
     doc.version = STORAGE_VERSION + 1;
     expect(parseStoredState(JSON.stringify(doc))).toBeNull();
+  });
+
+  it("accepts a document from an older version, so a bump can migrate it", () => {
+    // `version !== STORAGE_VERSION` refused older documents too, so the first
+    // bump to 2 would have silently discarded every user's workspaces.
+    const storage = memory();
+    const state = valid();
+    saveTabsState(state, storage);
+    const doc = JSON.parse(storage.getItem(STORAGE_KEY)!);
+    doc.version = 0;
+    expect(parseStoredState(JSON.stringify(doc))).toEqual(state);
+  });
+
+  it("refuses a document with no version at all", () => {
+    const storage = memory();
+    saveTabsState(valid(), storage);
+    const doc = JSON.parse(storage.getItem(STORAGE_KEY)!);
+    delete doc.version;
+    expect(parseStoredState(JSON.stringify(doc))).toBeNull();
+    expect(parseStoredState(JSON.stringify({ ...doc, version: "1" }))).toBeNull();
   });
 
   it("drops fields it does not know and tabs that are malformed", () => {

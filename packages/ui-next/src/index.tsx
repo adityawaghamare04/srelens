@@ -62,9 +62,7 @@ export function NextApp({
 
   // A hash rather than a route: this tree has no router yet, and the gallery is
   // a developer surface rather than a screen.
-  if (useHash() === "#gallery") {
-    return <Gallery />;
-  }
+  const gallery = useHash() === "#gallery";
 
   return (
     // A flex column rather than the Window and the alert as siblings: `body` is
@@ -73,7 +71,17 @@ export function NextApp({
     // the a11y tree, and off screen. That is the silent failure #314 closed, so
     // the Window gets the room that is left and the alert keeps its own.
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1">
+      {/*
+        Hidden rather than unmounted while the gallery is up — the same
+        keep-mounted principle as `TabSurface`. Returning the Gallery *instead*
+        of the Window unmounted it, and coming back re-booted it: with session
+        restore off, boot found nothing saved and wrote a fresh default state,
+        so every tab of the session was gone; with it on, only what the 300ms
+        debounce had already flushed came back. The `hidden` attribute also
+        takes the whole column out of the a11y tree, so the gallery is what a
+        screen reader — and `queryByRole` — sees.
+      */}
+      <div className="min-h-0 flex-1" hidden={gallery}>
         <Window
           ported={ported}
           onOpenInClassic={() => void leave()}
@@ -82,6 +90,11 @@ export function NextApp({
           }}
         />
       </div>
+      {gallery && (
+        <div className="min-h-0 flex-1">
+          <Gallery />
+        </div>
+      )}
       {error && (
         <p role="alert" className="shrink-0 px-3 py-2 text-[0.75rem] text-[var(--sev)]">
           Could not switch design. {error}

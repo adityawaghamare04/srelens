@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { ClusterContext } from "@srelens/core";
 import { CLOSED_CAP, defaultState, makeTab, newId, reconcile, type TabsState, type Workspace } from "./tabs";
 
@@ -13,8 +13,20 @@ const ws = (over: Partial<Workspace> = {}): Workspace => ({
 });
 
 describe("newId", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("does not repeat", () => {
     expect(new Set(Array.from({ length: 200 }, newId)).size).toBe(200);
+  });
+
+  it("still hands back unique ids where randomUUID does not exist", () => {
+    // `crypto.randomUUID` is [SecureContext]-only: over plain http it is
+    // undefined, and an unguarded call threw while `@srelens/ui-next` was
+    // still evaluating — the whole design failed to boot, with no way back.
+    vi.stubGlobal("crypto", {});
+    const ids = Array.from({ length: 200 }, newId);
+    expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
+    expect(new Set(ids).size).toBe(200);
   });
 });
 

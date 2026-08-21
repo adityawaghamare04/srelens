@@ -31,14 +31,25 @@ export interface TabsState {
 
 export const CLOSED_CAP = 12;
 
+let seq = 0;
+
 /**
  * Random rather than a counter. The mock used `t${++uid}`, and a counter
  * restarts at zero on reload while the restored tabs keep the ids the last
  * session gave them — so the first tab opened after a restart collided with
  * one already on screen.
+ *
+ * `randomUUID` is guarded because it is `[SecureContext]`-only: on a plain
+ * http origin — web mode on a LAN address — it is simply absent, and the
+ * unguarded call threw while this module was still evaluating, so importing
+ * `@srelens/ui-next` rejected and the window came up blank with no way back.
+ * Core guards the same call in `transport/webTransport.ts`. Uniqueness is all
+ * a tab id needs, so the fallback is time, a counter and randomness: unique
+ * within a session by the counter, and across sessions by the other two.
  */
 export function newId(): string {
-  return crypto.randomUUID();
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `t-${Date.now().toString(36)}-${(seq++).toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function makeTab(route: string, opts: { preview?: boolean; clusterName?: string } = {}): Tab {
