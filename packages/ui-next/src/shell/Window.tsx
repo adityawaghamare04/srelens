@@ -11,6 +11,8 @@ export interface WindowProps {
   /** Display names of the screens that exist in the new design. */
   ported: string[];
   onOpenInClassic: (route: string) => void;
+  /** Handed to every Placeholder; see its doc comment for why it lives there. */
+  onOpenGallery?: () => void;
 }
 
 /**
@@ -23,7 +25,7 @@ export interface WindowProps {
  * clusters. Nothing renders until that resolves: a flash of last session's
  * tabs being replaced by this session's would read as the app losing work.
  */
-export function Window({ ported, onOpenInClassic }: WindowProps) {
+export function Window({ ported, onOpenInClassic, onOpenGallery }: WindowProps) {
   const [booted, setBooted] = useState(false);
   const [contexts, setContexts] = useState<ClusterContext[]>([]);
 
@@ -73,7 +75,13 @@ export function Window({ ported, onOpenInClassic }: WindowProps) {
       <div className="relative min-h-0 flex-1">
         {tabs.map((tab) => (
           <TabSurface key={tab.id} visible={tab.id === activeId}>
-            <Body route={tab.route} clusterName={tab.sub} ported={ported} onOpenInClassic={onOpenInClassic} />
+            <Body
+              route={tab.route}
+              clusterName={tab.sub}
+              ported={ported}
+              onOpenInClassic={onOpenInClassic}
+              onOpenGallery={onOpenGallery}
+            />
           </TabSurface>
         ))}
       </div>

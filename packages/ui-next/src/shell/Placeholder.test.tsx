@@ -35,14 +35,34 @@ describe("Placeholder", () => {
     expect(document.querySelector("ul")).toBeNull();
   });
 
+  it("offers a way into the component gallery when one is given", () => {
+    // #327: the gallery's only affordance used to live on the old root page,
+    // and went with it. The Placeholder is where it belongs now — see the
+    // component's doc comment.
+    const onOpenGallery = vi.fn();
+    render(
+      <Placeholder route="/helm" ported={[]} onOpenInClassic={() => {}} onOpenGallery={onOpenGallery} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /component gallery/i }));
+    expect(onOpenGallery).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer the gallery when there is nowhere to send them", () => {
+    // The kit's own gallery renders Placeholders; a button to the gallery
+    // from inside the gallery would be a loop.
+    render(<Placeholder route="/helm" ported={[]} onOpenInClassic={() => {}} />);
+    expect(screen.queryByRole("button", { name: /component gallery/i })).toBeNull();
+  });
+
   it("does not submit a form it is standing in", () => {
     const onSubmit = vi.fn((e: SubmitEvent<HTMLFormElement>) => e.preventDefault());
     render(
       <form onSubmit={onSubmit}>
-        <Placeholder route="/helm" ported={[]} onOpenInClassic={() => {}} />
+        <Placeholder route="/helm" ported={[]} onOpenInClassic={() => {}} onOpenGallery={() => {}} />
       </form>,
     );
     fireEvent.click(screen.getByRole("button", { name: /open in classic/i }));
+    fireEvent.click(screen.getByRole("button", { name: /component gallery/i }));
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });

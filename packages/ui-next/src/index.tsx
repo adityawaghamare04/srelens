@@ -35,7 +35,8 @@ function useHash(): string {
  * own stylesheet is what proves the two designs never share a document.
  *
  * The component gallery lives here too, at #gallery: a developer surface rather
- * than a screen, so it is a hash and not a route.
+ * than a screen, so it is a hash and not a route. The way *in* is on the
+ * Placeholder, because that is the screen every un-ported route renders.
  *
  * `onExit` is the way back to the classic design. Settings does not exist in
  * this tree yet, so without it someone who opts in would have no route out of
@@ -66,13 +67,26 @@ export function NextApp({
   }
 
   return (
-    <>
-      <Window ported={ported} onOpenInClassic={() => void leave()} />
+    // A flex column rather than the Window and the alert as siblings: `body` is
+    // `overflow: hidden` and `#root` is `height: 100%`, so an alert next to an
+    // `h-full` Window starts at the bottom edge and is clipped — in the DOM and
+    // the a11y tree, and off screen. That is the silent failure #314 closed, so
+    // the Window gets the room that is left and the alert keeps its own.
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1">
+        <Window
+          ported={ported}
+          onOpenInClassic={() => void leave()}
+          onOpenGallery={() => {
+            window.location.hash = "#gallery";
+          }}
+        />
+      </div>
       {error && (
-        <p role="alert" className="px-3 py-2 text-[0.75rem]" style={{ color: "var(--sev)" }}>
+        <p role="alert" className="shrink-0 px-3 py-2 text-[0.75rem] text-[var(--sev)]">
           Could not switch design. {error}
         </p>
       )}
-    </>
+    </div>
   );
 }

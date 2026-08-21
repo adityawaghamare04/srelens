@@ -54,7 +54,7 @@ describe("NextApp", () => {
     render(<NextApp onExit={onExit} />);
     await screen.findByRole("tablist");
     await userEvent.click(screen.getByRole("button", { name: /open in classic/i }));
-    expect(onExit).toHaveBeenCalled();
+    expect(onExit).toHaveBeenCalledTimes(1);
   });
 
   it("shows why it could not leave, since there is no toast host here", async () => {
@@ -66,12 +66,39 @@ describe("NextApp", () => {
     expect(screen.getByRole("alert").textContent).toContain("storage refused");
   });
 
+  it("keeps the exit error on screen rather than below the fold", async () => {
+    // `body` is `overflow: hidden` and `#root` is `height: 100%`, so an alert
+    // rendered as a *sibling* of the Window's `h-full` root starts at the
+    // bottom edge and is clipped: present in the DOM and the a11y tree, and
+    // invisible — the silent failure #314 closed. jsdom has no layout, so the
+    // structure that prevents it is what gets pinned here.
+    render(<NextApp onExit={() => "storage refused the preference"} />);
+    await screen.findByRole("tablist");
+    await userEvent.click(screen.getByRole("button", { name: /open in classic/i }));
+
+    const alert = screen.getByRole("alert");
+    const container = alert.parentElement;
+    expect(container?.className).toMatch(/\bflex\b/);
+    expect(container?.className).toMatch(/\bflex-col\b/);
+    expect(container?.className).toMatch(/\bh-full\b/);
+
+    // The Window is boxed in a flexible sibling rather than sitting next to
+    // the alert at full height, so the alert gets the room it needs.
+    const host = alert.previousElementSibling;
+    expect(host?.contains(screen.getByRole("tablist"))).toBe(true);
+    expect(host?.className).toMatch(/\bflex-1\b/);
+    expect(host?.className).toMatch(/\bmin-h-0\b/);
+  });
+
   it("offers a way into the component gallery", async () => {
-    // The gallery has been reachable at #gallery since #317. A developer
-    // surface rather than a screen, so it is a hash and not a route — but a
-    // review surface nobody can reach is one nobody reviews. (#318)
-    window.location.hash = "#gallery";
+    // The gallery has been reachable at #gallery since #317, and nothing said
+    // so: a review surface nobody can reach is one nobody reviews. (#318, #327)
+    // Clicked rather than navigated to by setting the hash, because the
+    // affordance is the whole point — asserting the route only would have gone
+    // on passing after the way in was deleted.
     render(<NextApp onExit={() => null} />);
+    await screen.findByRole("tablist");
+    await userEvent.click(screen.getByRole("button", { name: /component gallery/i }));
     expect(await screen.findByRole("heading", { name: /design system/i })).toBeDefined();
     // The gallery replaces the window rather than rendering inside it. Asked
     // of the Placeholder's button rather than of a tablist, because the gallery

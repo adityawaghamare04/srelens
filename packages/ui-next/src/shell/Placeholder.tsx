@@ -7,6 +7,8 @@ export interface PlaceholderProps {
   /** Display names of the screens that do exist in the new design. */
   ported: string[];
   onOpenInClassic: (route: string) => void;
+  /** Where the component gallery is, when this tree has one to offer. */
+  onOpenGallery?: () => void;
 }
 
 /**
@@ -21,8 +23,21 @@ export interface PlaceholderProps {
  *
  * The list of ported screens is passed in rather than imported, so the kit's
  * gallery and this package's tests do not depend on `apps/desktop`.
+ *
+ * The way into the component gallery lives here, when the host offers one. It
+ * used to live on the new design's root page, and was deleted with it when the
+ * root became the window — which is how a review surface nobody can reach gets
+ * built. This is the one screen every un-ported route renders, so it is where a
+ * reviewer is already standing. Optional, because the kit's own gallery renders
+ * Placeholders and a way into the gallery from inside it would be a loop. (#327)
  */
-export function Placeholder({ route, clusterName, ported, onOpenInClassic }: PlaceholderProps) {
+export function Placeholder({
+  route,
+  clusterName,
+  ported,
+  onOpenInClassic,
+  onOpenGallery,
+}: PlaceholderProps) {
   const info = describe(route, clusterName);
   return (
     <Screen title={info.title} eyebrow={info.sub}>
@@ -43,9 +58,16 @@ export function Placeholder({ route, clusterName, ported, onOpenInClassic }: Pla
           )
         }
         action={
-          <Button type="button" variant="secondary" size="sm" onClick={() => onOpenInClassic(route)}>
-            Open in classic
-          </Button>
+          <span className="flex gap-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => onOpenInClassic(route)}>
+              Open in classic
+            </Button>
+            {onOpenGallery && (
+              <Button type="button" variant="secondary" size="sm" onClick={onOpenGallery}>
+                Component gallery
+              </Button>
+            )}
+          </span>
         }
       />
     </Screen>
