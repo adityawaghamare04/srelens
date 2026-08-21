@@ -51,8 +51,15 @@ export interface TitlebarProps {
 export function Titlebar({ controls = "none", leading, title, actions, label = "Titlebar" }: TitlebarProps) {
   const macos = controls === "macos";
   return (
-    <header className="titlebar" aria-label={label}>
-      <div className="flex items-center gap-2 pl-3.5">
+    // `data-tauri-drag-region` is what makes these regions actually draggable
+    // under Tauri: its injected script starts a native drag when the mousedown
+    // *target* carries the attribute. `-webkit-app-region`, which the
+    // stylesheet also sets, is honoured by WebView2 and ignored by macOS's
+    // WKWebView — without the attribute the overlay titlebar drew beautifully
+    // and moved nothing. Children without the attribute stay interactive, so
+    // the slots opt out by being elements of their own.
+    <header className="titlebar" aria-label={label} data-tauri-drag-region>
+      <div className="flex items-center gap-2 pl-3.5" data-tauri-drag-region>
         {macos && (
           <span data-window-controls aria-hidden="true" className="flex items-center gap-2">
             {MACOS_LIGHTS.map((tone) => (
@@ -74,7 +81,7 @@ export function Titlebar({ controls = "none", leading, title, actions, label = "
 
       {/* Bare on purpose: this column is the part of the bar left for dragging
           the window, so nothing pressable goes in it. */}
-      <div data-drag-region className="path flex items-center gap-2 justify-self-center">
+      <div data-drag-region data-tauri-drag-region className="path flex items-center gap-2 justify-self-center">
         {title}
       </div>
 

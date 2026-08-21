@@ -70,6 +70,19 @@ describe("Titlebar's drag region", () => {
     expect(bar().querySelector("[data-drag-region]")).not.toBeNull();
   });
 
+  it("carries the attribute tauri's drag handling listens for", () => {
+    // The stylesheet's app-region rule is honoured by WebView2 and ignored by
+    // macOS's WKWebView — under an overlay titlebar there, only elements with
+    // `data-tauri-drag-region` start a native drag. On the header and its left
+    // row too: every click whose target *is* one of them should move the
+    // window, and clicks on children never reach these.
+    setup();
+    expect(bar().hasAttribute("data-tauri-drag-region")).toBe(true);
+    for (const el of bar().querySelectorAll("[data-tauri-drag-region]")) {
+      expect(el.closest("header")).toBe(bar());
+    }
+  });
+
   it("opts the control slots back out of it", () => {
     // jsdom keeps a property it does not recognise on the CSSOM object without
     // writing it into the style attribute, so this reads the object. In the
