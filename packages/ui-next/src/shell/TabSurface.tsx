@@ -15,7 +15,7 @@ import type { ReactNode } from "react";
  * does, but the attribute says what is meant. Every surface is absolutely
  * positioned over the same box, so the visible one is the only one laid out.
  */
-export function TabSurface({ visible, children }: { visible: boolean; children: ReactNode }): JSX.Element {
+export function TabSurface({ visible, children }: { visible: boolean; children: ReactNode }) {
   return (
     <div hidden={!visible} className="absolute inset-0 flex min-h-0 flex-col">
       {children}
