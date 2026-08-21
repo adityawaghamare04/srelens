@@ -26,4 +26,18 @@ describe("filled", () => {
     // the caller meant to display.
     expect(filled(0)).toBe(true);
   });
+  it("rejects an array that renders nothing", () => {
+    // `actions={items.map(...)}` is the other ordinary conditional slot, and
+    // an empty list hands over `[]`, not nothing. (#325 review)
+    expect(filled([])).toBe(false);
+    expect(filled([false, null, undefined])).toBe(false);
+    expect(filled([[], [false]])).toBe(false);
+  });
+
+  it("accepts an array with anything renderable in it", () => {
+    expect(filled([<span key="a" />])).toBe(true);
+    expect(filled([false, <span key="a" />])).toBe(true);
+    expect(filled([0])).toBe(true);
+    expect(filled([[<span key="a" />]])).toBe(true);
+  });
 });

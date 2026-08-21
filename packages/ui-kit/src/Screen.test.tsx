@@ -82,4 +82,13 @@ describe("Screen", () => {
     expect(container.querySelector('[data-slot="screen-actions"]')).toBeNull();
     expect(container.querySelector("p")).toBeNull();
   });
+  it("treats an empty list of actions as no actions", () => {
+    // `actions={items.map(...)}` over an empty list. (#325 review)
+    const { container } = render(
+      <Screen title="Pods" actions={[]}>
+        body
+      </Screen>,
+    );
+    expect(container.querySelector('[data-slot="screen-actions"]')).toBeNull();
+  });
 });
