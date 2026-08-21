@@ -26,9 +26,12 @@ function useHash(): string {
 /**
  * The new design's root.
  *
- * A placeholder for now. This package exists so the design switch has a real
- * second tree to load, with its own stylesheet — which is what proves the two
- * designs never share a document. The shell and screens arrive in later steps.
+ * A placeholder for the screens, which arrive in later steps. This package
+ * exists so the design switch has a real second tree to load, with its own
+ * stylesheet — which is what proves the two designs never share a document.
+ *
+ * It is not empty, though: the component gallery lives here, and is linked
+ * from the placeholder rather than left to whoever already knows the hash.
  *
  * It carries its own way back to the classic design on purpose: Settings does
  * not exist here yet, so without this button someone who opts in would have no
@@ -56,6 +59,16 @@ export function NextApp({ onExit }: { onExit: () => Promise<string | null> | str
       <p>
         Nothing is built here yet. You are seeing this because the new design is
         switched on in Settings — the screens are still being written.
+      </p>
+      {/* The kit has been reachable at #gallery since #317 and nothing said so,
+          which left this page announcing that nothing is built with two dozen
+          built components one hash away. A review surface nobody can find is
+          one nobody reviews. An anchor rather than a button because it goes
+          somewhere: middle-click and copy-link work, and the hash is the
+          address. (#318) */}
+      <p>
+        <a href="#gallery">Component gallery</a> — every component in the design
+        system, in its states. A developer surface rather than a screen.
       </p>
       <button type="button" onClick={() => void leave()}>
         Back to the classic design
