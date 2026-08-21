@@ -9,6 +9,7 @@ import {
   openTab,
   setState,
   switchWorkspace,
+  togglePin,
 } from "../lib/tabsStore";
 import { defaultState } from "../lib/tabs";
 
@@ -103,6 +104,22 @@ describe("Chrome", () => {
     await userEvent.click(screen.getByRole("button", { name: /Remove Team/ }));
     expect(screen.queryByRole("dialog", { name: /Remove Team/ })).toBeNull();
     expect(getState().workspaces.some((w) => w.id === id)).toBe(false);
+  });
+
+  it("still asks when the tabs the user opened have been pinned", async () => {
+    // Pinning is the user saying a tab matters. A rule that skipped the
+    // question when every tab was pinned dropped exactly the tabs someone had
+    // marked as worth keeping, silently and with no undo. Only the seeded home
+    // tab — the single tab a workspace is born with — is nothing to lose.
+    const id = createWorkspace("Team", ["prod"]);
+    openTab("/k/pods");
+    togglePin(currentWorkspace().activeId);
+    switchWorkspace(getState().workspaces[0].id);
+    chrome();
+    await openSwitcher();
+    await userEvent.click(screen.getByRole("button", { name: /Remove Team/ }));
+    expect(screen.getByRole("dialog", { name: /Remove Team/ })).toBeDefined();
+    expect(getState().workspaces.some((w) => w.id === id)).toBe(true);
   });
 
   it("keeps the workspace when the confirmation is dismissed", async () => {

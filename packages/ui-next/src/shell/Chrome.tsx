@@ -38,12 +38,17 @@ export function zoom(action: "in" | "out" | "reset") {
  *
  * That decision is the only judgement in the file. Removing a workspace has no
  * undo and takes every tab in it, so it asks — except when there is nothing to
- * ask about. A freshly created workspace holds exactly one tab, the pinned home
- * tab that every workspace is seeded with and that no close path will remove;
- * confirming the loss of a tab that was never opened and cannot be closed is a
- * dialog about nothing, and a dialog about nothing is what teaches people to
- * dismiss the ones that matter. So `every(t => t.pinned)` removes outright and
- * anything else confirms first.
+ * ask about. A workspace is seeded with exactly one tab, the pinned home tab it
+ * is born with; confirming the loss of a tab that was never opened is a dialog
+ * about nothing, and a dialog about nothing is what teaches people to dismiss
+ * the ones that matter. So one tab removes outright and anything else confirms.
+ *
+ * The test is the count, deliberately, and not "every tab is pinned" — which is
+ * what this first read as. Pinning is `togglePin`, a thing the user does to say
+ * a tab matters, so a workspace whose tabs had all been pinned was the case
+ * most worth asking about and the one that skipped the question: the tabs
+ * someone had marked as worth keeping went silently, with no undo, on the exact
+ * path the confirmation exists to guard.
  *
  * The zoom controls are desktop-only. `applyUiScale` asks the webview to zoom;
  * in web mode there is no webview to ask, the browser's own zoom already does
@@ -61,7 +66,7 @@ export function Chrome({ controls, clusterName, onToggleTheme, onNewWorkspace }:
   function askRemove(id: string) {
     const w = workspaces.find((x) => x.id === id);
     if (!w) return;
-    if (w.tabs.every((t) => t.pinned)) removeWorkspace(id);
+    if (w.tabs.length <= 1) removeWorkspace(id);
     else setRemoving(id);
   }
 
