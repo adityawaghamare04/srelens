@@ -47,4 +47,30 @@ describe("CodeEditor", () => {
     const { container } = render(<CodeEditor value="a: 1" fill minHeight={100} maxHeight={400} />);
     expect(container.querySelector(".cm-editor")).not.toBeNull();
   });
+  it("does not report a prop-driven value change as a user edit", () => {
+    // Reset and reload replace the document from outside. The dispatch that
+    // does it changes the doc, so an unconditional listener reports it as
+    // typing — marking a form dirty, or invalidating a preview, on a change
+    // the caller made itself. (#326 review)
+    const onChange = vi.fn();
+    const { rerender } = render(<CodeEditor value="a: 1" onChange={onChange} />);
+    rerender(<CodeEditor value="b: 2" onChange={onChange} />);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("re-lints when the validator changes, without waiting for an edit", async () => {
+    // Switching cluster context swaps the validator while the same document
+    // stays mounted. Updating the ref alone schedules nothing, so the previous
+    // validator's diagnostics sit there until someone types. (#326 review)
+    const first = vi.fn(async () => []);
+    const second = vi.fn(async () => []);
+    const { rerender } = render(<CodeEditor value="a: 1" schemaValidate={first} />);
+    // Let the document settle on the first validator. Without this the swap
+    // happens before the debounced first lint ever runs, and the test passes
+    // whether or not anything re-lints.
+    await vi.waitFor(() => expect(first).toHaveBeenCalled(), { timeout: 3000 });
+
+    rerender(<CodeEditor value="a: 1" schemaValidate={second} />);
+    await vi.waitFor(() => expect(second).toHaveBeenCalled(), { timeout: 3000 });
+  });
 });

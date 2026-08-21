@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { EditorState } from "@codemirror/state";
+import { Annotation, EditorState, StateEffect } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -76,6 +76,23 @@ function extractFieldPaths(message: string): string[] {
   }
   return [...paths];
 }
+
+/**
+ * Marks a transaction as this component syncing the document to `value`,
+ * rather than the user typing. Both change the document, and only one of them
+ * is an edit. (#326 review)
+ */
+const sync = Annotation.define<boolean>();
+
+/**
+ * Asks the linter to look again at a document that has not changed.
+ *
+ * `forceLinting` will not do it: it acts only when a run is already pending,
+ * so once the initial lint has settled it is a no-op. `needsRefresh` is the
+ * hook meant for this — the linter re-runs when a transaction carries this.
+ * (#326 review)
+ */
+const revalidate = StateEffect.define<null>();
 
 /**
  * Map document-indexed validation messages onto editor ranges. Positions each
@@ -302,7 +319,12 @@ export function CodeEditor({
       EditorView.editable.of(!readOnly),
       EditorState.readOnly.of(readOnly),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged) onChangeRef.current?.(u.state.doc.toString());
+        if (!u.docChanged) return;
+        // A reset or a reload replaces the document from outside. That is the
+        // caller telling us, not the user typing, and reporting it back as an
+        // edit marks their own form dirty. (#326 review)
+        if (u.transactions.some((t) => t.annotation(sync))) return;
+        onChangeRef.current?.(u.state.doc.toString());
       }),
     ];
     if (language === "yaml") {
@@ -321,7 +343,13 @@ export function CodeEditor({
             return [];
           }
         },
-        { delay: 500 },
+        {
+          delay: 500,
+          // What is valid depends on which cluster is answering, so a new
+          // validator has to be asked about the document already on screen.
+          needsRefresh: (update) =>
+            update.transactions.some((t) => t.effects.some((e) => e.is(revalidate))),
+        },
       );
       extensions.push(yaml(), yamlLinter, lintGutter());
 
@@ -351,13 +379,25 @@ export function CodeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readOnly, language, ariaLabel, minHeight, maxHeight, fill]);
 
+  // A new validator has to be asked about the document already on screen.
+  // Swapping it changes what is true — a different cluster, a different set of
+  // CRDs — but the linter is scheduled by edits, so without this the previous
+  // validator's diagnostics stay up until someone types. (#326 review)
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view && language === "yaml") view.dispatch({ effects: revalidate.of(null) });
+  }, [schemaValidate, language]);
+
   // Push external value changes into the editor (e.g. after Reset or reload).
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
     if (value !== current) {
-      view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: value },
+        annotations: sync.of(true),
+      });
     }
   }, [value]);
 
