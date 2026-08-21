@@ -70,17 +70,26 @@ describe("Titlebar's drag region", () => {
     expect(bar().querySelector("[data-drag-region]")).not.toBeNull();
   });
 
-  it("carries the attribute tauri's drag handling listens for", () => {
+  it("carries the attribute tauri's drag handling listens for on the header and its structural columns, but not on the interactive slots", () => {
     // The stylesheet's app-region rule is honoured by WebView2 and ignored by
     // macOS's WKWebView — under an overlay titlebar there, only elements with
-    // `data-tauri-drag-region` start a native drag. On the header and its left
-    // row too: every click whose target *is* one of them should move the
-    // window, and clicks on children never reach these.
+    // `data-tauri-drag-region` start a native drag. The header and its two
+    // bare columns (the leading row and the centre drag region) carry it; the
+    // slots holding what the caller passed must not, or a click there would
+    // start a window move instead of reaching the control.
     setup();
-    expect(bar().hasAttribute("data-tauri-drag-region")).toBe(true);
-    for (const el of bar().querySelectorAll("[data-tauri-drag-region]")) {
-      expect(el.closest("header")).toBe(bar());
-    }
+    const header = bar();
+    const leadingSlot = header.querySelector('[data-slot="leading"]') as HTMLElement;
+    const actionsSlot = header.querySelector('[data-slot="actions"]') as HTMLElement;
+    const leadingColumn = leadingSlot.parentElement as HTMLElement;
+    const titleColumn = header.querySelector("[data-drag-region]") as HTMLElement;
+
+    expect(header.hasAttribute("data-tauri-drag-region")).toBe(true);
+    expect(leadingColumn.hasAttribute("data-tauri-drag-region")).toBe(true);
+    expect(titleColumn.hasAttribute("data-tauri-drag-region")).toBe(true);
+
+    expect(leadingSlot.hasAttribute("data-tauri-drag-region")).toBe(false);
+    expect(actionsSlot.hasAttribute("data-tauri-drag-region")).toBe(false);
   });
 
   it("opts the control slots back out of it", () => {
