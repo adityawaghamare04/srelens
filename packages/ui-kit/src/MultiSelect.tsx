@@ -96,11 +96,35 @@ export function MultiSelect({
       ariaLabel={ariaLabel}
       searchPlaceholder={searchPlaceholder}
       className={className}
+      footer={
+        <>
+          {/* What the list currently amounts to, in the design's label voice.
+              "all" rather than "0 selected", because an empty selection is not
+              an empty result — it is the filter switched off. */}
+          <span className="eyebrow flex-1">
+            {selection.length === 0 ? "all" : selection.length} selected
+          </span>
+          <button type="button" className="btn !py-0" onClick={() => onChange(options.map((o) => o.value))}>
+            Select all
+          </button>
+          <button type="button" className="btn !py-0" onClick={() => onChange([])}>
+            Reset
+          </button>
+        </>
+      }
     >
-      {() => (
+      {(close) => (
         <>
           {all !== undefined && (
-            <PickerRow value={all} label={all} checked={selection.length === 0} onSelect={() => onChange([])} />
+            <PickerRow
+              value={all}
+              label={all}
+              checked={selection.length === 0}
+              onSelect={() => onChange([])}
+              // A check, not a box: this is not one more thing to switch on
+              // beside the others, it is the absence of any of them.
+              trailing={<span className="path text-faint">{options.length}</span>}
+            />
           )}
           {ordered.map((option) => (
             <PickerRow
@@ -109,6 +133,24 @@ export function MultiSelect({
               label={optionLabel(option)}
               checked={chosen.has(option.value)}
               onSelect={() => toggle(option.value)}
+              mark="box"
+              // Narrowing to one option is the other thing people do with a
+              // list like this, and doing it by hand means turning every other
+              // one off first. It closes, because it is the whole choice.
+              trailing={
+                <button
+                  type="button"
+                  className="ns-only"
+                  aria-label={`Only ${optionLabel(option)}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onChange([option.value]);
+                    close();
+                  }}
+                >
+                  only
+                </button>
+              }
             />
           ))}
         </>
