@@ -25,6 +25,16 @@ describe("matchWindowKey", () => {
     expect(matchWindowKey(ev("0", { metaKey: true }), true)).toEqual({ type: "zoom-reset" });
   });
 
+  it("zooms in on the shifted plus, which is how the key is really typed", () => {
+    // `+` is Shift+= on US/UK layouts, so the keydown carries shiftKey.
+    expect(matchWindowKey(ev("+", { metaKey: true, shiftKey: true }), true)).toEqual({
+      type: "zoom-in",
+    });
+    expect(matchWindowKey(ev("+", { ctrlKey: true, shiftKey: true }), false)).toEqual({
+      type: "zoom-in",
+    });
+  });
+
   it("leaves Ctrl+W alone on Apple", () => {
     expect(matchWindowKey(ev("w", { ctrlKey: true }), true)).toBeNull();
   });
@@ -52,5 +62,8 @@ describe("matchWindowKey", () => {
     expect(hint("new-tab", false)).toBe("Ctrl+T");
     // Core runs the modifiers in the order the chord lists them, so `Mod` first.
     expect(hint("reopen-tab", true)).toBe("⌘⇧T");
+    // The `=` row stays first, so the hint stays the unshifted form.
+    expect(hint("zoom-in", true)).toBe("⌘=");
+    expect(hint("zoom-in", false)).toBe("Ctrl+=");
   });
 });

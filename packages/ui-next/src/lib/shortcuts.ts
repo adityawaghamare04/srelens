@@ -33,7 +33,9 @@ const BINDINGS: Binding[] = [
   })),
   { chord: ["Mod", "K"], action: { type: "console" }, whileTyping: true },
   { chord: ["Mod", "="], action: { type: "zoom-in" } },
-  { chord: ["Mod", "+"], action: { type: "zoom-in" } },
+  // `+` is Shift+= on US/UK layouts, so the keydown really carries Shift; a
+  // chord without the token would be a row that can never fire.
+  { chord: ["Mod", "Shift", "+"], action: { type: "zoom-in" } },
   { chord: ["Mod", "-"], action: { type: "zoom-out" } },
   { chord: ["Mod", "0"], action: { type: "zoom-reset" } },
 ];
