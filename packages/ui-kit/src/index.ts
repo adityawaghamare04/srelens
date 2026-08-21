@@ -1,15 +1,20 @@
 /** The srelens design system. Components are added as they are merged in. */
 export { Badge, type BadgeTone } from "./Badge";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
+export { CodeEditor, documentDiagnostics, yamlDiagnostics, type CodeEditorProps } from "./CodeEditor";
+export { ColumnPicker, type ColumnOption, type ColumnPickerProps } from "./ColumnPicker";
+export { Combobox, type ComboboxOption, type ComboboxProps } from "./Combobox";
 export { ConfirmDialog, type ConfirmDialogProps } from "./ConfirmDialog";
 export { Drawer, type DrawerProps } from "./Drawer";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { ErrorState, type ErrorStateProps } from "./ErrorState";
 export { Field, type FieldProps } from "./Field";
 export { IconButton, type IconButtonProps, type IconComponent } from "./IconButton";
+export { KubectlPreview, type KubectlPreviewProps } from "./KubectlPreview";
 export { LoadingState, type LoadingStateProps } from "./LoadingState";
 export { Meter } from "./Meter";
 export { MetricTile, type MetricTileProps } from "./MetricTile";
+export { MultiSelect, type MultiSelectProps } from "./MultiSelect";
 export { NavIcon, type NavIconProps } from "./NavIcon";
 export { Panel, type PanelProps } from "./Panel";
 export { Screen, type ScreenProps } from "./Screen";

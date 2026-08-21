@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
+import { CodeEditor } from "../CodeEditor";
+import { ColumnPicker } from "../ColumnPicker";
+import { Combobox } from "../Combobox";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Drawer } from "../Drawer";
 import { EmptyState } from "../EmptyState";
 import { ErrorState } from "../ErrorState";
 import { Field } from "../Field";
 import { IconButton } from "../IconButton";
+import { KubectlPreview } from "../KubectlPreview";
 import { LoadingState } from "../LoadingState";
 import { Meter } from "../Meter";
+import { MultiSelect } from "../MultiSelect";
 import { MetricTile } from "../MetricTile";
 import { NavIcon } from "../NavIcon";
 import { Panel } from "../Panel";
@@ -54,6 +59,10 @@ export function Gallery() {
   const [ns, setNs] = useState("kube-system");
   const [tab, setTab] = useState("pods");
   const [drawer, setDrawer] = useState(false);
+  const [scope, setScope] = useState("kube-system");
+  const [picked, setPicked] = useState<string[]>([]);
+  const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(new Set(["age"]));
+  const [manifest, setManifest] = useState("apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-1\n");
   const [dialog, setDialog] = useState<null | "plain" | "danger" | "busy">(null);
   // The busy dialog is deliberately undismissable — that is the state being
   // shown — so the catalogue releases it rather than trapping whoever opened it.
@@ -408,6 +417,87 @@ export function Gallery() {
             <NavIcon icon={DotIcon} /> Deployments
           </span>
         </div>
+      </section>
+      <section>
+        <h2>Combobox</h2>
+        {/* Use over Select when the list is long enough to want searching. */}
+        <Combobox
+          value={scope}
+          onValueChange={setScope}
+          options={[
+            { value: "kube-system" },
+            { value: "default" },
+            { value: "monitoring" },
+            { value: "cert-manager" },
+          ]}
+          ariaLabel="Scope"
+        />
+        <p className="text-[0.75rem] text-muted">chosen: {scope}</p>
+      </section>
+
+      <section>
+        <h2>MultiSelect</h2>
+        {/* Stays open while toggling, so several can be picked in one visit.
+            `allLabel` is how a filter says "no filter" without a sentinel
+            value the caller has to invent. */}
+        <MultiSelect
+          options={[{ value: "default" }, { value: "kube-system" }, { value: "monitoring" }]}
+          selection={picked}
+          onChange={setPicked}
+          allLabel="All namespaces"
+          ariaLabel="Namespaces"
+        />
+        <p className="text-[0.75rem] text-muted">
+          selected: {picked.length === 0 ? "(all)" : picked.join(", ")}
+        </p>
+      </section>
+
+      <section>
+        <h2>ColumnPicker</h2>
+        {/* The pinned column is the row identifier: offered, but never off. */}
+        <ColumnPicker
+          columns={[
+            { key: "name", label: "Name" },
+            { key: "namespace", label: "Namespace" },
+            { key: "status", label: "Status" },
+            { key: "age", label: "Age" },
+          ]}
+          hidden={hiddenColumns}
+          pinnedKey="name"
+          onToggle={(key) =>
+            setHiddenColumns((current) => {
+              const next = new Set(current);
+              if (next.has(key)) next.delete(key);
+              else next.add(key);
+              return next;
+            })
+          }
+        />
+        <p className="text-[0.75rem] text-muted">
+          hidden: {hiddenColumns.size === 0 ? "(none)" : [...hiddenColumns].join(", ")}
+        </p>
+      </section>
+
+      <section>
+        <h2>KubectlPreview</h2>
+        <KubectlPreview command="kubectl delete pod web-1 -n default" onCopy={() => {}} />
+        {/* Not every action has a faithful one-liner; the note says so in the
+            same place rather than leaving the dialog silent. */}
+        <KubectlPreview note="Eviction is an API call with no kubectl verb of its own." />
+      </section>
+
+      <section>
+        <h2>CodeEditor</h2>
+        <div style={{ height: 200 }}>
+          <CodeEditor
+            value={manifest}
+            onChange={setManifest}
+            ariaLabel="Manifest YAML"
+            fill
+          />
+        </div>
+        {/* Completions are the caller's: the kit knows CodeMirror, not what an
+            apiVersion is. */}
       </section>
     </div>
   );
