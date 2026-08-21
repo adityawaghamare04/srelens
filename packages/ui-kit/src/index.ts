@@ -23,6 +23,7 @@ export { Select, type SelectOption, type SelectProps } from "./Select";
 export { Sparkline } from "./Sparkline";
 export { Spinner, type SpinnerProps } from "./Spinner";
 export { StatusPill, type StatusKind, type StatusPillProps } from "./StatusPill";
+export { Table, computeVisibleRange, filterTableData, nextSort, type Column, type TableProps, type TableSelection, type TableSort } from "./Table";
 export { Tabs, type TabItem, type TabsProps } from "./Tabs";
 export { TextInput, type TextInputProps } from "./TextInput";
 export { Toolbar, type ToolbarProps } from "./Toolbar";

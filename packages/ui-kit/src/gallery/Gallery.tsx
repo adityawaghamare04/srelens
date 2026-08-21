@@ -23,6 +23,7 @@ import { Select } from "../Select";
 import { Sparkline } from "../Sparkline";
 import { Spinner } from "../Spinner";
 import { StatusPill } from "../StatusPill";
+import { Table, type Column } from "../Table";
 import { Tabs } from "../Tabs";
 import { TextInput } from "../TextInput";
 import { Toolbar } from "../Toolbar";
@@ -60,6 +61,8 @@ export function Gallery() {
   const [tab, setTab] = useState("pods");
   const [drawer, setDrawer] = useState(false);
   const [scope, setScope] = useState("kube-system");
+  const [sort, setSort] = useState<import("../Table").TableSort | null>(null);
+  const [picked2, setPicked2] = useState<Set<string>>(new Set());
   const [picked, setPicked] = useState<string[]>([]);
   const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(new Set(["age"]));
   const [manifest, setManifest] = useState("apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-1\n");
@@ -498,6 +501,43 @@ export function Gallery() {
         </div>
         {/* Completions are the caller's: the kit knows CodeMirror, not what an
             apiVersion is. */}
+      </section>
+      <section>
+        <h2>Table</h2>
+        {/* The states worth seeing: a sortable column, a filterable one, bulk
+            selection, and a row that is clickable. Virtualisation only engages
+            past a threshold, so a gallery-sized list renders whole. */}
+        <Table
+          columns={
+            [
+              { key: "name", header: "Name", sortable: true, filterable: true },
+              { key: "phase", header: "Phase", sortable: true },
+              { key: "restarts", header: "Restarts", sortable: true },
+            ] as Column<{ name: string; phase: string; restarts: number }>[]
+          }
+          data={[
+            { name: "web-1", phase: "Running", restarts: 0 },
+            { name: "web-2", phase: "Pending", restarts: 3 },
+            { name: "api-0", phase: "CrashLoopBackOff", restarts: 17 },
+          ]}
+          getRowKey={(r) => r.name}
+          sort={sort}
+          onSortChange={setSort}
+          selection={{ selected: picked2, onChange: setPicked2 }}
+          onRowClick={() => {}}
+        />
+        <p className="text-[0.75rem] text-muted">
+          sorted: {sort ? `${sort.key} ${sort.direction}` : "(unsorted)"} · selected:{" "}
+          {picked2.size === 0 ? "(none)" : [...picked2].join(", ")}
+        </p>
+        {/* Empty is a state, not an absence: it says what would be here. */}
+        <Table
+          columns={[{ key: "name", header: "Name" }] as Column<{ name: string }>[]}
+          data={[]}
+          getRowKey={(r) => r.name}
+          emptyText="No pods"
+          emptyHint="Nothing is scheduled in this namespace."
+        />
       </section>
     </div>
   );
