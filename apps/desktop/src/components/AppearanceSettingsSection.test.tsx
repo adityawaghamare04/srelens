@@ -26,6 +26,21 @@ describe("AppearanceSettingsSection", () => {
     expect(screen.getByText(/most screens are not there yet/i)).toBeDefined();
   });
 
+  it("lists the screens that are already in the new design", () => {
+    // "Most screens are not there yet" is only actionable if it says which
+    // ones are. The list comes from PORTED_SCREENS, the same one the new
+    // design's Placeholder reads, so the two cannot disagree.
+    render(<AppearanceSettingsSection />);
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toContain("Application log");
+    expect(items).toContain("Release notes");
+  });
+
+  it("introduces the list, so the names are not a bare list under the hint", () => {
+    render(<AppearanceSettingsSection />);
+    expect(screen.getByText(/in the new design so far/i)).toBeDefined();
+  });
+
   it("warns that switching reloads the window", () => {
     render(<AppearanceSettingsSection />);
     expect(screen.getByText(/reload/i)).toBeDefined();

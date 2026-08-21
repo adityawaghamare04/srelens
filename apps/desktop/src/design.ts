@@ -134,4 +134,7 @@ export function applyNextDesignTheme(): () => void {
  * Placeholder shows it so the user knows what is there. One list, read by both,
  * so they cannot drift. A screen is added here in the PR that ports it.
  */
-export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [];
+export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [
+  { route: "/applog", name: "Application log" },
+  { route: "/notes", name: "Release notes" },
+];

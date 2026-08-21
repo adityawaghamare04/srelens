@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe as suite, it, expect } from "vitest";
 import { describe, isBuiltInKind, screenFor } from "./routes";
+import { AppLog } from "../screens/AppLog";
+import { ReleaseNotes } from "../screens/ReleaseNotes";
 
 suite("isBuiltInKind", () => {
   it("recognises a built-in list kind by its slug", () => {
@@ -68,11 +70,33 @@ suite("describe", () => {
 });
 
 suite("screenFor", () => {
-  it("knows no screens yet, so every route is a placeholder", () => {
-    // PR 3 registers /applog and /notes here. Until then this must be null for
-    // every route, including the home route.
-    for (const route of ["/", "/k/pods", "/applog", "/notes", "/settings"]) {
+  it("resolves the screens that have been ported", () => {
+    expect(screenFor("/applog")).toBe(AppLog);
+    expect(screenFor("/notes")).toBe(ReleaseNotes);
+  });
+
+  it("gives a route with no screen a placeholder", () => {
+    for (const route of ["/", "/k/pods", "/settings"]) {
       expect(screenFor(route), route).toBeNull();
     }
+  });
+
+  it("does not hand out Object.prototype members as screens", () => {
+    // A route is a string from a tab, which can come from a persisted session
+    // or a resource name. `SCREENS["constructor"]` on a plain object literal is
+    // a function, so `Body` would have rendered `Object` as a component.
+    for (const route of ["constructor", "/constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(screenFor(route), route).toBeNull();
+    }
+  });
+});
+
+suite("describe against inherited keys", () => {
+  it("falls through to the default title rather than a prototype member", () => {
+    // Same hole as `screenFor`: `APP_SCOPED["constructor"]` on a plain object
+    // literal is truthy, and spreading a function produced a title-less tab.
+    expect(describe("constructor", "c")).toMatchObject({ title: "constructor", kind: "control" });
+    expect(describe("/constructor", "c")).toMatchObject({ title: "constructor", kind: "control" });
+    expect(describe("toString", "c").title).toBe("toString");
   });
 });

@@ -1,5 +1,7 @@
 import type { ComponentType } from "react";
 import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
+import { AppLog } from "../screens/AppLog";
+import { ReleaseNotes } from "../screens/ReleaseNotes";
 
 /**
  * What a tab is about, for the strip's icon and for the context menu. The
@@ -29,31 +31,40 @@ export function isBuiltInKind(slug: string): slug is ResourceKind {
   return slug !== "overview" && Object.prototype.hasOwnProperty.call(K8S_KIND, slug);
 }
 
-/** Routes whose tab carries no cluster in its sub. */
-const APP_SCOPED: Record<string, Omit<RouteInfo, "route" | "sub">> = {
-  "/applog": { title: "Application log", kind: "applog" },
-  "/notes": { title: "Release notes", kind: "notes" },
-  "/settings": { title: "Settings", kind: "settings" },
-  "/connections": { title: "Connections", kind: "connections" },
-  "/connect": { title: "Connect a cluster", kind: "connect" },
-  "/toolbox": { title: "Toolbox", kind: "toolbox" },
-};
+/**
+ * Routes whose tab carries no cluster in its sub.
+ *
+ * Null-prototype, like every lookup below it: a route is a string that can
+ * arrive from a persisted session or a resource name, and on a plain object
+ * literal `APP_SCOPED["constructor"]` is `Object` — truthy, so the tab came
+ * back with no title at all.
+ */
+const APP_SCOPED: Record<string, Omit<RouteInfo, "route" | "sub">> =
+  Object.assign(Object.create(null), {
+    "/applog": { title: "Application log", kind: "applog" },
+    "/notes": { title: "Release notes", kind: "notes" },
+    "/settings": { title: "Settings", kind: "settings" },
+    "/connections": { title: "Connections", kind: "connections" },
+    "/connect": { title: "Connect a cluster", kind: "connect" },
+    "/toolbox": { title: "Toolbox", kind: "toolbox" },
+  });
 
 /** Routes whose tab names the cluster it is looking at. */
-const CLUSTER_SCOPED: Record<string, Omit<RouteInfo, "route" | "sub">> = {
-  "/": { title: "Control room", kind: "control", pinned: true },
-  "/incidents": { title: "Incidents", kind: "incidents" },
-  "/agent": { title: "Agent", kind: "agent" },
-  "/resources": { title: "Workloads", kind: "workloads" },
-  "/logs": { title: "Logs", kind: "logs" },
-  "/terminals": { title: "Shell", kind: "terminal" },
-  "/forwards": { title: "Port forwards", kind: "forwards" },
-  "/helm": { title: "Helm", kind: "helm" },
-  "/topology": { title: "Topology", kind: "topology" },
-  "/new": { title: "New resource", kind: "edit" },
-  "/events": { title: "Events", kind: "events" },
-  "/overview": { title: "Cluster overview", kind: "control" },
-};
+const CLUSTER_SCOPED: Record<string, Omit<RouteInfo, "route" | "sub">> =
+  Object.assign(Object.create(null), {
+    "/": { title: "Control room", kind: "control", pinned: true },
+    "/incidents": { title: "Incidents", kind: "incidents" },
+    "/agent": { title: "Agent", kind: "agent" },
+    "/resources": { title: "Workloads", kind: "workloads" },
+    "/logs": { title: "Logs", kind: "logs" },
+    "/terminals": { title: "Shell", kind: "terminal" },
+    "/forwards": { title: "Port forwards", kind: "forwards" },
+    "/helm": { title: "Helm", kind: "helm" },
+    "/topology": { title: "Topology", kind: "topology" },
+    "/new": { title: "New resource", kind: "edit" },
+    "/events": { title: "Events", kind: "events" },
+    "/overview": { title: "Cluster overview", kind: "control" },
+  });
 
 /**
  * Turn a route into what its tab shows. The cluster name is the real one,
@@ -85,8 +96,14 @@ export type ScreenComponent = ComponentType<{ route: string }>;
  * The only place that knows which screens exist. Adding a screen is one entry
  * here and nothing else; a route with no entry renders the Placeholder.
  */
-const SCREENS: Record<string, ScreenComponent> = {};
+const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(null), {
+  "/applog": AppLog,
+  "/notes": ReleaseNotes,
+});
 
 export function screenFor(route: string): ScreenComponent | null {
-  return SCREENS[route] ?? null;
+  // `hasOwnProperty.call` as well as the null prototype: the table is the one
+  // thing standing between an arbitrary route string and something rendered as
+  // a component, and it costs nothing to say so twice.
+  return Object.prototype.hasOwnProperty.call(SCREENS, route) ? SCREENS[route] : null;
 }
