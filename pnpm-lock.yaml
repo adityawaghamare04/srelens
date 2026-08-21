@@ -302,6 +302,9 @@ importers:
       '@srelens/ui-kit':
         specifier: workspace:*
         version: link:../ui-kit
+      lucide-react:
+        specifier: ^1.22.0
+        version: 1.22.0(react@19.2.7)
     devDependencies:
       '@testing-library/react':
         specifier: ^16.3.2

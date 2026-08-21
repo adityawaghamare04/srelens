@@ -1,0 +1,168 @@
+import {
+  ArrowLeftRight,
+  BellRing,
+  Bot,
+  Box,
+  BriefcaseBusiness,
+  Circle,
+  Clock3,
+  Compass,
+  Copy,
+  Cpu,
+  Database,
+  FileCog,
+  FilePlus,
+  FolderTree,
+  Gauge,
+  GitBranch,
+  HardDrive,
+  KeyRound,
+  Layers,
+  LayoutDashboard,
+  LayoutGrid,
+  ListOrdered,
+  Maximize,
+  Moon,
+  Network,
+  Plus,
+  Puzzle,
+  RadioTower,
+  Route,
+  ScrollText,
+  Search,
+  Server,
+  ServerCog,
+  Settings2,
+  Shield,
+  ShieldCheck,
+  ShipWheel,
+  Signpost,
+  SlidersHorizontal,
+  Scaling,
+  Sun,
+  Terminal,
+  TimerReset,
+  TriangleAlert,
+  UserRoundCheck,
+  UserRoundCog,
+  Waypoints,
+  Webhook,
+  Wrench,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import type { IconComponent } from "@srelens/ui-kit";
+
+/**
+ * The shell's glyphs, in one place.
+ *
+ * Two reasons it is a map rather than an import at each call site. The kit
+ * takes no dependency on an icon set — it describes the hole an icon goes in
+ * with `IconComponent` and leaves the choosing to the app — so the choosing has
+ * to happen somewhere in ui-next, and spread across a dozen components it
+ * becomes a dozen places to look when the same concept is drawn two different
+ * ways. And the names here are the app's vocabulary, not lucide's: `workloads`
+ * and `access` say what the sidebar group is, while `Layers` and `ShieldCheck`
+ * say what the picture is, and the sidebar should not have to know the second
+ * to ask for the first.
+ *
+ * Typed as the kit's `IconComponent` rather than lucide's `LucideIcon`, so
+ * everything that consumes this map is typed against the hole and not against
+ * the icon set filling it — swapping sets, or hand-drawing one glyph as an
+ * inline SVG, is then a change to this file alone.
+ *
+ * The resource glyphs follow the classic app's (`apps/desktop/src/ui/NavIcon`)
+ * deliberately: the same kind should not be a box in one design and a cube in
+ * the other for someone who has both installed during the migration.
+ */
+export const Icons = {
+  // The titlebar and the window's own actions.
+  sun: Sun,
+  moon: Moon,
+  zoomIn: ZoomIn,
+  zoomOut: ZoomOut,
+  zoomReset: Maximize,
+  settings: Settings2,
+  workspace: LayoutGrid,
+  add: Plus,
+  close: X,
+  search: Search,
+  warn: TriangleAlert,
+
+  // The sidebar's groups. One per group in the resource tree.
+  cluster: Server,
+  workloads: Layers,
+  config: FileCog,
+  network: Network,
+  storage: HardDrive,
+  access: ShieldCheck,
+  crds: Puzzle,
+  investigate: Compass,
+
+  // Cluster.
+  overview: LayoutDashboard,
+  nodes: Server,
+  namespaces: FolderTree,
+  events: BellRing,
+
+  // Workloads.
+  pods: Box,
+  deployments: Layers,
+  statefulsets: Database,
+  daemonsets: ServerCog,
+  replicasets: Copy,
+  jobs: BriefcaseBusiness,
+  cronjobs: Clock3,
+
+  // Config.
+  configmaps: FileCog,
+  secrets: KeyRound,
+  resourcequotas: Gauge,
+  limitranges: SlidersHorizontal,
+  horizontalpodautoscalers: Scaling,
+  poddisruptionbudgets: ShieldCheck,
+  priorityclasses: ListOrdered,
+  runtimeclasses: Cpu,
+  leases: TimerReset,
+  mutatingwebhookconfigurations: Webhook,
+  validatingwebhookconfigurations: Webhook,
+
+  // Network.
+  services: Network,
+  endpoints: RadioTower,
+  endpointslices: GitBranch,
+  ingresses: Route,
+  ingressclasses: Signpost,
+  networkpolicies: Shield,
+  portforwards: ArrowLeftRight,
+
+  // Storage.
+  persistentvolumeclaims: HardDrive,
+  persistentvolumes: Database,
+  storageclasses: Layers,
+
+  // Access control.
+  serviceaccounts: UserRoundCog,
+  clusterroles: Shield,
+  roles: ShieldCheck,
+  clusterrolebindings: UserRoundCheck,
+  rolebindings: UserRoundCheck,
+
+  // Investigate, and the rest of the app's surfaces.
+  control: LayoutDashboard,
+  incidents: BellRing,
+  topology: Waypoints,
+  agent: Bot,
+  logs: ScrollText,
+  terminal: Terminal,
+  helmreleases: ShipWheel,
+  toolbox: Wrench,
+  newresource: FilePlus,
+
+  /** What a kind with no glyph of its own gets — a CRD, most often. */
+  fallback: Circle,
+} as const satisfies Record<string, IconComponent>;
+
+/** Every glyph this map knows, for a caller looking one up by name. */
+export type IconName = keyof typeof Icons;
