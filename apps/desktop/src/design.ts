@@ -1,4 +1,4 @@
-import { isApplePlatform, isTauri } from "@srelens/core";
+import { isApplePlatform, isTauri, K8S_KIND, type ResourceKind } from "@srelens/core";
 // theme.ts imports only settingsStorage, so this does not drag the classic
 // stylesheet into the new design's chunk.
 import { applyTheme, getInitialTheme, resolvedThemeMode } from "./ui/theme";
@@ -182,3 +182,74 @@ export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [
   { route: "/applog", name: "Application log" },
   { route: "/notes", name: "Release notes" },
 ];
+
+/**
+ * Where classic should land after leaving the new design.
+ *
+ * The switch reloads the document, so the note rides `sessionStorage`: a
+ * handoff is for the one reload that follows, never for a later launch, and
+ * session scope makes the difference structural rather than remembered.
+ */
+export const HANDOFF_KEY = "srelens.design.handoff";
+
+export interface Handoff {
+  context: string;
+  kind: ResourceKind;
+}
+
+/**
+ * The classic view a route in the new design stands for.
+ *
+ * Pure per R-F: it carries `{ context, kind }` and nothing else. A route whose
+ * kind classic does not have — or cannot parse — still lands on the cluster's
+ * overview, because standing somewhere near where you were beats being dumped
+ * at home with no trace of the cluster you were looking at.
+ */
+export function handoffFor(route: string, context?: string): Handoff | null {
+  if (!context) return null;
+  const slug = /^\/k\/([^/]+)$/.exec(route)?.[1];
+  if (slug && slug !== "overview" && Object.prototype.hasOwnProperty.call(K8S_KIND, slug)) {
+    return { context, kind: slug as ResourceKind };
+  }
+  switch (route) {
+    case "/events":
+      return { context, kind: "events" };
+    case "/forwards":
+      return { context, kind: "portforwards" };
+    case "/helm":
+      return { context, kind: "helmreleases" };
+    default:
+      // `/`, `/overview`, and every route classic has no answer for.
+      return { context, kind: "overview" };
+  }
+}
+
+/** Note where the new design was, for classic to pick up after the reload. */
+export function saveHandoff(route: string, context?: string): void {
+  try {
+    const handoff = handoffFor(route, context);
+    if (handoff) sessionStorage.setItem(HANDOFF_KEY, JSON.stringify(handoff));
+  } catch {
+    // Session storage throws in some privacy modes; losing the handoff is
+    // landing on classic's overview, which is where it lands anyway.
+  }
+}
+
+/**
+ * Consume the handoff. Reading and removing are one action: a caller that
+ * reads without clearing would reopen the same view on every launch.
+ */
+export function takeHandoff(): Handoff | null {
+  try {
+    const raw = sessionStorage.getItem(HANDOFF_KEY);
+    sessionStorage.removeItem(HANDOFF_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<Handoff> | null;
+    if (parsed && typeof parsed.context === "string" && typeof parsed.kind === "string") {
+      return { context: parsed.context, kind: parsed.kind };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

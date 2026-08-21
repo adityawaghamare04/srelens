@@ -12,6 +12,7 @@ import {
   applyNextDesignTheme,
   drawsOwnChrome,
   loadDesign,
+  saveHandoff,
   switchDesign,
   toggleNextDesignTheme,
 } from "./design";
@@ -56,7 +57,10 @@ async function bootstrap(root: HTMLElement): Promise<void> {
         ported={PORTED_SCREENS.map((s) => s.name)}
         controls={drawsOwnChrome() ? "macos" : "none"}
         onToggleTheme={toggleNextDesignTheme}
-        onExit={async () => {
+        onExit={async (route, context) => {
+          // Written before the switch, so classic knows where to reopen even
+          // though the reload throws this document away.
+          saveHandoff(route, context);
           const result = await switchDesign("classic");
           return result.ok ? null : result.reason;
         }}
