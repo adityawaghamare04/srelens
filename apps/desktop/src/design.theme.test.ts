@@ -1,20 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getInitialThemeMock, resolvedThemeModeMock } = vi.hoisted(() => ({
+const { getInitialThemeMock, resolvedThemeModeMock, applyThemeMock } = vi.hoisted(() => ({
   getInitialThemeMock: vi.fn(),
   resolvedThemeModeMock: vi.fn(),
+  applyThemeMock: vi.fn(),
 }));
 vi.mock("./ui/theme", () => ({
   getInitialTheme: getInitialThemeMock,
   resolvedThemeMode: resolvedThemeModeMock,
+  applyTheme: applyThemeMock,
 }));
 
-import { applyNextDesignTheme } from "./design";
+import { applyNextDesignTheme, toggleNextDesignTheme } from "./design";
 
 beforeEach(() => {
   delete document.documentElement.dataset.theme;
   getInitialThemeMock.mockReturnValue({ name: "slate", mode: "dark" });
   resolvedThemeModeMock.mockImplementation((mode: string) => mode);
+  applyThemeMock.mockReset();
 });
 
 describe("applyNextDesignTheme", () => {
@@ -88,5 +91,43 @@ describe("applyNextDesignTheme", () => {
     applyNextDesignTheme();
     expect(listeners).toHaveLength(0);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("toggleNextDesignTheme", () => {
+  it("flips dark to light through classic's applyTheme", () => {
+    // R-E: one stored preference drives both designs, so the toggle goes
+    // through the same applyTheme Settings uses rather than a private copy.
+    getInitialThemeMock.mockReturnValue({ name: "slate", mode: "dark" });
+    toggleNextDesignTheme();
+    expect(applyThemeMock).toHaveBeenCalledWith({ name: "slate", mode: "light" });
+  });
+
+  it("flips light to dark", () => {
+    getInitialThemeMock.mockReturnValue({ name: "slate", mode: "light" });
+    toggleNextDesignTheme();
+    expect(applyThemeMock).toHaveBeenCalledWith({ name: "slate", mode: "dark" });
+  });
+
+  it("resolves system before flipping, so a resolved-dark system goes light", () => {
+    getInitialThemeMock.mockReturnValue({ name: "slate", mode: "system" });
+    resolvedThemeModeMock.mockReturnValue("dark");
+    toggleNextDesignTheme();
+    expect(applyThemeMock).toHaveBeenCalledWith({ name: "slate", mode: "light" });
+  });
+
+  it("re-asserts the new design's data-theme convention after applying", () => {
+    // applyTheme writes classic's conventions (data-theme = palette name,
+    // data-theme-mode = mode); ui-next reads data-theme as the mode itself.
+    // Without the re-assert, one click left both designs reading garbage. The
+    // mock persists like the real one, since the re-assert reads the stored
+    // preference back through getInitialTheme.
+    getInitialThemeMock.mockReturnValue({ name: "slate", mode: "dark" });
+    applyThemeMock.mockImplementation((t: { name: string; mode: string }) => {
+      getInitialThemeMock.mockReturnValue(t);
+    });
+    document.documentElement.dataset.theme = "dark";
+    toggleNextDesignTheme();
+    expect(document.documentElement.dataset.theme).toBeUndefined();
   });
 });

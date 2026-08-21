@@ -6,7 +6,15 @@ import { initializeSettingsStorage } from "@srelens/core";
 // The service layer says what to notify; this decides how. Installed before
 // render so a toast raised during startup is not dropped on the floor.
 import { installToastNotifier } from "./ui/notifier";
-import { PORTED_SCREENS, applyNextDesignTheme, loadDesign, switchDesign } from "./design";
+import {
+  PORTED_SCREENS,
+  applyNextDesignChrome,
+  applyNextDesignTheme,
+  drawsOwnChrome,
+  loadDesign,
+  switchDesign,
+  toggleNextDesignTheme,
+} from "./design";
 
 installToastNotifier();
 
@@ -31,6 +39,10 @@ async function bootstrap(root: HTMLElement): Promise<void> {
   if (loadDesign() === "next") {
     // Before the stylesheet, so the first paint is already the right mode.
     applyNextDesignTheme();
+    // The overlay titlebar goes on before anything renders, so the window is
+    // never seen with doubled chrome. A rejection inside is swallowed there:
+    // an undressed window beats a blank one.
+    await applyNextDesignChrome();
     // Started together, awaited together: the stylesheet and the tree are
     // independent downloads, and awaiting one before requesting the other
     // serialised them. index.html links no stylesheet, so the window stays
@@ -42,6 +54,8 @@ async function bootstrap(root: HTMLElement): Promise<void> {
     createRoot(root).render(
       <NextApp
         ported={PORTED_SCREENS.map((s) => s.name)}
+        controls={drawsOwnChrome() ? "macos" : "none"}
+        onToggleTheme={toggleNextDesignTheme}
         onExit={async () => {
           const result = await switchDesign("classic");
           return result.ok ? null : result.reason;
