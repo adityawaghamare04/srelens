@@ -56,4 +56,12 @@ describe("EmptyState", () => {
     const { container } = render(<EmptyState title="No pods" />);
     expect(container.querySelector('[role="status"], [role="alert"]')).toBeNull();
   });
+  it("treats a conditional slot that resolved to false as absent", () => {
+    // `action={canCreate && <Button />}` passes `false`. The wrapper would
+    // still take its margin, leaving the gap the caller meant to remove.
+    // (#325 review)
+    const { container } = render(<EmptyState title="No pods" hint={false} action={false} />);
+    expect(container.querySelector('[data-slot="hint"]')).toBeNull();
+    expect(container.querySelector('[data-slot="action"]')).toBeNull();
+  });
 });

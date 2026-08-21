@@ -45,4 +45,13 @@ describe("Panel", () => {
     const { container } = render(<Panel className="extra">x</Panel>);
     expect(container.querySelector(".card.extra")).not.toBeNull();
   });
+  it("omits the header when both slots resolved to false", () => {
+    // (#325 review)
+    const { container } = render(
+      <Panel title={false} description={false}>
+        only body
+      </Panel>,
+    );
+    expect(container.querySelector(".card-head")).toBeNull();
+  });
 });

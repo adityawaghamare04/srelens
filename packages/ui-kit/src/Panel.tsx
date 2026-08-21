@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cx } from "./cx";
+import { filled } from "./slot";
 
 export interface PanelProps {
   title?: ReactNode;
@@ -24,10 +25,10 @@ export interface PanelProps {
 export function Panel({ title, description, children, className }: PanelProps) {
   return (
     <section className={cx("card", className)}>
-      {(title != null || description != null) && (
+      {(filled(title) || filled(description)) && (
         <div className="card-head flex-col items-start gap-0.5">
-          {title != null && <div className="card-title">{title}</div>}
-          {description != null && <p className="text-[0.75rem] text-muted">{description}</p>}
+          {filled(title) && <div className="card-title">{title}</div>}
+          {filled(description) && <p className="text-[0.75rem] text-muted">{description}</p>}
         </div>
       )}
       <div className="section-body">{children}</div>

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { toneColor, type Tone } from "./tone";
+import { filled } from "./slot";
 
 /**
  * A meter must have an accessible name: nearby text does not name a generic
@@ -66,7 +67,7 @@ export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
           style={{ width: `${width}%`, background: toneColor(resolved) }}
         />
       </div>
-      {label == null && (
+      {!filled(label) && (
         <span className="num w-9 shrink-0 text-right text-[0.6875rem] text-muted">{value}%</span>
       )}
     </div>
@@ -75,11 +76,11 @@ export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
   // An unadorned meter is exactly what it was — no wrapper, so it stays the
   // flex item its callers lay out. The wrapper appears only when there is
   // something to stack above or below the bar.
-  if (label == null && detail == null) return bar;
+  if (!filled(label) && !filled(detail)) return bar;
 
   return (
     <div>
-      {label != null && (
+      {filled(label) && (
         <div
           data-slot="meter-head"
           className="flex items-baseline justify-between gap-2 text-[0.6875rem]"
@@ -89,7 +90,7 @@ export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
         </div>
       )}
       {bar}
-      {detail != null && (
+      {filled(detail) && (
         <p data-slot="meter-detail" className="path mt-0.5">
           {detail}
         </p>

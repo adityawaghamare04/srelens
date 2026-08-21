@@ -61,4 +61,12 @@ describe("MetricTile", () => {
     const { container } = render(<MetricTile label="Nodes" value={12} className="extra" />);
     expect(container.querySelector(".stat.extra")).not.toBeNull();
   });
+  it("treats conditional slots that resolved to false as absent", () => {
+    // (#325 review)
+    const { container } = render(
+      <MetricTile label="Pods" value={248} description={false} action={false} />,
+    );
+    expect(container.querySelector("p")).toBeNull();
+    expect(container.querySelectorAll("article > *").length).toBe(1);
+  });
 });

@@ -71,4 +71,15 @@ describe("Screen", () => {
     );
     expect(container.querySelector(".extra")).not.toBeNull();
   });
+  it("treats conditional slots that resolved to false as absent", () => {
+    // (#325 review)
+    const { container } = render(
+      <Screen title="Pods" eyebrow={false} description={false} actions={false}>
+        body
+      </Screen>,
+    );
+    expect(container.querySelector(".crumb")).toBeNull();
+    expect(container.querySelector('[data-slot="screen-actions"]')).toBeNull();
+    expect(container.querySelector("p")).toBeNull();
+  });
 });

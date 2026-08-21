@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cx } from "./cx";
+import { filled } from "./slot";
 
 export interface EmptyStateProps {
   title: ReactNode;
@@ -34,12 +35,12 @@ export function EmptyState({ title, hint, action, className }: EmptyStateProps) 
       )}
     >
       <div className="text-[0.875rem] font-medium">{title}</div>
-      {hint != null && (
+      {filled(hint) && (
         <div data-slot="hint" className="max-w-[42ch] text-[0.8125rem] leading-relaxed text-muted">
           {hint}
         </div>
       )}
-      {action != null && (
+      {filled(action) && (
         <div data-slot="action" className="mt-2">
           {action}
         </div>

@@ -89,4 +89,12 @@ describe("Meter", () => {
     render(<Meter value={42} ariaLabel="Node CPU" label="CPU" />);
     expect(screen.getByRole("meter", { name: "Node CPU" })).toBeDefined();
   });
+  it("treats a conditional caption that resolved to false as absent", () => {
+    // Also keeps the percentage beside the bar rather than moving it above a
+    // caption that is not there. (#325 review)
+    const { container } = render(<Meter value={42} ariaLabel="CPU" label={false} detail={false} />);
+    expect(container.querySelector('[data-slot="meter-head"]')).toBeNull();
+    expect(container.querySelector('[data-slot="meter-detail"]')).toBeNull();
+    expect(container.textContent?.match(/42%/g)).toHaveLength(1);
+  });
 });

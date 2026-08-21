@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Toolbar } from "./Toolbar";
 import { cx } from "./cx";
+import { filled } from "./slot";
 
 export interface ScreenProps {
   title: ReactNode;
@@ -45,19 +46,19 @@ export function Screen({
   return (
     <div className={cx("flex h-full min-h-0 flex-col", className)}>
       <Toolbar>
-        {eyebrow != null && <span className="crumb shrink-0">{eyebrow}</span>}
+        {filled(eyebrow) && <span className="crumb shrink-0">{eyebrow}</span>}
         <h1 className="toolbar-title min-w-0 truncate">{title}</h1>
         {/* Pushes the actions to the far end without either side needing to
             know how wide the other is. */}
         <span className="flex-1" />
-        {actions != null && (
+        {filled(actions) && (
           <div data-slot="screen-actions" className="flex shrink-0 items-center gap-1.5">
             {actions}
           </div>
         )}
       </Toolbar>
       <div className={fill ? "flex min-h-0 flex-1 flex-col" : "scroll min-h-0 flex-1 p-3"}>
-        {description != null && (
+        {filled(description) && (
           <p className="mb-3 text-[0.8125rem] text-muted">{description}</p>
         )}
         {children}

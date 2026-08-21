@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cx } from "./cx";
 import { toneColor, toneWash, type Tone } from "./tone";
+import { filled } from "./slot";
 
 export interface MetricTileProps {
   label: ReactNode;
@@ -46,9 +47,9 @@ export function MetricTile({
           {label}
         </div>
         <div className="stat-value">{value}</div>
-        {description != null && <p className="path mt-0.5">{description}</p>}
+        {filled(description) && <p className="path mt-0.5">{description}</p>}
       </div>
-      {action != null && <div className="shrink-0">{action}</div>}
+      {filled(action) && <div className="shrink-0">{action}</div>}
     </article>
   );
 }
