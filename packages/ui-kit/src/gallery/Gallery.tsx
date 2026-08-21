@@ -55,12 +55,14 @@ import { SubHead } from "../SubHead";
 import { SurfaceToast } from "../SurfaceToast";
 import { Switch } from "../Switch";
 import { Table, type Column } from "../Table";
+import { TabStrip } from "../TabStrip";
 import { Tabs } from "../Tabs";
 import { TextInput } from "../TextInput";
 import { Titlebar } from "../Titlebar";
 import { Toast } from "../Toast";
 import { Toolbar } from "../Toolbar";
 import { Tooltip } from "../Tooltip";
+import { WorkspaceSwitcher } from "../WorkspaceSwitcher";
 import { WorkspaceTree } from "../WorkspaceTree";
 import type { Tone } from "../tone";
 
@@ -133,6 +135,13 @@ export function Gallery() {
   const [ns, setNs] = useState("kube-system");
   const [tab, setTab] = useState("pods");
   const [drawer, setDrawer] = useState(false);
+  const [workspace, setWorkspace] = useState("local");
+  const [openTabs, setOpenTabs] = useState([
+    { id: "control", title: "Control room", sub: "prod-eu", pinned: true },
+    { id: "workloads", title: "Workloads", sub: "prod-eu" },
+    { id: "logs", title: "checkout-api logs", sub: "prod-eu", preview: true },
+  ]);
+  const [openTab, setOpenTab] = useState("workloads");
   const [boxes, setBoxes] = useState({ a: true, b: false });
   const [refresh, setRefresh] = useState("30");
   const [live, setLive] = useState(true);
@@ -1546,6 +1555,63 @@ export function Gallery() {
             <p className="relative p-3 text-[0.75rem] text-muted">and another</p>
           </div>
         </div>
+      </section>
+      <section>
+        <h2>WorkspaceSwitcher</h2>
+        {/* The chip is a button, not the mock's span: a workspace switch
+            changes which clusters are in reach and which tabs are open, so the
+            control for it has to be reachable. */}
+        <WorkspaceSwitcher
+          workspaces={[
+            { id: "prod", name: "Production", clusters: 2, tabs: 11 },
+            { id: "local", name: "Local & staging", clusters: 5, tabs: 2 },
+            { id: "platform", name: "Platform", clusters: 4, tabs: 3 },
+          ]}
+          activeId={workspace}
+          onSelect={setWorkspace}
+          onRemove={() => {}}
+          onCreate={() => {}}
+        />
+        <p className="text-[0.75rem] text-muted">in: {workspace}</p>
+        {/* The last workspace offers no remove — there would be nothing left
+            to be in — and one of each counts in the singular. */}
+        <WorkspaceSwitcher
+          workspaces={[{ id: "solo", name: "Solo", clusters: 1, tabs: 1 }]}
+          activeId="solo"
+          onSelect={() => {}}
+          onRemove={() => {}}
+        />
+        {/* Nothing yet: the chip falls back to the empty label. */}
+        <WorkspaceSwitcher workspaces={[]} activeId="" onSelect={() => {}} />
+      </section>
+      <section>
+        <h2>TabStrip</h2>
+        {/* The app's document tabs, not the view switcher above. One tab stop
+            for the strip; arrows move focus without opening anything, because
+            a tab here can be a live log stream; Enter opens; Delete closes the
+            focused one, which is what gives the × a keyboard equivalent. */}
+        <TabStrip
+          tabs={openTabs}
+          activeId={openTab}
+          onSelect={setOpenTab}
+          onClose={(id) => setOpenTabs((t) => t.filter((tab) => tab.id !== id))}
+          onNew={() =>
+            setOpenTabs((t) => [...t, { id: `tab-${t.length}`, title: "Pods", sub: "prod-eu" }])
+          }
+          newHint="⌘T"
+          menuFor={(tab) => [
+            { label: "Duplicate tab", onPick: () => {} },
+            { label: tab.pinned ? "Unpin tab" : "Pin tab", onPick: () => {} },
+            { kind: "sep" },
+            { label: "Close tab", hint: "⌘W", danger: true, onPick: () => {} },
+          ]}
+        />
+        <p className="text-[0.75rem] text-muted">
+          open: {openTab} · {openTabs.length} tab{openTabs.length === 1 ? "" : "s"}
+        </p>
+        {/* The pinned tab shows a pin rather than a close, and Delete refuses
+            it. Nothing open is still a strip. */}
+        <TabStrip tabs={[]} activeId="" onSelect={() => {}} onNew={() => {}} />
       </section>
     </div>
   );
