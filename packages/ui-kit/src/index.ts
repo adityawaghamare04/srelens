@@ -1,6 +1,7 @@
 /** The srelens design system. Components are added as they are merged in. */
 export { Badge, type BadgeTone } from "./Badge";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
+export { ConfirmDialog, type ConfirmDialogProps } from "./ConfirmDialog";
 export { Drawer, type DrawerProps } from "./Drawer";
 export { Field, type FieldProps } from "./Field";
 export { IconButton, type IconButtonProps, type IconComponent } from "./IconButton";

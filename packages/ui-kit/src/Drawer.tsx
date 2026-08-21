@@ -9,9 +9,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
  * flow, and one keypress dismissed both — losing the detail the user was
  * reading rather than backing out of the assistant.
  *
- * The same shape as ConfirmDialog's stack. Once both land they should share one
- * layer registry, so a drawer and a dialog order against each other by mount
- * rather than by the role check below. (#323 review)
+ * This used to be the same shape as ConfirmDialog's stack, and the two were to
+ * merge into one layer registry so a drawer and a dialog ordered against each
+ * other by mount rather than by the role check below (#323 review). That stack
+ * is gone: ConfirmDialog now sits on Radix, which layers dialogs itself (#324).
+ * A shared registry is still the way to order drawers against dialogs, but it
+ * would have to be built between this and Radix's layer stack, not between two
+ * hand-written ones.
  */
 const stack: symbol[] = [];
 

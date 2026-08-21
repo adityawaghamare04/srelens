@@ -29,5 +29,8 @@
     "typescript": "^5.4.0",
     "vite": "^6.4.3",
     "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "radix-ui": "^1.6.0"
   }
 }
