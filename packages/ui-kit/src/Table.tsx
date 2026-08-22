@@ -1,5 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import { cx } from "./cx";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { EmptyState } from "./EmptyState";
 
 
@@ -109,6 +118,20 @@ export interface TableProps<T> {
    *  survive a switch, #254); omit them and the table keeps its own. */
   sort?: TableSort | null;
   onSortChange?: (sort: TableSort | null) => void;
+  /**
+   * The "open this properly" gesture — double-click, or Enter on the focused
+   * row. Not `onDoubleClick`: a pointer-only route to opening a row is the
+   * fault this kit refuses everywhere else, so the keyboard half is part of
+   * the prop rather than the caller's problem.
+   */
+  onRowActivate?: (row: T) => void;
+  /**
+   * The row's context menu. The kit owns the `<tr>`, so the kit owns the menu
+   * wrapped around it; a caller cannot reach between the table and its rows.
+   */
+  rowMenu?: (row: T) => ContextMenuItem[];
+  /** Names each row's menu for assistive technology, e.g. "Pod actions". */
+  rowMenuLabel?: string;
 }
 
 /** Width of the leading bulk-selection column; mirrored in styles.css. */
@@ -178,12 +201,21 @@ export function Table<T>({
   onActiveFilterKeyChange,
   sort: controlledSort,
   onSortChange,
+  onRowActivate,
+  rowMenu,
+  rowMenuLabel,
 }: TableProps<T>) {
   // Controlled when a change handler is supplied, otherwise self-managed —
   // tables outside the tabbed workspace (the MCP audit list, for instance)
   // have no tab to store a sort on.
   const [internalSort, setInternalSort] = useState<TableSort | null>(null);
   const sort = onSortChange ? (controlledSort ?? null) : internalSort;
+  // One tab stop for the table, moved by the arrows: the WAI-ARIA grid
+  // pattern. A stop per row would put hundreds of them between the filter bar
+  // and whatever follows the table.
+  const interactive = Boolean(onRowActivate || rowMenu);
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
+  const [focusKey, setFocusKey] = useState<string | null>(null);
   // Anchor for shift-click range selection (a key in sorted/visible order).
   const selectionAnchor = useRef<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -382,6 +414,28 @@ export function Table<T>({
   const topPad = virtualize ? range.start * metrics.rowHeight : 0;
   const bottomPad = virtualize ? (visibleData.length - range.end) * metrics.rowHeight : 0;
 
+  // The stop lands on the selected row (if any), else the first rendered row —
+  // never a row outside `windowRows`, since the virtualizer may not have it.
+  const stopKey = focusKey ?? selectedKey ?? (windowRows[0] ? getRowKey(windowRows[0]) : null);
+
+  function onRowKeyDown(event: ReactKeyboardEvent<HTMLTableRowElement>, row: T) {
+    if (event.key === "Enter" && onRowActivate) {
+      event.preventDefault();
+      onRowActivate(row);
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const keys = windowRows.map(getRowKey);
+    const index = keys.indexOf(getRowKey(row));
+    if (index < 0) return;
+    const next = event.key === "ArrowDown" ? index + 1 : index - 1;
+    if (next < 0 || next >= keys.length) return;
+    // Otherwise the table scrolls under the focus it just moved.
+    event.preventDefault();
+    setFocusKey(keys[next]);
+    rowRefs.current.get(keys[next])?.focus();
+  }
+
   const isEmpty = data.length === 0;
 
   // Pin the natural column widths once the table has rows to measure.
@@ -519,13 +573,21 @@ export function Table<T>({
           const rowKey = getRowKey(row);
           const selected = selectedKey === rowKey;
           const checked = selection?.selected.has(rowKey) ?? false;
-          return (
+          const body = (
             <tr
               key={rowKey}
+              ref={(node) => {
+                if (node) rowRefs.current.set(rowKey, node);
+                else rowRefs.current.delete(rowKey);
+              }}
               aria-selected={selected}
               data-state={selected || checked ? "selected" : undefined}
+              tabIndex={interactive ? (rowKey === stopKey ? 0 : -1) : undefined}
+              onFocus={interactive ? () => setFocusKey(rowKey) : undefined}
+              onKeyDown={interactive ? (e) => onRowKeyDown(e, row) : undefined}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
-              className={cx("tbl-row", onRowClick && "cursor-pointer")}
+              onDoubleClick={onRowActivate ? () => onRowActivate(row) : undefined}
+              className={cx("tbl-row", (onRowClick || interactive) && "cursor-pointer")}
             >
               {selection && (
                 <td
@@ -547,6 +609,13 @@ export function Table<T>({
                 </td>
               ))}
             </tr>
+          );
+          return rowMenu ? (
+            <ContextMenu key={rowKey} items={rowMenu(row)} label={rowMenuLabel}>
+              {body}
+            </ContextMenu>
+          ) : (
+            body
           );
         })}
         {bottomPad > 0 && (

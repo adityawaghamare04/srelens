@@ -634,6 +634,31 @@ export function Gallery() {
           emptyText="No pods"
           emptyHint="Nothing is scheduled in this namespace."
         />
+        {/* The row gestures a resource list needs: double-click or Enter on
+            the focused row opens it, right-click (or Shift+F10) opens a menu
+            built from that row. One tab stop for the table; the arrows move
+            it. */}
+        <Table
+          columns={
+            [
+              { key: "name", header: "Name", sortable: true, filterable: true },
+              { key: "phase", header: "Phase", sortable: true },
+            ] as Column<{ name: string; phase: string }>[]
+          }
+          data={[
+            { name: "web-1", phase: "Running" },
+            { name: "web-2", phase: "Pending" },
+            { name: "api-0", phase: "CrashLoopBackOff" },
+          ]}
+          getRowKey={(r) => r.name}
+          onRowActivate={(row) => alert(`open ${row.name}`)}
+          rowMenu={(row) => [
+            { label: "Open logs", icon: DotIcon, onPick: () => alert(`logs for ${row.name}`) },
+            { kind: "sep" },
+            { label: "Delete pod", danger: true, onPick: () => alert(`delete ${row.name}`) },
+          ]}
+          rowMenuLabel="Pod actions"
+        />
       </section>
       <section>
         <h2>Checkbox</h2>

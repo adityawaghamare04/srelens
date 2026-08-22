@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Table, filterTableData, computeVisibleRange, type Column } from "./Table";
 
 /**
@@ -418,5 +419,63 @@ describe("Table multi-selection", () => {
   it("header checkbox is checked when all rows are selected", () => {
     renderWithSelection(new Set(["a", "b", "c", "d"]));
     expect((screen.getByLabelText("Select all") as HTMLInputElement).checked).toBe(true);
+  });
+});
+
+describe("row gestures", () => {
+  const ROWS = [
+    { id: "a", name: "alpha" },
+    { id: "b", name: "beta" },
+    { id: "c", name: "gamma" },
+  ];
+  const COLS = [{ key: "name", header: "Name" }];
+  const table = (props: Record<string, unknown>) =>
+    render(<Table columns={COLS} data={ROWS} getRowKey={(r) => r.id} {...props} />);
+
+  it("activates a row on double-click", () => {
+    const onRowActivate = vi.fn();
+    table({ onRowActivate });
+    fireEvent.doubleClick(screen.getByText("beta").closest("tr")!);
+    expect(onRowActivate).toHaveBeenCalledWith(ROWS[1]);
+  });
+
+  it("activates the focused row on Enter, so opening a resource is not pointer-only", () => {
+    const onRowActivate = vi.fn();
+    table({ onRowActivate });
+    const row = screen.getByText("alpha").closest("tr")!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onRowActivate).toHaveBeenCalledWith(ROWS[0]);
+  });
+
+  it("carries one tab stop and moves it with the arrows", () => {
+    table({ onRowActivate: vi.fn() });
+    const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("tabindex"));
+    expect(rows.filter((r) => r.getAttribute("tabindex") === "0")).toHaveLength(1);
+    fireEvent.keyDown(rows[0], { key: "ArrowDown" });
+    expect(rows[1].getAttribute("tabindex")).toBe("0");
+    expect(rows[0].getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(rows[1]);
+  });
+
+  it("starts the tab stop on the selected row, not the first", () => {
+    table({ onRowActivate: vi.fn(), selectedKey: "c" });
+    expect(screen.getByText("gamma").closest("tr")!.getAttribute("tabindex")).toBe("0");
+    expect(screen.getByText("alpha").closest("tr")!.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("leaves rows unfocusable when neither gesture is supplied", () => {
+    table({ onRowClick: vi.fn() });
+    // No jest-dom in this package: `hasAttribute` is the vanilla equivalent
+    // of `.not.toHaveAttribute("tabindex")`.
+    expect(screen.getByText("alpha").closest("tr")!.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("opens a per-row menu on right-click, built from that row", async () => {
+    const onPick = vi.fn();
+    table({ rowMenu: (r: { name: string }) => [{ label: `Delete ${r.name}`, onPick }] });
+    fireEvent.contextMenu(screen.getByText("beta").closest("tr")!);
+    await userEvent.click(await screen.findByText("Delete beta"));
+    expect(onPick).toHaveBeenCalled();
   });
 });
