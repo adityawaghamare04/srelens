@@ -7,9 +7,29 @@ import { descriptorFor, CLUSTER_SCOPED } from "./descriptors";
 const SIDEBAR_KINDS = NAV_GROUPS.flatMap((g) => g.kinds).filter((k) => k !== "events");
 
 describe("descriptors", () => {
-  it("answers for every kind the sidebar can reach", () => {
+  // This asserts coverage only: no sidebar route resolves to `undefined`. It
+  // cannot catch a kind that *should* have typed columns shipping the generic
+  // three instead — `NAV_GROUPS.kinds` is typed `ResourceKind[]`, `tree.ts`
+  // already routes the three screen-kinds elsewhere, and `descriptorFor` falls
+  // back to the generic descriptor for anything absent from `TYPED`, so every
+  // element of `SIDEBAR_KINDS` resolves by construction. That guard belongs at
+  // the end of Task 5, once `TYPED` is populated and "resolves" and "resolves
+  // to something typed" are different claims.
+  it("resolves every kind the sidebar can reach, rather than leaving a route with no descriptor", () => {
     const missing = SIDEBAR_KINDS.filter((k) => !descriptorFor(k));
     expect(missing).toEqual([]);
+  });
+
+  // Genuine fallback coverage at this stage, before any kind is typed: `leases`
+  // and `runtimeclasses` are outside `WATCHABLE_KINDS` and are not `nodes` —
+  // the only kinds Tasks 4-5 (which only add entries for watchable kinds, plus
+  // `nodes` as the one named exception) will ever move out of the generic set.
+  it("gives a namespaced kind with no typed entry the generic columns", () => {
+    expect(descriptorFor("leases")!.columns.map((c) => c.key)).toEqual(["name", "namespace", "age"]);
+  });
+
+  it("gives a cluster-scoped kind with no typed entry the generic columns, minus namespace", () => {
+    expect(descriptorFor("runtimeclasses")!.columns.map((c) => c.key)).toEqual(["name", "age"]);
   });
 
   it("streams exactly the kinds the backend can watch, and polls the rest", () => {
