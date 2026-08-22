@@ -107,6 +107,59 @@ describe("PodContainersBody", () => {
     render(<PodContainersBody object={pod({})} />);
     expect(screen.getByText("No containers")).toBeDefined();
   });
+
+  it("shows Running since as a distinct fact from Last restart", () => {
+    const status = {
+      name: "app",
+      ready: true,
+      restartCount: 2,
+      state: { running: { startedAt: "2026-08-20T12:00:00Z" } },
+      lastState: { terminated: { finishedAt: "2026-08-19T00:00:00Z" } },
+    };
+    render(
+      <PodContainersBody
+        object={pod({ containers: [APP_CONTAINER] }, { containerStatuses: [status] })}
+      />,
+    );
+    expect(screen.getByText("Last restart")).toBeDefined();
+    expect(screen.getByText("Running since")).toBeDefined();
+    // containerLastRestartTime reads lastState (the previous run's
+    // termination); Running since reads state.running.startedAt (the
+    // current run) — two different timestamps, not the same fact twice.
+    const lastRestartRow = screen.getByText("Last restart").closest("dl");
+    const runningSinceRow = screen.getByText("Running since").closest("dl");
+    expect(lastRestartRow?.textContent).not.toEqual(runningSinceRow?.textContent);
+  });
+
+  it("shows which container an ephemeral container is debugging", () => {
+    const debugContainer = { name: "debugger", image: "busybox", targetContainerName: "app" };
+    render(<PodContainersBody object={pod({ ephemeralContainers: [debugContainer] })} />);
+    expect(screen.getByText("Ephemeral containers")).toBeDefined();
+    expect(screen.getByText("debugger")).toBeDefined();
+    expect(screen.getByText("Debugging")).toBeDefined();
+    expect(screen.getByText("app")).toBeDefined();
+  });
+
+  it("shows a container's command and args", () => {
+    const commandContainer = { ...APP_CONTAINER, command: ["/bin/sh", "-c"], args: ["sleep 3600"] };
+    render(
+      <PodContainersBody
+        object={pod({ containers: [commandContainer] }, { containerStatuses: [APP_STATUS] })}
+      />,
+    );
+    expect(screen.getByText("Command")).toBeDefined();
+    expect(screen.getByText("/bin/sh -c sleep 3600")).toBeDefined();
+  });
+
+  it("omits Debugging and Command when a container has neither", () => {
+    render(
+      <PodContainersBody
+        object={pod({ containers: [SIDECAR_CONTAINER] }, { containerStatuses: [SIDECAR_STATUS] })}
+      />,
+    );
+    expect(screen.queryByText("Debugging")).toBeNull();
+    expect(screen.queryByText("Command")).toBeNull();
+  });
 });
 
 describe("PodDetailsBody", () => {
@@ -187,8 +240,11 @@ describe("PodDetailsBody", () => {
 
       // Namespace, Node, Service account, Priority class, Runtime class and
       // Controlled by are `ResourceLink`s in classic; nothing here can
-      // navigate (see the task report), so none of it renders as a control.
-      expect(screen.queryByRole("button")).toBeNull();
+      // navigate (see the task report), so none of it renders as a
+      // navigation control. Scoped to "Open ..." (classic's ResourceLink
+      // aria-label) rather than a bare button query, since Table's own
+      // column-sort buttons are a legitimate control, not a link.
+      expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
     it("omits absent Properties facts rather than showing them empty", () => {
@@ -229,12 +285,30 @@ describe("PodDetailsBody", () => {
       expect(screen.getByTitle("disktype=ssd")).toBeDefined();
       expect(screen.getByText("Pod anti-affinity: 1 required")).toBeDefined();
       expect(screen.getByText("dedicated=gpu → NoSchedule")).toBeDefined();
+      // Same inert-value check as Properties: nothing here can navigate.
+      expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
     it("omits the Scheduling panel when the pod has no placement info", () => {
       const unscheduled = pod({}, {}, { name: "web-3" });
       render(<PodDetailsBody object={unscheduled} />);
       expect(screen.queryByText("Scheduling")).toBeNull();
+    });
+
+    it("shows Not scheduled when the pod has placement info but no assigned node", () => {
+      const pending = pod(
+        {
+          tolerations: [{ key: "dedicated", operator: "Equal", value: "gpu", effect: "NoSchedule" }],
+        },
+        {},
+        { name: "web-6" },
+      );
+      render(<PodDetailsBody object={pending} />);
+      expect(screen.getByText("Scheduling")).toBeDefined();
+      expect(screen.getByText("Not scheduled")).toBeDefined();
+      // Only one "Node" fact renders — Properties omits it too, since
+      // spec.nodeName is unset.
+      expect(screen.getByText("Node")).toBeDefined();
     });
   });
 
@@ -261,6 +335,11 @@ describe("PodDetailsBody", () => {
       expect(screen.getByText("Node temporary storage")).toBeDefined();
       expect(screen.getByText("creds")).toBeDefined();
       expect(screen.getByText("Secret/app-creds")).toBeDefined();
+      // Same inert-value check as Properties and Scheduling: the Source
+      // column names the PVC/Secret it points at without a way to open it.
+      // (Table's own column-sort buttons are excluded on purpose — a real
+      // control, just not a navigation one.)
+      expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
     it("omits the Pod Volumes panel when the pod has no volumes", () => {

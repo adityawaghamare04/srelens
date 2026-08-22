@@ -287,6 +287,13 @@ export function PodDetailsBody({ object }: { object: K8sObject }) {
  * scheduled, e.g. an init container that hasn't started); ports, probes,
  * environment and mounts come from the spec and are omitted outright, not
  * shown empty, when the container has none.
+ *
+ * "Last restart" and "Running since" are distinct facts, not one shown two
+ * ways: `containerLastRestartTime` reads `lastState` (the PREVIOUS run's
+ * termination), `runningSince` reads `state.running.startedAt` (when the
+ * CURRENT run began) — a reader diagnosing a crash loop needs both.
+ * "Debugging" (`targetContainerName`) only appears on an ephemeral
+ * container, naming which container its debug session is attached to.
  */
 function ContainerCard({
   container,
@@ -297,8 +304,10 @@ function ContainerCard({
 }) {
   const name = str(container.name);
   const state = status ? containerStateText(status) : undefined;
+  const targetContainerName = str(container.targetContainerName);
   const restarts = status?.restartCount;
   const lastRestart = status ? containerLastRestartTime(status) : "";
+  const runningSince = status ? str(asRecord(asRecord(status.state).running).startedAt) : "";
   const image = str(container.image);
   const ports = asArray(container.ports).map(asRecord);
   const env = asArray(container.env);
@@ -309,6 +318,7 @@ function ContainerCard({
   const liveness = asRecord(container.livenessProbe);
   const readiness = asRecord(container.readinessProbe);
   const startup = asRecord(container.startupProbe);
+  const command = [...asArray(container.command), ...asArray(container.args)].map(str).join(" ");
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -318,8 +328,10 @@ function ContainerCard({
           {state && <StatusPill status={state.text} kind={state.kind} />}
         </span>
       </SubHead>
+      {targetContainerName && <KV k="Debugging" v={targetContainerName} mono />}
       {restarts != null && <KV k="Restarts" v={str(restarts)} />}
       {lastRestart && <KV k="Last restart" v={timestampWithAge(lastRestart, Date.now())} />}
+      {runningSince && <KV k="Running since" v={timestampWithAge(runningSince, Date.now())} />}
       {image && <KV k="Image" v={image} mono />}
       {ports.length > 0 && <KV k="Ports" v={<StringList items={ports.map(portText)} />} />}
       {env.length > 0 && <KV k="Environment" v={<StringList items={env.map(envText)} />} />}
@@ -327,6 +339,7 @@ function ContainerCard({
       {Object.keys(liveness).length > 0 && <KV k="Liveness" v={<StringList items={probeChips(liveness)} />} />}
       {Object.keys(readiness).length > 0 && <KV k="Readiness" v={<StringList items={probeChips(readiness)} />} />}
       {Object.keys(startup).length > 0 && <KV k="Startup" v={<StringList items={probeChips(startup)} />} />}
+      {command && <KV k="Command" v={command} mono />}
       {Object.keys(requests).length > 0 && <KV k="Requests" v={resourceText(requests)} />}
       {Object.keys(limits).length > 0 && <KV k="Limits" v={resourceText(limits)} />}
     </div>
