@@ -3,6 +3,7 @@ import { describe as suite, it, expect } from "vitest";
 import { describe, isBuiltInKind, screenFor } from "./routes";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
+import { Resources } from "../screens/Resources";
 
 suite("isBuiltInKind", () => {
   it("recognises a built-in list kind by its slug", () => {
@@ -82,14 +83,13 @@ suite("screenFor", () => {
   });
 
   it("resolves a built-in kind's list route", () => {
-    expect(screenFor("/k/pods")).not.toBeNull();
+    expect(screenFor("/k/pods")).toBe(Resources);
   });
 
   it("resolves a custom resource's list route", () => {
     // One screen answers every `/k/` route, so a slug nobody enumerated —
     // a CRD this cluster happens to have — reaches the same one.
-    expect(screenFor("/k/widgets.example.com")).not.toBeNull();
-    expect(screenFor("/k/widgets.example.com")).toBe(screenFor("/k/pods"));
+    expect(screenFor("/k/widgets.example.com")).toBe(Resources);
   });
 
   it("still refuses a route with no screen", () => {

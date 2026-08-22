@@ -59,7 +59,7 @@ import { Resources } from "./Resources";
 import * as store from "../lib/tabsStore";
 import { defaultState } from "../lib/tabs";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
-import { hiddenColumns, loadColumnPrefs } from "../lib/columnPrefs";
+import { hiddenColumns, loadColumnPrefs, toggleColumn } from "../lib/columnPrefs";
 import { resetListCache } from "../lib/resourceList";
 import { getView, resetView } from "../lib/workspace";
 
@@ -136,10 +136,18 @@ const rowNames = () =>
 const headers = () =>
   Array.from(document.querySelectorAll("thead th .th-sort span")).map((el) => el.textContent);
 
-const activeTab = () => {
-  const w = store.currentWorkspace();
-  return w.tabs.find((t) => t.id === w.activeId)!;
-};
+/** The tab a route is open in — the one the screen under test is bound to. */
+const tabFor = (route: string) => store.currentWorkspace().tabs.find((t) => t.route === route)!;
+
+/**
+ * Open the route in a tab, then render its screen — the way `Window` does it.
+ * The screen reads its sort and filter off its own tab, so a screen rendered
+ * against a route no tab holds would have nowhere to put them.
+ */
+function open(route: string) {
+  store.openTab(route);
+  return render(<Resources route={route} />);
+}
 
 /** Open the column picker and hand back its panel. */
 async function openColumns() {
@@ -149,7 +157,7 @@ async function openColumns() {
 
 describe("Resources", () => {
   it("lists a kind's rows under its own title", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
 
     expect(await screen.findByRole("heading", { level: 1, name: "Pods" })).toBeTruthy();
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
@@ -164,7 +172,7 @@ describe("Resources", () => {
       items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
     });
 
-    render(<Resources route="/k/widgets.example.com" />);
+    open("/k/widgets.example.com");
 
     await waitFor(() => expect(rowNames()).toEqual(["left"]));
     expect(headers()).toContain("Phase");
@@ -172,7 +180,7 @@ describe("Resources", () => {
   });
 
   it("narrows the list by the filter text", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(rowNames()).toHaveLength(2));
 
     await userEvent.type(screen.getByRole("searchbox", { name: "Filter pods" }), "web");
@@ -181,7 +189,7 @@ describe("Resources", () => {
   });
 
   it("reorders by a sortable column when its header is activated", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
 
     await userEvent.click(screen.getByRole("button", { name: "Sort by Restarts" }));
@@ -190,7 +198,7 @@ describe("Resources", () => {
   });
 
   it("keeps a tab's sort and filter where a restart will find them", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(rowNames()).toHaveLength(2));
 
     await userEvent.click(screen.getByRole("button", { name: "Sort by Restarts" }));
@@ -198,14 +206,14 @@ describe("Resources", () => {
 
     // Component state alone would pass the two assertions above and lose both
     // values on the next launch — the tab is what gets written to disk.
-    expect(activeTab().view).toMatchObject({
+    expect(tabFor("/k/pods").view).toMatchObject({
       sort: { key: "restarts", direction: "asc" },
       filter: "web",
     });
   });
 
   it("hides a column the picker unchecks, and remembers it for that kind", async () => {
-    const view = render(<Resources route="/k/pods" />);
+    const view = open("/k/pods");
     await waitFor(() => expect(headers()).toContain("Restarts"));
 
     await openColumns();
@@ -216,30 +224,73 @@ describe("Resources", () => {
 
     // Remembered for the kind rather than for this mounting of the screen.
     view.unmount();
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(headers()).toContain("Status"));
     expect(headers()).not.toContain("Restarts");
   });
 
   it("clears a filter that was on a column the user just hid", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(headers()).toContain("Restarts"));
 
     await userEvent.click(screen.getByRole("button", { name: "Filter search by Restarts" }));
-    await waitFor(() => expect(activeTab().view?.filterKey).toBe("restarts"));
+    await waitFor(() => expect(tabFor("/k/pods").view?.filterKey).toBe("restarts"));
 
     await openColumns();
     await userEvent.click(screen.getByRole("checkbox", { name: "Restarts" }));
 
     // The classic bug: the column goes, the filter key stays, and the search
     // box quietly matches nothing for the rest of the session.
-    await waitFor(() => expect(activeTab().view?.filterKey).toBeNull());
+    await waitFor(() => expect(tabFor("/k/pods").view?.filterKey).toBeNull());
+  });
+
+  it("ignores a filter key naming a column another tab hid", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toHaveLength(2));
+    // A key this tab has carried since a previous launch.
+    act(() => store.setTabView(tabFor("/k/pods").id, { filterKey: "restarts", filter: "web" }));
+    await waitFor(() => expect(rowNames()).toHaveLength(0));
+
+    // Hidden columns belong to the kind, not to this tab: another tab — in
+    // another workspace, while this screen was not mounted — can hide the
+    // column this tab's filter key names, so clearing the key on the toggle
+    // is not enough. Hidden here through the store, never through this
+    // screen's own picker.
+    act(() => toggleColumn("pods", "restarts"));
+
+    // Pointed at a column that is not there, `filterTableData` has nothing to
+    // search and quietly returns every row. Derived, the key falls away and
+    // the text searches the columns that are actually on screen.
+    await waitFor(() => expect(rowNames()).toEqual(["web-1"]));
+  });
+
+  it("keeps each tab's view to itself when several are mounted", async () => {
+    // `Window` mounts every tab's body and only hides the inactive ones.
+    listNodes.mockResolvedValue({
+      nodes: [{ name: "n1", status: "Ready", roles: "worker", version: "1.30", age: "9d", taints: 0 }],
+    });
+    store.openTab("/k/pods");
+    store.openTab("/k/nodes"); // the active one
+    render(
+      <>
+        <Resources route="/k/pods" />
+        <Resources route="/k/nodes" />
+      </>,
+    );
+    await screen.findByRole("searchbox", { name: "Filter pods" });
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Filter pods" }), "web");
+
+    expect(tabFor("/k/pods").view).toMatchObject({ filter: "web" });
+    // Reading the *active* tab would have written the filter here instead, and
+    // re-filtered a list the user is not even looking at on every keystroke.
+    expect(tabFor("/k/nodes").view).toBeUndefined();
   });
 
   it("shows no namespace picker for a cluster-scoped kind", async () => {
     listNodes.mockResolvedValue({ nodes: [{ name: "n1", status: "Ready", roles: "worker", version: "1.30", age: "9d", taints: 0 }] });
 
-    render(<Resources route="/k/nodes" />);
+    open("/k/nodes");
 
     await waitFor(() => expect(rowNames()).toEqual(["n1"]));
     // Absent, not disabled.
@@ -248,7 +299,7 @@ describe("Resources", () => {
   });
 
   it("offers the namespace picker for a namespaced kind", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
 
     expect(await screen.findByRole("combobox", { name: "Namespaces" })).toBeTruthy();
   });
@@ -256,7 +307,7 @@ describe("Resources", () => {
   it("follows the namespace a restricted credential is scoped to", async () => {
     useNamespaceOptions.mockReturnValue({ namespaces: ["team-a"], scope: "team-a", error: "" });
 
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
 
     // Written to the workspace store, so every screen on this cluster follows.
     await waitFor(() => expect(getView().namespaces.prod).toEqual(["team-a"]));
@@ -272,7 +323,7 @@ describe("Resources", () => {
         return { stop };
       },
     );
-    const view = render(<Resources route="/k/pods" />);
+    const view = open("/k/pods");
     expect(await screen.findByText("No pods")).toBeTruthy();
     view.unmount();
 
@@ -282,7 +333,7 @@ describe("Resources", () => {
         return { stop };
       },
     );
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(rowNames()).toHaveLength(2));
     await userEvent.type(screen.getByRole("searchbox", { name: "Filter pods" }), "zzz");
 
@@ -306,7 +357,7 @@ describe("Resources", () => {
       },
     );
 
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("pods is forbidden");
@@ -314,7 +365,7 @@ describe("Resources", () => {
   });
 
   it("keeps the rows on screen and calls them stale when the list stops refreshing", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(rowNames()).toHaveLength(2));
 
     act(() => stream.error("connection reset"));
@@ -325,7 +376,7 @@ describe("Resources", () => {
   });
 
   it("shows the rows and says the stream dropped when the watch is reconnecting", async () => {
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
     await waitFor(() => expect(rowNames()).toHaveLength(2));
     expect(screen.getByText("Live")).toBeTruthy();
 
@@ -338,7 +389,7 @@ describe("Resources", () => {
   it("names an unknown slug rather than rendering a blank table", async () => {
     // A route string can arrive from a session persisted against a cluster
     // that has since lost the operator.
-    render(<Resources route="/k/nonsuch.example.com" />);
+    open("/k/nonsuch.example.com");
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("nonsuch.example.com");
@@ -349,7 +400,7 @@ describe("Resources", () => {
     setContexts([]);
     store.setState(defaultState([]));
 
-    render(<Resources route="/k/pods" />);
+    open("/k/pods");
 
     expect(screen.getByText(/pick a cluster/i)).toBeTruthy();
     // Not one call into core: there is no context name to make one with.

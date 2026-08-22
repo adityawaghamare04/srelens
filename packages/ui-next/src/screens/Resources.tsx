@@ -71,14 +71,16 @@ export function Resources({ route }: { route: string }) {
     );
   }
 
-  return <KindList slug={slug} title={title} context={context} />;
+  return <KindList route={route} slug={slug} title={title} context={context} />;
 }
 
 function KindList({
+  route,
   slug,
   title,
   context,
 }: {
+  route: string;
   slug: string;
   title: string;
   context: ClusterContext;
@@ -146,11 +148,26 @@ function KindList({
   // Sort, filter text and filter column live on the tab, so they survive a
   // restart with it (#254). Component state would pass every render assertion
   // and lose all three on the next launch.
-  const { activeId } = useTabs();
-  const view = useTabView(activeId);
+  //
+  // This screen's *own* tab, not whichever one is active: `Window` mounts every
+  // tab's body and merely hides the inactive ones, so reading the active tab's
+  // view would have a background list re-sorting and re-filtering itself on
+  // every keystroke typed in an unrelated tab. A workspace holds one tab per
+  // route, which is what makes the route an exact handle on it.
+  const { tabs } = useTabs();
+  const tabId = tabs.find((tab) => tab.route === route)?.id ?? "";
+  const view = useTabView(tabId);
   const sort = view.sort ?? null;
   const filter = view.filter ?? "";
-  const filterKey = view.filterKey ?? null;
+  // Derived rather than merely cleared when this screen hides a column. Hidden
+  // columns belong to the kind and are shared by every tab looking at it; the
+  // filter key belongs to one tab. So the column this tab's key names can be
+  // hidden from another tab — in another workspace, while this one is not even
+  // mounted — and both halves persist, which is how the classic design ended
+  // up with search boxes pointed at columns that were no longer there,
+  // matching nothing and saying nothing, for the rest of the session.
+  const filterKey =
+    view.filterKey && columns.some((column) => column.key === view.filterKey) ? view.filterKey : null;
 
   const rows = useMemo(
     () =>
@@ -169,7 +186,7 @@ function KindList({
   function onToggleColumn(key: string) {
     // Hiding the column the search is pointed at leaves a filter nobody can
     // see and nothing can match — the classic design shipped exactly that.
-    if (!hidden.has(key) && filterKey === key) setTabView(activeId, { filterKey: null });
+    if (!hidden.has(key) && filterKey === key) setTabView(tabId, { filterKey: null });
     toggleColumn(slug, key);
   }
 
@@ -229,7 +246,7 @@ function KindList({
     >
       <FilterBar
         value={filter}
-        onValueChange={(value) => setTabView(activeId, { filter: value })}
+        onValueChange={(value) => setTabView(tabId, { filter: value })}
         label={`Filter ${lower}`}
         placeholder={`Filter ${lower}…`}
       >
@@ -268,9 +285,9 @@ function KindList({
               data={filtered}
               getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
               sort={sort}
-              onSortChange={(next) => setTabView(activeId, { sort: next })}
+              onSortChange={(next) => setTabView(tabId, { sort: next })}
               activeFilterKey={filterKey}
-              onActiveFilterKeyChange={(key) => setTabView(activeId, { filterKey: key })}
+              onActiveFilterKeyChange={(key) => setTabView(tabId, { filterKey: key })}
               onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
               // "This kind has none" and "the filter matched none" are
               // different facts, and the second one is the reader's own doing.
