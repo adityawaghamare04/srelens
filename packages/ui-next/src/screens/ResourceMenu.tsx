@@ -147,7 +147,11 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
         onPick: () => openTab(nav(row.name, "forward"), { clusterName: context }),
       });
     }
-    list.push({ label: "Edit", onPick: () => openTab(`/edit/${encodeURIComponent(row.name)}`, { clusterName: context }) });
+    list.push({
+      label: "Edit",
+      icon: Icons.edit,
+      onPick: () => openTab(`/edit/${encodeURIComponent(row.name)}`, { clusterName: context }),
+    });
     list.push({
       label: "Copy as kubectl",
       icon: Icons.copy,
@@ -158,6 +162,7 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
       const suspended = isSuspended(row);
       list.push({
         label: suspended ? "Resume" : "Suspend",
+        icon: suspended ? Icons.play : Icons.pause,
         onPick: () => open({ type: "suspend", row, suspend: !suspended }),
       });
     }
@@ -170,15 +175,20 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
     // review finding applies here, in a second menu.
     const destructive: ContextMenuItem[] = [];
     if (actions.scale) {
-      destructive.push({ label: "Scale", danger: true, onPick: () => open({ type: "scale", row }) });
+      destructive.push({ label: "Scale", icon: Icons.scale, danger: true, onPick: () => open({ type: "scale", row }) });
     }
     if (actions.restart) {
-      destructive.push({ label: "Restart rollout", danger: true, onPick: () => open({ type: "restart", row }) });
+      destructive.push({
+        label: "Restart rollout",
+        icon: Icons.restart,
+        danger: true,
+        onPick: () => open({ type: "restart", row }),
+      });
     }
     if (actions.evict) {
-      destructive.push({ label: "Evict", danger: true, onPick: () => open({ type: "evict", row }) });
+      destructive.push({ label: "Evict", icon: Icons.evict, danger: true, onPick: () => open({ type: "evict", row }) });
     }
-    destructive.push({ label: "Delete", danger: true, onPick: () => open({ type: "delete", row }) });
+    destructive.push({ label: "Delete", icon: Icons.trash, danger: true, onPick: () => open({ type: "delete", row }) });
     if (destructive.length) list.push({ kind: "sep" }, ...destructive);
 
     return list;
