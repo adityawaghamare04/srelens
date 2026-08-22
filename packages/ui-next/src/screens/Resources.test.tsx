@@ -402,6 +402,36 @@ describe("Resources", () => {
     expect(await screen.findByRole("combobox", { name: "Namespaces" })).toBeTruthy();
   });
 
+  // Zero options while `namespaces` is null reads as "this cluster has no
+  // namespaces"; a disabled, spinning stand-in says "not yet" instead.
+  it("shows the namespace picker as loading rather than empty before namespaces arrive", async () => {
+    useNamespaceOptions.mockReturnValue({ namespaces: null, scope: "", error: "" });
+
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toHaveLength(2));
+
+    expect(screen.queryByRole("combobox", { name: "Namespaces" })).toBeNull();
+    const placeholder = screen.getByRole("button", { name: "Namespaces" }) as HTMLButtonElement;
+    expect(placeholder.disabled).toBe(true);
+    expect(within(placeholder).getByRole("status", { name: "Loading namespaces" })).toBeTruthy();
+  });
+
+  it("warns above the table when namespace listing fails, without hiding the picker or the rows", async () => {
+    useNamespaceOptions.mockReturnValue({
+      namespaces: ["default", "billing"],
+      scope: "",
+      error: "namespaces: etcd timeout",
+    });
+
+    open("/k/pods");
+
+    expect(await screen.findByText("Namespaces could not be listed")).toBeTruthy();
+    expect(screen.getByText("namespaces: etcd timeout")).toBeTruthy();
+    // Non-fatal: the picker keeps whatever namespaces it has, and the rows load.
+    expect(screen.getByRole("combobox", { name: "Namespaces" })).toBeTruthy();
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+  });
+
   it("follows the namespace a restricted credential is scoped to", async () => {
     useNamespaceOptions.mockReturnValue({ namespaces: ["team-a"], scope: "team-a", error: "" });
 

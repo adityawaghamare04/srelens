@@ -10,6 +10,7 @@ import { useNamespaceOptions } from "@srelens/core/react";
 import {
   Alert,
   AskChip,
+  Button,
   ColumnPicker,
   EmptyState,
   ErrorState,
@@ -18,6 +19,7 @@ import {
   LoadingState,
   MultiSelect,
   Screen,
+  Spinner,
   Table,
   filterTableData,
   toneColor,
@@ -189,7 +191,7 @@ function KindList({
   }, [builtIn, slug, crds]);
 
   const selection = useNamespaces(context.stableId);
-  const { namespaces, scope } = useNamespaceOptions(name, files);
+  const { namespaces, scope, error: namespaceError } = useNamespaceOptions(name, files);
 
   // A namespace-restricted credential has one namespace and no way to ask for
   // another. Written to the workspace store rather than held here, so every
@@ -342,16 +344,34 @@ function KindList({
         label={`Filter ${lower}`}
         placeholder={`Filter ${lower}…`}
       >
-        {!clusterScoped && (
-          <MultiSelect
-            options={(namespaces ?? []).map((ns) => ({ value: ns }))}
-            selection={selection}
-            onChange={(next) => setNamespaces(context.stableId, next)}
-            allLabel="All namespaces"
-            ariaLabel="Namespaces"
-          />
-        )}
+        {!clusterScoped &&
+          (namespaces === null ? (
+            // Zero options while `namespaces` is still null reads as "this
+            // cluster has no namespaces" — a disabled, spinning stand-in
+            // says "not yet" instead.
+            <Button variant="secondary" className="justify-between gap-1.5" disabled aria-label="Namespaces">
+              <Spinner label="Loading namespaces" />
+              Loading namespaces…
+            </Button>
+          ) : (
+            <MultiSelect
+              options={namespaces.map((ns) => ({ value: ns }))}
+              selection={selection}
+              onChange={(next) => setNamespaces(context.stableId, next)}
+              allLabel="All namespaces"
+              ariaLabel="Namespaces"
+            />
+          ))}
       </FilterBar>
+
+      {!clusterScoped && namespaceError && (
+        // Non-fatal: `useNamespaceOptions` keeps whatever namespaces it had
+        // before the failure, so the picker still works — this only says the
+        // list behind it may be incomplete.
+        <Alert tone="warn" title="Namespaces could not be listed" className="mx-3 mt-3 mb-3">
+          {namespaceError}
+        </Alert>
+      )}
 
       <div className="scroll min-h-0 flex-1">
         {list.status === "loading" ? (
