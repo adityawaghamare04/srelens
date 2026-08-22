@@ -12,11 +12,13 @@ import {
 } from "@srelens/ui-kit";
 import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
+import { ConfigDetailsBody } from "./ConfigBody";
 import { CronJobDetailsBody } from "./CronJobBody";
 import { GenericBody } from "./GenericBody";
 import { JobDetailsBody } from "./JobBody";
 import { NodeDetailsBody } from "./NodeBody";
 import { PodContainersBody, PodDetailsBody } from "./PodBody";
+import { SecretDetailsBody } from "./SecretBody";
 import { ServiceDetailsBody } from "./ServiceBody";
 import { WorkloadDetailsBody } from "./WorkloadBody";
 
@@ -74,6 +76,8 @@ const DETAILS_BODY: Record<string, PaneBody> = {
   Node: NodeDetailsBody,
   Job: JobDetailsBody,
   CronJob: CronJobDetailsBody,
+  ConfigMap: ConfigDetailsBody,
+  Secret: SecretDetailsBody,
 };
 
 /** Same seam, for the Containers pane a kind's descriptor opts into via
