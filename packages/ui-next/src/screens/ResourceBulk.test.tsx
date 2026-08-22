@@ -76,6 +76,42 @@ describe("ResourceBulk", () => {
     expect(container.textContent).toBe("");
   });
 
+  // Whole-branch review (FIX 2): `Table` never prunes `selection.selected`
+  // when its data changes — select rows, then filter the list down to none
+  // of them, and the stale keys are still in `selected`. The bar must count
+  // (and act on) only the selection that resolves against the rows it was
+  // actually handed, not the raw key count, or Delete opens a confirm for
+  // rows that no longer exist and a mismatched count.
+  it("counts and acts on only the selected keys still present in rows, not stale ones", () => {
+    const selected = new Set([...PODS.map(keyOf), "ghost-ns/ghost-pod"]);
+    render(
+      <ResourceBulk
+        selected={selected}
+        kind="pods"
+        descriptor={POD_DESCRIPTOR}
+        context="prod"
+        rows={PODS}
+        onDone={() => {}}
+      />,
+    );
+    // Not "4 selected" — the ghost key was never in `rows`.
+    expect(screen.getByText("3 selected")).toBeDefined();
+  });
+
+  it("stays out of the way when every selected key has fallen out of the rows", () => {
+    const { container } = render(
+      <ResourceBulk
+        selected={new Set(["ghost-ns/ghost-pod"])}
+        kind="pods"
+        descriptor={POD_DESCRIPTOR}
+        context="prod"
+        rows={PODS}
+        onDone={() => {}}
+      />,
+    );
+    expect(container.textContent).toBe("");
+  });
+
   it("counts what is selected, in words", () => {
     render(
       <ResourceBulk

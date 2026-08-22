@@ -195,6 +195,15 @@ function KindList({
   // row through the same `getRowKey` formula passed to `Table` below.
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  // A namespace switch makes every selected key's namespace half meaningless
+  // — cleared rather than left to be silently resolved away, or a later
+  // switch back to a namespace that still has the same-named row would
+  // resurrect a checkbox the reader never re-checked. `selection` is a
+  // stable array reference from `useNamespaces` (it only changes identity
+  // when its contents actually change), so this does not fire on every
+  // render.
+  useEffect(() => setSelected(new Set()), [selection]);
+
   const lower = title.toLocaleLowerCase();
 
   function onToggleColumn(key: string) {

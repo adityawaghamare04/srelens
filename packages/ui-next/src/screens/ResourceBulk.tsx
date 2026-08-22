@@ -90,9 +90,15 @@ export function ResourceBulk({ selected, kind, descriptor, context, rows, onDone
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (selected.size === 0 && !pending && !report) return null;
-
+  // Resolved against `rows` first, and counted from the result — `Table`
+  // never prunes `selection.selected` when its data changes, so a key that
+  // filtered out of `rows` (or a namespace switch that made it meaningless)
+  // can still be in `selected`. Counting `selected.size` instead would show
+  // a number this bar cannot actually act on: the "3 selected" bar for a
+  // Delete that resolves to 0 rows, confirms, and silently does nothing.
   const selectedRows = rows.filter((row) => selected.has(keyOf(row)));
+
+  if (selectedRows.length === 0 && !pending && !report) return null;
 
   function open(type: ActionType) {
     setReport(null);
@@ -131,12 +137,12 @@ export function ResourceBulk({ selected, kind, descriptor, context, rows, onDone
 
   return (
     <>
-      {selected.size > 0 && (
+      {selectedRows.length > 0 && (
         // The table runs flush to the panel now (f088d92); this bar sits in
         // the same container, so — like the stale-rows Alert next to it —
         // it carries its own inset instead of borrowing the container's.
         <div className="mx-3 mt-3 mb-3 flex items-center gap-2">
-          <span className="text-muted text-[0.8125rem]">{selected.size} selected</span>
+          <span className="text-muted text-[0.8125rem]">{selectedRows.length} selected</span>
           <ActionBar actions={actions} label={`${kind} actions`} />
         </div>
       )}

@@ -66,7 +66,7 @@ import { defaultState } from "../lib/tabs";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
 import { hiddenColumns, loadColumnPrefs, toggleColumn } from "../lib/columnPrefs";
 import { resetListCache } from "../lib/resourceList";
-import { getView, resetView } from "../lib/workspace";
+import { getView, resetView, setNamespaces } from "../lib/workspace";
 
 const CTX: ClusterContext = {
   name: "prod-eu",
@@ -523,6 +523,31 @@ describe("Resources", () => {
     // Both still render — pinned above the scrolling body, not gone.
     expect(screen.getByText(/stale/i)).toBeTruthy();
     expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+
+  // Whole-branch review (FIX 2): a namespace switch makes the old selection
+  // keys meaningless (they were namespace-qualified against the namespaces
+  // being left) — kept around, they'd resolve against whatever new rows
+  // happen to share a key by coincidence.
+  it("clears the bulk selection when the namespace filter changes", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select default/web-1" }));
+    await screen.findByText("1 selected");
+
+    act(() => setNamespaces(CTX.stableId, ["billing"]));
+
+    await waitFor(() => expect(screen.queryByText("1 selected")).toBeNull());
+
+    // Not merely resolved to zero targets while `web-1` is filtered out of
+    // view: the selection itself must be cleared, or switching back to a
+    // namespace that still has `web-1` resurrects a checkbox the reader never
+    // re-checked.
+    act(() => setNamespaces(CTX.stableId, []));
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    expect((screen.getByRole("checkbox", { name: "Select default/web-1" }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByText("1 selected")).toBeNull();
   });
 
   it("shows the rows and says the stream dropped when the watch is reconnecting", async () => {
