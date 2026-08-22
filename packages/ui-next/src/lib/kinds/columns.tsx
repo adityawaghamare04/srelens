@@ -87,8 +87,11 @@ function phaseKind(phase: string): StatusKind {
   }
 }
 
-/** The design's unhealthy dot for a pod: not Running. */
-export const podFlagged = (row: PodRow): boolean => row.phase !== "Running";
+/** The design's unhealthy dot for a pod: derived from `phaseKind` above, not
+ *  restated here — a phase `phaseKind` calls healthy (e.g. `Succeeded`, which
+ *  renders a green pill) must never also earn a "needs attention" dot. The
+ *  next phase added to the success set only needs editing in one place. */
+export const podFlagged = (row: PodRow): boolean => phaseKind(row.phase) !== "success";
 
 export const podColumns: Column<PodRow>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -150,6 +153,10 @@ export const daemonSetColumns: Column<DaemonSetSummary>[] = [
   { key: "available", header: "Available", sortable: true, align: "end" },
   { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
+
+/** The design's unhealthy dot for a Job: any failed pod. Unambiguous — the
+ *  same `failed` count already drives the Status column's red pill below. */
+export const jobFlagged = (row: JobSummary): boolean => row.failed > 0;
 
 export const jobColumns: Column<JobSummary>[] = [
   { key: "name", header: "Name", sortable: true },

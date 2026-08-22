@@ -7,8 +7,8 @@ import type { Column } from "@srelens/ui-kit";
  * it is the whole of what the backend knows about a LeaseList.
  */
 export const genericColumns: Column<ResourceRow>[] = [
-  { key: "name", header: "Name", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
   { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
 ];
 

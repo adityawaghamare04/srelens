@@ -20,17 +20,16 @@ export function customColumns(crd: CrdRef): Column<CustomRow>[] {
   const printers = crd.printerColumns ?? [];
   const keys = printerColumnKeys(printers);
   const columns: Column<CustomRow>[] = [
-    { key: "name", header: crd.kind, sortable: true, filterable: true },
+    { key: "name", header: crd.kind, sortable: true },
   ];
   if (crd.namespaced) {
-    columns.push({ key: "namespace", header: "Namespace", sortable: true, filterable: true });
+    columns.push({ key: "namespace", header: "Namespace", sortable: true });
   }
   printers.forEach((printer, index) => {
     columns.push({
       key: keys[index],
       header: printer.name,
       sortable: true,
-      filterable: true,
       render: (row) => row.columns?.[index] ?? "—",
       getSortValue: (row) => printerSortValue(printer.type, row.columns?.[index] ?? "", row.sortKeys?.[index]),
     });

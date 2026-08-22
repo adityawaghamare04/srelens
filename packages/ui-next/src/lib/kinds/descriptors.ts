@@ -12,6 +12,7 @@ import {
   endpointSliceColumns,
   ingressColumns,
   jobColumns,
+  jobFlagged,
   limitRangeColumns,
   networkPolicyColumns,
   nodeColumns,
@@ -141,6 +142,9 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     source: "watch",
     scope: "namespaced",
     actions: { logs: true },
+    // Same variance cast every function on this table already needs: `flagged`
+    // only reads `failed`, a field `ListRow` does not promise.
+    flagged: jobFlagged as (row: ListRow) => boolean,
   },
   cronjobs: {
     k8sKind: "CronJob",

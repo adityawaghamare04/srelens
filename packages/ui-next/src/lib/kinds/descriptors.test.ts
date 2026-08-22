@@ -32,6 +32,10 @@ describe("descriptors", () => {
     expect(descriptorFor("runtimeclasses")!.columns.map((c) => c.key)).toEqual(["name", "age"]);
   });
 
+  it("asks for no per-column funnel on the generic columns either — one search box, not per-column", () => {
+    expect(descriptorFor("leases")!.columns.some((c) => c.filterable)).toBe(false);
+  });
+
   it("streams exactly the kinds the backend can watch, and polls the rest", () => {
     for (const kind of SIDEBAR_KINDS) {
       const watchable = (WATCHABLE_KINDS as readonly string[]).includes(kind);
@@ -107,6 +111,14 @@ describe("descriptors", () => {
     it("leaves a kind with no sensible notion of unhealthy — a Secret — with no flagged rule", () => {
       expect(descriptorFor("secrets")!.flagged).toBeUndefined();
       expect(descriptorFor("services")!.flagged).toBeUndefined();
+    });
+
+    it("flags a Job with a failed pod, and leaves CronJob with no flagged rule at all", () => {
+      const job = { name: "j", namespace: "ns", completions: "1/1", active: 0, failed: 0, duration: "1m", owner: "", age: "1d" };
+      const failed = { ...job, failed: 1 };
+      expect(descriptorFor("jobs")!.flagged!(job)).toBe(false);
+      expect(descriptorFor("jobs")!.flagged!(failed)).toBe(true);
+      expect(descriptorFor("cronjobs")!.flagged).toBeUndefined();
     });
   });
 });

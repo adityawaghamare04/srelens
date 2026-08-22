@@ -27,8 +27,11 @@ import {
   deploymentFlagged,
   statefulSetFlagged,
   daemonSetFlagged,
+  jobFlagged,
   type PodRow,
 } from "./columns";
+import { customColumns } from "./custom";
+import type { CrdRef } from "@srelens/core";
 
 /** Every typed column set columns.tsx exports — the design mock titles every
  *  one of these "Name", never the kind, and none of them may ask for a
@@ -123,6 +126,14 @@ describe("pod columns", () => {
     expect(podFlagged({ ...running, phase: "CrashLoopBackOff" })).toBe(true);
     expect(podFlagged({ ...running, phase: "Pending" })).toBe(true);
   });
+
+  it("does not flag a Succeeded pod — phaseKind already renders it a green pill, so the dot must agree", () => {
+    const succeeded = { name: "job-abc", namespace: "d", phase: "Succeeded", ready: "0/1", restarts: 0, node: "n", age: "1d" };
+    expect(podFlagged(succeeded)).toBe(false);
+    const phase = podColumns.find((c) => c.key === "phase")!;
+    const pill = phase.render!(succeeded) as { props: { kind: string } };
+    expect(pill.props.kind).toBe("success");
+  });
 });
 
 describe("node columns", () => {
@@ -185,6 +196,26 @@ describe("flagged rows — the design's unhealthy dot, per kind", () => {
     const base = { name: "n", namespace: "ns", desired: 3, current: 3, upToDate: 3, available: 3, age: "1d" };
     expect(daemonSetFlagged({ ...base, ready: 3 })).toBe(false);
     expect(daemonSetFlagged({ ...base, ready: 2 })).toBe(true);
+  });
+
+  it("flags a Job with any failed pod, and only that — the same count already drives the Status pill", () => {
+    const base = { name: "j", namespace: "ns", completions: "1/1", active: 0, failed: 0, duration: "1m", owner: "", age: "1d" };
+    expect(jobFlagged(base)).toBe(false);
+    expect(jobFlagged({ ...base, failed: 1 })).toBe(true);
+    expect(jobFlagged({ ...base, active: 1 })).toBe(false);
+  });
+});
+
+describe("custom-resource columns ask for no per-column funnel either", () => {
+  const crd = (over: Partial<CrdRef> = {}): CrdRef => ({
+    name: "widgets.example.com", group: "example.com", version: "v1", plural: "widgets",
+    kind: "Widget", namespaced: true,
+    printerColumns: [{ name: "Phase", type: "string", jsonPath: ".status.phase" }],
+    ...over,
+  });
+
+  it("has no filterable column — the same single search box as every typed list", () => {
+    expect(customColumns(crd()).some((c) => c.filterable)).toBe(false);
   });
 });
 
