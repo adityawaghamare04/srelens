@@ -48,15 +48,39 @@ describe("conditionKind", () => {
     expect(conditionKind({ type: "Ready", status: "False" })).toBe("danger");
   });
 
-  it("inverts the polarity for negatively-phrased types (Pressure/Unavailable/Failed/Dangling/NetworkUnavailable)", () => {
+  it("inverts the polarity for the Pressure alternative", () => {
     // For a "bad thing" type, True means the bad thing IS happening (danger),
     // and False means it is NOT happening (success) — the opposite of a
     // normal type's polarity.
     expect(conditionKind({ type: "MemoryPressure", status: "True" })).toBe("danger");
     expect(conditionKind({ type: "MemoryPressure", status: "False" })).toBe("success");
     expect(conditionKind({ type: "DiskPressure", status: "True" })).toBe("danger");
+  });
+
+  it("inverts the polarity for the bare Unavailable alternative, on a type that is not NetworkUnavailable", () => {
+    expect(conditionKind({ type: "Unavailable", status: "True" })).toBe("danger");
+    expect(conditionKind({ type: "Unavailable", status: "False" })).toBe("success");
+  });
+
+  it("inverts the polarity for the NetworkUnavailable alternative", () => {
+    // NOTE: "NetworkUnavailable" contains "Unavailable" as a substring, so this
+    // case is already reached by the bare Unavailable alternative above — the
+    // NetworkUnavailable alternative in the source regex is redundant (dead):
+    // no test can independently prove it necessary, because deleting it from
+    // the regex changes no observable behavior. Reported as a finding about
+    // the moved body, not altered here (this is a move, not a rewrite).
     expect(conditionKind({ type: "NetworkUnavailable", status: "True" })).toBe("danger");
     expect(conditionKind({ type: "NetworkUnavailable", status: "False" })).toBe("success");
+  });
+
+  it("inverts the polarity for the Failed alternative, on a type containing none of the others", () => {
+    expect(conditionKind({ type: "JobFailed", status: "True" })).toBe("danger");
+    expect(conditionKind({ type: "JobFailed", status: "False" })).toBe("success");
+  });
+
+  it("inverts the polarity for the Dangling alternative, on a type containing none of the others", () => {
+    expect(conditionKind({ type: "VolumeDangling", status: "True" })).toBe("danger");
+    expect(conditionKind({ type: "VolumeDangling", status: "False" })).toBe("success");
   });
 
   it("matches the negative-type regex case-insensitively", () => {
