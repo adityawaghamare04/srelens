@@ -85,7 +85,13 @@ export interface Column<T> {
    *  ages, where "1y" must outrank "300d") while filtering stays on the
    *  visible text. */
   getSortValue?: (row: T) => unknown;
+  /** Whether clicking the header sorts this column; defaults to true. Every
+   *  sortable column stays clickable regardless of which one is the active
+   *  sort — this only gates the header button existing at all. */
   sortable?: boolean;
+  /** Opt-in: shows a funnel button that scopes the toolbar search to this
+   *  column. Off by default — a funnel on every column was the bug (design
+   *  correction, #319 follow-up); most columns don't need one. */
   filterable?: boolean;
   minWidth?: number;
 }
@@ -527,22 +533,29 @@ export function Table<T>({
               <div className="th-head">
                 <button
                   type="button"
-                  className="th-sort"
+                  className="th-sort group"
                   onClick={() => cycleSort(c.key)}
                   disabled={c.sortable === false}
                   aria-label={`Sort by ${typeof c.header === "string" ? c.header : c.key}`}
+                  data-on={c.sortable !== false && sort?.key === c.key}
                 >
                   <span>{c.header}</span>
-                  {c.sortable !== false &&
-                    (sort?.key !== c.key ? (
-                      <ArrowUpDown />
-                    ) : sort.direction === "asc" ? (
-                      <ArrowUp />
+                  {c.sortable !== false && (
+                    sort?.key === c.key ? (
+                      <span className="th-caret">
+                        {sort.direction === "asc" ? <ArrowUp /> : <ArrowDown />}
+                      </span>
                     ) : (
-                      <ArrowDown />
-                    ))}
+                      // Hidden at rest — the design shows a caret only on the
+                      // active sort column — but revealed on hover/keyboard
+                      // focus so the button stays discoverable without it.
+                      <span className="th-caret opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100">
+                        <ArrowUpDown />
+                      </span>
+                    )
+                  )}
                 </button>
-                {c.filterable !== false && onActiveFilterKeyChange && (
+                {c.filterable === true && onActiveFilterKeyChange && (
                   <button
                     type="button"
                     className={cx("th-filter", activeFilterKey === c.key && "is-active")}

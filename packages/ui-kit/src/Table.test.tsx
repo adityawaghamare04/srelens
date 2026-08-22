@@ -343,9 +343,16 @@ describe("Table", () => {
 
   it("selects a column for the toolbar search", () => {
     const onChange = vi.fn();
+    // filterable is opt-in (design correction, #319 follow-up): the default
+    // `columns` fixture doesn't ask for a funnel, so this test opts one in
+    // locally rather than relying on what used to be the default.
+    const filterableColumns: Column<Row>[] = [
+      columns[0],
+      { ...columns[1], filterable: true },
+    ];
     render(
       <Table
-        columns={columns}
+        columns={filterableColumns}
         data={data}
         getRowKey={(r) => r.name}
         onActiveFilterKeyChange={onChange}
@@ -353,6 +360,92 @@ describe("Table", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Filter search by Phase" }));
     expect(onChange).toHaveBeenCalledWith("phase");
+  });
+
+  it("shows no filter funnel for a column that hasn't opted in", () => {
+    // Only `filterable: true` earns a funnel now; the old default was
+    // "shown unless explicitly false".
+    render(
+      <Table
+        columns={columns}
+        data={data}
+        getRowKey={(r) => r.name}
+        onActiveFilterKeyChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Filter search by Name" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Filter search by Phase" })).toBeNull();
+  });
+
+  it("shows a funnel only for columns that set filterable: true, even with a handler", () => {
+    const onlyNameFilterable: Column<Row>[] = [
+      { ...columns[0], filterable: true },
+      columns[1],
+    ];
+    render(
+      <Table
+        columns={onlyNameFilterable}
+        data={data}
+        getRowKey={(r) => r.name}
+        onActiveFilterKeyChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Filter search by Name" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Filter search by Phase" })).toBeNull();
+  });
+
+  it("shows no sort caret for any column at rest, but keeps every column sortable", () => {
+    // The always-visible ArrowUpDown placeholder is gone: at rest, a header's
+    // `data-on` is "false" whether or not it's sortable, and the sort button
+    // still cycles the column when clicked (sortable is unaffected).
+    render(<Table columns={columns} data={[...data].reverse()} getRowKey={(r) => r.name} />);
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+    const phaseSort = screen.getByRole("button", { name: "Sort by Phase" });
+    expect(nameSort.getAttribute("data-on")).toBe("false");
+    expect(phaseSort.getAttribute("data-on")).toBe("false");
+
+    fireEvent.click(phaseSort);
+    // Clicking a column that was never the active sort still sorts it —
+    // only the resting indicator changed, not sortability.
+    expect(screen.getAllByRole("row")[1].textContent).toContain("Pending");
+    expect(phaseSort.getAttribute("data-on")).toBe("true");
+    expect(nameSort.getAttribute("data-on")).toBe("false");
+  });
+
+  it("marks only the active sort column with data-on, and flips it as sort cycles", () => {
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+
+    fireEvent.click(nameSort); // asc
+    expect(nameSort.getAttribute("data-on")).toBe("true");
+    fireEvent.click(nameSort); // desc
+    expect(nameSort.getAttribute("data-on")).toBe("true");
+    fireEvent.click(nameSort); // cleared
+    expect(nameSort.getAttribute("data-on")).toBe("false");
+  });
+
+  it("gives a non-active sortable column's indicator a hover/focus reveal, hidden at rest", () => {
+    // jsdom applies no real stylesheet, so the resting/reveal behaviour is
+    // asserted through the utility classes that drive it (the same proxy the
+    // #298 pinned-width tests use for `.tbl-resized`) rather than computed style.
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+    const caret = nameSort.querySelector(".th-caret");
+    expect(caret).not.toBeNull();
+    expect(caret?.className).toContain("opacity-0");
+    expect(caret?.className).toContain("group-hover:opacity-100");
+    expect(caret?.className).toContain("group-focus-visible:opacity-100");
+    // The button itself is the hover/focus group the caret reacts to.
+    expect(nameSort.className.split(/\s+/)).toContain("group");
+  });
+
+  it("does not hide the active sort column's indicator behind the hover/focus reveal", () => {
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+    const caret = nameSort.querySelector(".th-caret");
+    expect(caret).not.toBeNull();
+    expect(caret?.className).not.toContain("opacity-0");
   });
 
   it("filters globally or by the selected column", () => {
