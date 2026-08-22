@@ -1,4 +1,4 @@
-import { K8S_KIND, WATCHABLE_KINDS, listNodes, listResource, nodeMetrics, type ResourceKind } from "@srelens/core";
+import { K8S_KIND, WATCHABLE_KINDS, listNodes, listResource, nodeMetrics, podMetrics, type ResourceKind } from "@srelens/core";
 import type { Column } from "@srelens/ui-kit";
 import {
   clusterRoleBindingColumns,
@@ -25,6 +25,7 @@ import {
   statefulSetColumns,
   storageClassColumns,
   type NodeRow,
+  type PodRow,
 } from "./columns";
 import { genericClusterColumns, genericColumns } from "./generic";
 import type { KindDescriptor, ListRow } from "./types";
@@ -70,6 +71,17 @@ const loadNodes = async (context: string) => {
 };
 
 /**
+ * CPU/memory for the pods list, on its own `enrichMs` cadence (Task 8) —
+ * best-effort: a cluster with no metrics-server makes `podMetrics` fail, and
+ * `useResourceList` swallows that so the pods still list, just without a
+ * reading. Only rows the metrics mention are touched.
+ */
+const podEnrich = async (context: string, namespace: string): Promise<Map<string, Partial<PodRow>>> => {
+  const out = await podMetrics(context, namespace);
+  return new Map((out.metrics ?? []).map((m) => [m.name, { cpu: m.cpuMillicores, memory: m.memoryMiB }]));
+};
+
+/**
  * The seven typed entries this task adds (workloads and nodes). Each column
  * set is typed over its own row (`Column<PodRow>[]`, etc.), a proper subtype
  * of `ListRow` on the data side — but `Column`'s `render`/`getSortValue`
@@ -86,6 +98,10 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     columns: podColumns as Column<ListRow>[],
     source: "watch",
     scope: "namespaced",
+    // Same variance cast the columns above already need (see the comment
+    // above this table): `Partial<PodRow>` only widens `Partial<ListRow>`.
+    enrich: podEnrich as (context: string, namespace: string) => Promise<Map<string, Partial<ListRow>>>,
+    enrichMs: 10000,
     actions: { logs: true, shell: true, forward: true, evict: true },
   },
   deployments: {

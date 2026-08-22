@@ -152,4 +152,25 @@ describe("useResourceList", () => {
     expect(evicted.result.current.status).toBe("loading");
     expect(evicted.result.current.rows).toHaveLength(0);
   }, 20000);
+
+  it("merges metrics into the rows by name, without waiting for them", async () => {
+    const enrich = vi.fn().mockResolvedValue(new Map([["a", { cpu: 12 }]]));
+    const d = { ...watched, enrich, enrichMs: 10000 } as const;
+    const { result } = renderHook(() => useResourceList("prod", "pods", d, "default", []));
+    await waitFor(() => expect(mockState.emitRows).not.toBeNull());
+    act(() => mockState.emitRows!([{ name: "a" }, { name: "b" }]));
+    expect(result.current.rows[0]).toMatchObject({ name: "a" }); // rows are on screen at once
+    await waitFor(() => expect(result.current.rows[0]).toMatchObject({ name: "a", cpu: 12 }));
+    expect(result.current.rows[1]).not.toHaveProperty("cpu");
+  });
+
+  it("lists the pods anyway when there is no metrics-server", async () => {
+    const enrich = vi.fn().mockRejectedValue(new Error("metrics API not available"));
+    const d = { ...watched, enrich, enrichMs: 10000 } as const;
+    const { result } = renderHook(() => useResourceList("prod", "pods", d, "default", []));
+    await waitFor(() => expect(mockState.emitRows).not.toBeNull());
+    act(() => mockState.emitRows!([{ name: "a" }]));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.error).toBeUndefined();
+  });
 });

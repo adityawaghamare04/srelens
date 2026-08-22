@@ -13,6 +13,7 @@ export interface ResourceList<Row> {
 }
 
 const POLL_MS = 5000;
+const ENRICH_MS = 10000;
 const CACHE_LIMIT = 40;
 
 // Memory-only, view-keyed row cache. Capped at CACHE_LIMIT entries, evicting
@@ -50,6 +51,19 @@ function deriveStatus(rows: unknown[], error: string | undefined, loading: boole
 }
 
 /**
+ * Merges `metrics` into `rows` by name, at render — never in state. A row
+ * with no entry in `metrics` is returned untouched (same reference), so a
+ * kind with no `enrich` (the vast majority) pays nothing for this.
+ */
+function mergeMetrics<Row extends ListRow>(rows: Row[], metrics: Map<string, Partial<Row>> | undefined): Row[] {
+  if (!metrics || metrics.size === 0) return rows;
+  return rows.map((row) => {
+    const extra = metrics.get(row.name);
+    return extra ? { ...row, ...extra } : row;
+  });
+}
+
+/**
  * The data engine for a resource-list screen: watch vs poll, a view-keyed row
  * cache, and cancellation, with no knowledge of columns or layout. Follows
  * the generation-counter pattern from useResource — a result that arrives
@@ -73,13 +87,39 @@ export function useResourceList<Row extends ListRow>(
     return { rows: cached ?? [], error: undefined, loading: cached === undefined, watch: "live" };
   });
 
+  // Held apart from `state`: enrichment (pod/node metrics) runs on its own
+  // cadence and must never gate or fail the list itself. Merged into the
+  // returned rows at render time, in `mergeMetrics` below.
+  const [metrics, setMetrics] = useState<Map<string, Partial<Row>> | undefined>(undefined);
+
   useEffect(() => {
     const mine = ++gen.current;
     const cached = cacheGet(key);
     setState({ rows: cached ?? [], error: undefined, loading: cached === undefined, watch: "live" });
+    setMetrics(undefined);
 
     if (!descriptor) {
       return;
+    }
+
+    let enrichInterval: ReturnType<typeof setInterval> | undefined;
+    if (descriptor.enrich) {
+      const enrich = descriptor.enrich;
+      const runEnrich = () => {
+        enrich(context, namespace).then(
+          (result) => {
+            if (gen.current !== mine) return;
+            setMetrics(result);
+          },
+          (e: unknown) => {
+            // Best-effort: a cluster with no metrics-server must still list
+            // its rows. Swallowed here, not surfaced as `error`.
+            console.error(e);
+          },
+        );
+      };
+      runEnrich();
+      enrichInterval = setInterval(runEnrich, descriptor.enrichMs ?? ENRICH_MS);
     }
 
     if (descriptor.source === "watch") {
@@ -127,6 +167,7 @@ export function useResourceList<Row extends ListRow>(
         if (gen.current === mine) gen.current++;
         stopped = true;
         handle?.stop();
+        if (enrichInterval) clearInterval(enrichInterval);
       };
     }
 
@@ -157,12 +198,13 @@ export function useResourceList<Row extends ListRow>(
     return () => {
       if (gen.current === mine) gen.current++;
       clearInterval(interval);
+      if (enrichInterval) clearInterval(enrichInterval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context, namespace, kind, descriptor, tick, files.join(",")]);
 
   return {
-    rows: state.rows as Row[],
+    rows: mergeMetrics(state.rows as Row[], metrics),
     status: deriveStatus(state.rows, state.error, state.loading),
     error: state.error,
     watch: state.watch,
