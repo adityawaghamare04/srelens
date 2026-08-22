@@ -8,8 +8,6 @@ import { podsForPvc, formatStorageSize } from "@srelens/core";
 import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from "@srelens/core";
 import { updateConfigData } from "@srelens/core";
 import { ageFromTimestamp, durationBetween, absoluteTimestamp, timestampWithAge } from "@srelens/core";
-// Re-exported: HelmReleasesView still imports these two from this module.
-export { ageFromTimestamp, absoluteTimestamp };
 import { useAccess, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
 import { describeError } from "@srelens/core";
 import {
