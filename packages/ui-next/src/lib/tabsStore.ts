@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { TableSort } from "@srelens/ui-kit";
 import { CLOSED_CAP, defaultState, makeTab, newId, type Tab, type TabsState, type Workspace } from "./tabs";
 
 /**
@@ -15,17 +16,32 @@ import { CLOSED_CAP, defaultState, makeTab, newId, type Tab, type TabsState, typ
  * nothing, and `emit` skips an unchanged state, so a no-op never wakes a
  * subscriber — which matters because one of those subscribers writes a file.
  */
-let state: TabsState = defaultState([]);
+/**
+ * Built on first read rather than while this module is evaluating.
+ *
+ * `defaultState` calls `describe`, which lives in `lib/routes` — the same
+ * module that holds the table of screens, and screens read their state back
+ * out of this store. A call made from the module body runs in the middle of
+ * that cycle, when whichever module happened to load first has not yet
+ * assigned its imports, and it took half the package down with it. Deferring
+ * it by one call is enough: nothing asks for the state until something
+ * renders, by which time every module has finished loading.
+ */
+let _state: TabsState | null = null;
 const listeners = new Set<() => void>();
 
+function cur(): TabsState {
+  return (_state ??= defaultState([]));
+}
+
 function emit(next: TabsState) {
-  if (next === state) return;
-  state = next;
+  if (next === cur()) return;
+  _state = next;
   for (const l of listeners) l();
 }
 
 export function getState(): TabsState {
-  return state;
+  return cur();
 }
 
 /** Replace the whole state — for boot and for tests. */
@@ -41,6 +57,7 @@ export function subscribe(listener: () => void): () => void {
 }
 
 export function currentWorkspace(): Workspace {
+  const state = cur();
   return state.workspaces.find((w) => w.id === state.currentId) ?? state.workspaces[0];
 }
 
@@ -63,6 +80,7 @@ export function activeRoute(): string {
 }
 
 function patchWorkspace(id: string, patch: (w: Workspace) => Workspace) {
+  const state = cur();
   const at = state.workspaces.findIndex((w) => w.id === id);
   if (at < 0) return;
   const next = patch(state.workspaces[at]);
@@ -74,7 +92,7 @@ function patchWorkspace(id: string, patch: (w: Workspace) => Workspace) {
 }
 
 function patchCurrent(patch: (w: Workspace) => Workspace) {
-  patchWorkspace(state.currentId, patch);
+  patchWorkspace(cur().currentId, patch);
 }
 
 function remember(w: Workspace, dropped: Tab[]): Tab[] {
@@ -215,6 +233,7 @@ export function selectIndex(n: number): void {
 }
 
 export function switchWorkspace(id: string): void {
+  const state = cur();
   if (id === state.currentId || !state.workspaces.some((w) => w.id === id)) return;
   emit({ ...state, currentId: id });
 }
@@ -223,7 +242,7 @@ export function createWorkspace(name: string, clusters: string[]): string {
   const home = makeTab("/");
   const w: Workspace = { id: newId(), name, clusters, tabs: [home], activeId: home.id, closed: [] };
   if (clusters[0]) w.activeCluster = clusters[0];
-  emit({ workspaces: [...state.workspaces, w], currentId: w.id });
+  emit({ workspaces: [...cur().workspaces, w], currentId: w.id });
   return w.id;
 }
 
@@ -232,6 +251,7 @@ export function renameWorkspace(id: string, name: string): void {
 }
 
 export function removeWorkspace(id: string): void {
+  const state = cur();
   if (state.workspaces.length <= 1) return;
   const at = state.workspaces.findIndex((w) => w.id === id);
   if (at < 0) return;
@@ -254,6 +274,39 @@ export function setWorkspaceClusters(id: string, clusters: string[]): void {
     else delete next.activeCluster;
     return next;
   });
+}
+
+const EMPTY_VIEW: NonNullable<Tab["view"]> = {};
+
+function sortEqual(a: TableSort | null | undefined, b: TableSort | null | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.key === b.key && a.direction === b.direction;
+}
+
+/**
+ * A resource list's sort, filter string and active filter column, merged
+ * into whatever the tab already has. Guarded like every other action here:
+ * one subscriber writes a file, so patching a view with values it already
+ * holds must not emit.
+ */
+export function setTabView(tabId: string, patch: Partial<NonNullable<Tab["view"]>>): void {
+  patchCurrent((w) => {
+    const at = w.tabs.findIndex((t) => t.id === tabId);
+    if (at < 0) return w;
+    const current = w.tabs[at].view ?? EMPTY_VIEW;
+    const next: NonNullable<Tab["view"]> = { ...current, ...patch };
+    if (sortEqual(current.sort, next.sort) && current.filter === next.filter && current.filterKey === next.filterKey) {
+      return w;
+    }
+    const tabs = w.tabs.map((t, i) => (i === at ? { ...t, view: next } : t));
+    return { ...w, tabs };
+  });
+}
+
+export function useTabView(tabId: string): NonNullable<Tab["view"]> {
+  const getView = () => currentWorkspace().tabs.find((t) => t.id === tabId)?.view ?? EMPTY_VIEW;
+  return useSyncExternalStore(subscribe, getView, getView);
 }
 
 /**

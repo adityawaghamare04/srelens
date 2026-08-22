@@ -1,5 +1,14 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import { cx } from "./cx";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { EmptyState } from "./EmptyState";
 
 
@@ -76,8 +85,24 @@ export interface Column<T> {
    *  ages, where "1y" must outrank "300d") while filtering stays on the
    *  visible text. */
   getSortValue?: (row: T) => unknown;
+  /** Whether clicking the header sorts this column; defaults to true. Every
+   *  sortable column stays clickable regardless of which one is the active
+   *  sort — this only gates the header button existing at all. */
   sortable?: boolean;
+  /** Dual role with opposite defaults:
+   *  (1) Opt-in for the header filter funnel button: `filterable === true` shows
+   *      a funnel that scopes the toolbar search to this column alone.
+   *  (2) Opt-out for filterTableData's free-text search scope: `filterable !== false`
+   *      includes this column in the default search-all-columns path (when no
+   *      funnel is active). An undefined column still searches; only explicit
+   *      `filterable: false` excludes it entirely from searches.
+   *  Most columns don't need a funnel; off by default for that reason. */
   filterable?: boolean;
+  /** Header and cell alignment. Logical values, not "left"/"right": the table
+   *  renders in right-to-left locales eventually, where `end` does the right
+   *  thing and `right` would not. Defaults to `start` — set `end` for numeric
+   *  columns (READY, RESTARTS, CPU, MEMORY, AGE) so their digits line up. */
+  align?: "start" | "end";
   minWidth?: number;
 }
 
@@ -109,6 +134,20 @@ export interface TableProps<T> {
    *  survive a switch, #254); omit them and the table keeps its own. */
   sort?: TableSort | null;
   onSortChange?: (sort: TableSort | null) => void;
+  /**
+   * The "open this properly" gesture — double-click, or Enter on the focused
+   * row. Not `onDoubleClick`: a pointer-only route to opening a row is the
+   * fault this kit refuses everywhere else, so the keyboard half is part of
+   * the prop rather than the caller's problem.
+   */
+  onRowActivate?: (row: T) => void;
+  /**
+   * The row's context menu. The kit owns the `<tr>`, so the kit owns the menu
+   * wrapped around it; a caller cannot reach between the table and its rows.
+   */
+  rowMenu?: (row: T) => ContextMenuItem[];
+  /** Names each row's menu for assistive technology, e.g. "Pod actions". */
+  rowMenuLabel?: string;
 }
 
 /** Width of the leading bulk-selection column; mirrored in styles.css. */
@@ -178,12 +217,21 @@ export function Table<T>({
   onActiveFilterKeyChange,
   sort: controlledSort,
   onSortChange,
+  onRowActivate,
+  rowMenu,
+  rowMenuLabel,
 }: TableProps<T>) {
   // Controlled when a change handler is supplied, otherwise self-managed —
   // tables outside the tabbed workspace (the MCP audit list, for instance)
   // have no tab to store a sort on.
   const [internalSort, setInternalSort] = useState<TableSort | null>(null);
   const sort = onSortChange ? (controlledSort ?? null) : internalSort;
+  // One tab stop for the table, moved by the arrows: the WAI-ARIA grid
+  // pattern. A stop per row would put hundreds of them between the filter bar
+  // and whatever follows the table.
+  const interactive = Boolean(onRowActivate || rowMenu);
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
+  const [focusKey, setFocusKey] = useState<string | null>(null);
   // Anchor for shift-click range selection (a key in sorted/visible order).
   const selectionAnchor = useRef<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -382,6 +430,34 @@ export function Table<T>({
   const topPad = virtualize ? range.start * metrics.rowHeight : 0;
   const bottomPad = virtualize ? (visibleData.length - range.end) * metrics.rowHeight : 0;
 
+  // The stop prefers the focused/selected row, but only when that row is
+  // actually rendered — a selected row scrolled out of the virtualised window
+  // must not strand the table with zero tab stops. Falls back to the first
+  // rendered row, so there is always exactly one stop whenever there is a row
+  // to hold it.
+  const windowKeys = windowRows.map(getRowKey);
+  const preferredKey = focusKey ?? selectedKey ?? null;
+  const stopKey =
+    preferredKey && windowKeys.includes(preferredKey) ? preferredKey : (windowKeys[0] ?? null);
+
+  function onRowKeyDown(event: ReactKeyboardEvent<HTMLTableRowElement>, row: T) {
+    if (event.key === "Enter" && onRowActivate) {
+      event.preventDefault();
+      onRowActivate(row);
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const keys = windowKeys;
+    const index = keys.indexOf(getRowKey(row));
+    if (index < 0) return;
+    const next = event.key === "ArrowDown" ? index + 1 : index - 1;
+    if (next < 0 || next >= keys.length) return;
+    // Otherwise the table scrolls under the focus it just moved.
+    event.preventDefault();
+    setFocusKey(keys[next]);
+    rowRefs.current.get(keys[next])?.focus();
+  }
+
   const isEmpty = data.length === 0;
 
   // Pin the natural column widths once the table has rows to measure.
@@ -463,26 +539,39 @@ export function Table<T>({
             </th>
           )}
           {columns.map((c) => (
-            <th key={c.key} >
+            <th key={c.key} data-align={c.align === "end" ? "end" : undefined}>
               <div className="th-head">
                 <button
                   type="button"
-                  className="th-sort"
+                  className="th-sort group"
                   onClick={() => cycleSort(c.key)}
                   disabled={c.sortable === false}
                   aria-label={`Sort by ${typeof c.header === "string" ? c.header : c.key}`}
+                  data-on={c.sortable !== false && sort?.key === c.key}
                 >
                   <span>{c.header}</span>
-                  {c.sortable !== false &&
-                    (sort?.key !== c.key ? (
-                      <ArrowUpDown />
-                    ) : sort.direction === "asc" ? (
-                      <ArrowUp />
+                  {c.sortable !== false && (
+                    sort?.key === c.key ? (
+                      <span className="th-caret">
+                        {sort.direction === "asc" ? <ArrowUp /> : <ArrowDown />}
+                      </span>
                     ) : (
-                      <ArrowDown />
-                    ))}
+                      // Hidden at rest — the design shows a caret only on the
+                      // active sort column — but revealed on hover/keyboard
+                      // focus so the button stays discoverable without it.
+                      // Reveal is driven by Tailwind utilities (group-hover:opacity-100,
+                      // group-focus-visible:opacity-100) that beat the .th-caret component
+                      // layer rule (opacity: 0) because Tailwind's utilities layer is
+                      // declared after kit.css's @layer components. If .th-caret ever
+                      // leaves the component layer or gains !important, this reveal breaks
+                      // silently — the affordance disappears for keyboard and pointer users.
+                      <span className="th-caret opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100">
+                        <ArrowUpDown />
+                      </span>
+                    )
+                  )}
                 </button>
-                {c.filterable !== false && onActiveFilterKeyChange && (
+                {c.filterable === true && onActiveFilterKeyChange && (
                   <button
                     type="button"
                     className={cx("th-filter", activeFilterKey === c.key && "is-active")}
@@ -519,13 +608,21 @@ export function Table<T>({
           const rowKey = getRowKey(row);
           const selected = selectedKey === rowKey;
           const checked = selection?.selected.has(rowKey) ?? false;
-          return (
+          const body = (
             <tr
               key={rowKey}
+              ref={(node) => {
+                if (node) rowRefs.current.set(rowKey, node);
+                else rowRefs.current.delete(rowKey);
+              }}
               aria-selected={selected}
               data-state={selected || checked ? "selected" : undefined}
+              tabIndex={interactive ? (rowKey === stopKey ? 0 : -1) : undefined}
+              onFocus={interactive ? () => setFocusKey(rowKey) : undefined}
+              onKeyDown={interactive ? (e) => onRowKeyDown(e, row) : undefined}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
-              className={cx("tbl-row", onRowClick && "cursor-pointer")}
+              onDoubleClick={onRowActivate ? () => onRowActivate(row) : undefined}
+              className={cx("tbl-row", (onRowClick || interactive) && "cursor-pointer")}
             >
               {selection && (
                 <td
@@ -542,11 +639,18 @@ export function Table<T>({
                 </td>
               )}
               {columns.map((c) => (
-                <td key={c.key} >
+                <td key={c.key} data-align={c.align === "end" ? "end" : undefined}>
                   {c.render ? c.render(row) : String((row as Record<string, unknown>)[c.key])}
                 </td>
               ))}
             </tr>
+          );
+          return rowMenu ? (
+            <ContextMenu key={rowKey} items={rowMenu(row)} label={rowMenuLabel}>
+              {body}
+            </ContextMenu>
+          ) : (
+            body
           );
         })}
         {bottomPad > 0 && (

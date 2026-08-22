@@ -3,6 +3,8 @@ import { describe as suite, it, expect } from "vitest";
 import { describe, isBuiltInKind, screenFor } from "./routes";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
+import { Resources } from "../screens/Resources";
+import { Workloads } from "../screens/Workloads";
 
 suite("isBuiltInKind", () => {
   it("recognises a built-in list kind by its slug", () => {
@@ -54,6 +56,25 @@ suite("describe", () => {
     expect(describe("/resources/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
   });
 
+  it("titles the row menu's logs/shell/forward tabs distinctly from the bare resource tab and from each other", () => {
+    // Same prefix as the bare resource route, so without a distinct title and
+    // kind for each suffix, opening a pod three ways (Open in new tab, Follow
+    // logs, Open shell) produced three indistinguishable tabs in the strip.
+    expect(describe("/resources/web-1/logs", "c")).toMatchObject({ title: "web-1 · logs", kind: "logs", sub: "c" });
+    expect(describe("/resources/web-1/shell", "c")).toMatchObject({
+      title: "web-1 · shell",
+      kind: "terminal",
+      sub: "c",
+    });
+    expect(describe("/resources/web-1/forward", "c")).toMatchObject({
+      title: "web-1 · forward",
+      kind: "forwards",
+      sub: "c",
+    });
+    // The bare route is unaffected — same title and kind as before.
+    expect(describe("/resources/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
+  });
+
   it("names an edit tab after what it edits", () => {
     expect(describe("/edit/web-1", "c")).toMatchObject({ title: "Edit web-1", kind: "edit" });
   });
@@ -75,8 +96,30 @@ suite("screenFor", () => {
     expect(screenFor("/notes")).toBe(ReleaseNotes);
   });
 
+  it("resolves the tab strip's default cluster route to the Workloads union", () => {
+    expect(screenFor("/resources")).toBe(Workloads);
+  });
+
   it("gives a route with no screen a placeholder", () => {
-    for (const route of ["/", "/k/pods", "/settings"]) {
+    for (const route of ["/", "/settings"]) {
+      expect(screenFor(route), route).toBeNull();
+    }
+  });
+
+  it("resolves a built-in kind's list route", () => {
+    expect(screenFor("/k/pods")).toBe(Resources);
+  });
+
+  it("resolves a custom resource's list route", () => {
+    // One screen answers every `/k/` route, so a slug nobody enumerated —
+    // a CRD this cluster happens to have — reaches the same one.
+    expect(screenFor("/k/widgets.example.com")).toBe(Resources);
+  });
+
+  it("still refuses a route with no screen", () => {
+    // `/k/` on its own names no kind, so it is not a route: a prefix that
+    // matched itself would render the list screen with an empty slug.
+    for (const route of ["/topology", "/k/", "constructor"]) {
       expect(screenFor(route), route).toBeNull();
     }
   });

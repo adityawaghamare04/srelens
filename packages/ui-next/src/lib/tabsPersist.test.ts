@@ -115,6 +115,71 @@ describe("parseStoredState", () => {
     expect(parseStoredState(raw)?.workspaces[0].activeCluster).toBeUndefined();
   });
 
+  it("keeps a tab's sort through a save and a load", () => {
+    const s = valid();
+    s.workspaces[0].tabs[1].view = { sort: { key: "restarts", direction: "desc" }, filter: "crash", filterKey: "status" };
+    const storage = memory();
+    saveTabsState(s, storage);
+    const parsed = parseStoredState(storage.getItem(STORAGE_KEY));
+    expect(parsed!.workspaces[0].tabs[1].view).toEqual({
+      sort: { key: "restarts", direction: "desc" },
+      filter: "crash",
+      filterKey: "status",
+    });
+  });
+
+  it("accepts a stored tab written before this field existed", () => {
+    const doc = {
+      version: 1,
+      currentId: "w",
+      workspaces: [{
+        id: "w", name: "N", clusters: [], activeId: "t1", closed: [],
+        tabs: [{ id: "t1", route: "/k/pods", title: "Pods", kind: "workloads" }],
+      }],
+    };
+    const parsed = parseStoredState(JSON.stringify(doc));
+    expect(parsed!.workspaces[0].tabs[0].view).toBeUndefined();
+  });
+
+  it("drops a view that is not the shape this build reads, keeping the tab", () => {
+    const doc = {
+      version: 1,
+      currentId: "w",
+      workspaces: [{
+        id: "w", name: "N", clusters: [], activeId: "t1", closed: [],
+        tabs: [{ id: "t1", route: "/k/pods", title: "Pods", kind: "workloads", view: "sorted-by-name" }],
+      }],
+    };
+    const parsed = parseStoredState(JSON.stringify(doc));
+    expect(parsed!.workspaces[0].tabs[0].view).toBeUndefined();
+    expect(parsed!.workspaces[0].tabs[0].route).toBe("/k/pods");
+  });
+
+  it("drops a sort that is not the shape this build reads, keeping the rest of the view", () => {
+    const doc = {
+      version: 1,
+      currentId: "w",
+      workspaces: [{
+        id: "w", name: "N", clusters: [], activeId: "t1", closed: [],
+        tabs: [{
+          id: "t1", route: "/k/pods", title: "Pods", kind: "workloads",
+          view: { sort: "by-name", filter: "crash" },
+        }],
+      }],
+    };
+    const parsed = parseStoredState(JSON.stringify(doc));
+    expect(parsed!.workspaces[0].tabs[0].view).toEqual({ filter: "crash" });
+  });
+
+  it("round-trips a null sort and a null filterKey", () => {
+    const s = valid();
+    s.workspaces[0].tabs[1].view = { sort: null, filterKey: null };
+    const storage = memory();
+    saveTabsState(s, storage);
+    const parsed = parseStoredState(storage.getItem(STORAGE_KEY));
+    expect(parsed!.workspaces[0].tabs[1].view).toEqual({ sort: null, filterKey: null });
+  });
+
   it("drops fields it does not know and tabs that are malformed", () => {
     const doc = {
       version: STORAGE_VERSION,

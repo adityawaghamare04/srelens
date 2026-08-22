@@ -36,6 +36,16 @@ describe("AppearanceSettingsSection", () => {
     expect(items).toContain("Release notes");
   });
 
+  it("lists the resource screens among the ported ones, so the toggle is honest", () => {
+    // This branch ported the entire resource surface: every /k/<kind> list
+    // and the Workloads view at /resources. The toggle would be dishonest
+    // without them.
+    render(<AppearanceSettingsSection />);
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toContain("Workloads");
+    expect(items).toContain("Resource lists");
+  });
+
   it("introduces the list, so the names are not a bare list under the hint", () => {
     render(<AppearanceSettingsSection />);
     expect(screen.getByText(/in the new design so far/i)).toBeDefined();

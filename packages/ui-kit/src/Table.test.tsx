@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Table, filterTableData, computeVisibleRange, type Column } from "./Table";
 
 /**
@@ -342,9 +343,16 @@ describe("Table", () => {
 
   it("selects a column for the toolbar search", () => {
     const onChange = vi.fn();
+    // filterable is opt-in (design correction, #319 follow-up): the default
+    // `columns` fixture doesn't ask for a funnel, so this test opts one in
+    // locally rather than relying on what used to be the default.
+    const filterableColumns: Column<Row>[] = [
+      columns[0],
+      { ...columns[1], filterable: true },
+    ];
     render(
       <Table
-        columns={columns}
+        columns={filterableColumns}
         data={data}
         getRowKey={(r) => r.name}
         onActiveFilterKeyChange={onChange}
@@ -352,6 +360,92 @@ describe("Table", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Filter search by Phase" }));
     expect(onChange).toHaveBeenCalledWith("phase");
+  });
+
+  it("shows no filter funnel for a column that hasn't opted in", () => {
+    // Only `filterable: true` earns a funnel now; the old default was
+    // "shown unless explicitly false".
+    render(
+      <Table
+        columns={columns}
+        data={data}
+        getRowKey={(r) => r.name}
+        onActiveFilterKeyChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Filter search by Name" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Filter search by Phase" })).toBeNull();
+  });
+
+  it("shows a funnel only for columns that set filterable: true, even with a handler", () => {
+    const onlyNameFilterable: Column<Row>[] = [
+      { ...columns[0], filterable: true },
+      columns[1],
+    ];
+    render(
+      <Table
+        columns={onlyNameFilterable}
+        data={data}
+        getRowKey={(r) => r.name}
+        onActiveFilterKeyChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Filter search by Name" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Filter search by Phase" })).toBeNull();
+  });
+
+  it("shows no sort caret for any column at rest, but keeps every column sortable", () => {
+    // The always-visible ArrowUpDown placeholder is gone: at rest, a header's
+    // `data-on` is "false" whether or not it's sortable, and the sort button
+    // still cycles the column when clicked (sortable is unaffected).
+    render(<Table columns={columns} data={[...data].reverse()} getRowKey={(r) => r.name} />);
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+    const phaseSort = screen.getByRole("button", { name: "Sort by Phase" });
+    expect(nameSort.getAttribute("data-on")).toBe("false");
+    expect(phaseSort.getAttribute("data-on")).toBe("false");
+
+    fireEvent.click(phaseSort);
+    // Clicking a column that was never the active sort still sorts it —
+    // only the resting indicator changed, not sortability.
+    expect(screen.getAllByRole("row")[1].textContent).toContain("Pending");
+    expect(phaseSort.getAttribute("data-on")).toBe("true");
+    expect(nameSort.getAttribute("data-on")).toBe("false");
+  });
+
+  it("marks only the active sort column with data-on, and flips it as sort cycles", () => {
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+
+    fireEvent.click(nameSort); // asc
+    expect(nameSort.getAttribute("data-on")).toBe("true");
+    fireEvent.click(nameSort); // desc
+    expect(nameSort.getAttribute("data-on")).toBe("true");
+    fireEvent.click(nameSort); // cleared
+    expect(nameSort.getAttribute("data-on")).toBe("false");
+  });
+
+  it("gives a non-active sortable column's indicator a hover/focus reveal, hidden at rest", () => {
+    // jsdom applies no real stylesheet, so the resting/reveal behaviour is
+    // asserted through the utility classes that drive it (the same proxy the
+    // #298 pinned-width tests use for `.tbl-resized`) rather than computed style.
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+    const caret = nameSort.querySelector(".th-caret");
+    expect(caret).not.toBeNull();
+    expect(caret?.className).toContain("opacity-0");
+    expect(caret?.className).toContain("group-hover:opacity-100");
+    expect(caret?.className).toContain("group-focus-visible:opacity-100");
+    // The button itself is the hover/focus group the caret reacts to.
+    expect(nameSort.className.split(/\s+/)).toContain("group");
+  });
+
+  it("does not hide the active sort column's indicator behind the hover/focus reveal", () => {
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Name" }));
+    const nameSort = screen.getByRole("button", { name: "Sort by Name" });
+    const caret = nameSort.querySelector(".th-caret");
+    expect(caret).not.toBeNull();
+    expect(caret?.className).not.toContain("opacity-0");
   });
 
   it("filters globally or by the selected column", () => {
@@ -372,6 +466,52 @@ describe("Table", () => {
     // automatic layout, which no table uses any more.
     fireEvent.doubleClick(handle);
     expect(header?.closest("table")?.style.width).toBe("240px");
+  });
+
+  it("right-aligns an end-aligned column's header and cells (design correction)", () => {
+    // jsdom applies no stylesheet, so the driving attribute is asserted rather
+    // than a computed style: `data-align="end"` is what `kit.css` hangs both
+    // `text-align: end` and the header's `justify-content: flex-end` off of.
+    const rows = [{ name: "web-1", restarts: 3 }];
+    const alignedColumns: Column<(typeof rows)[number]>[] = [
+      { key: "name", header: "Name" },
+      { key: "restarts", header: "Restarts", align: "end" },
+    ];
+    render(<Table columns={alignedColumns} data={rows} getRowKey={(r) => r.name} />);
+
+    const th = screen.getByText("Restarts").closest("th");
+    expect(th?.getAttribute("data-align")).toBe("end");
+
+    const td = screen.getByText("3").closest("td");
+    expect(td?.getAttribute("data-align")).toBe("end");
+  });
+
+  it("leaves a column start-aligned when `align` is unset", () => {
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    const th = screen.getByText("Name").closest("th");
+    expect(th?.hasAttribute("data-align")).toBe(false);
+    const td = screen.getByText("web-1").closest("td");
+    expect(td?.hasAttribute("data-align")).toBe(false);
+  });
+
+  it("leaves the checkbox column's own centring alone even when a data column is end-aligned", () => {
+    const rows = [{ name: "web-1", restarts: 3 }];
+    const alignedColumns: Column<(typeof rows)[number]>[] = [
+      { key: "name", header: "Name" },
+      { key: "restarts", header: "Restarts", align: "end" },
+    ];
+    const onChange = vi.fn();
+    render(
+      <Table
+        columns={alignedColumns}
+        data={rows}
+        getRowKey={(r) => r.name}
+        selection={{ selected: new Set(), onChange }}
+      />,
+    );
+    const checkboxHeader = screen.getByLabelText("Select all").closest("th");
+    expect(checkboxHeader?.className).toContain("tbl-check");
+    expect(checkboxHeader?.hasAttribute("data-align")).toBe(false);
   });
 });
 
@@ -418,5 +558,73 @@ describe("Table multi-selection", () => {
   it("header checkbox is checked when all rows are selected", () => {
     renderWithSelection(new Set(["a", "b", "c", "d"]));
     expect((screen.getByLabelText("Select all") as HTMLInputElement).checked).toBe(true);
+  });
+});
+
+describe("row gestures", () => {
+  const ROWS = [
+    { id: "a", name: "alpha" },
+    { id: "b", name: "beta" },
+    { id: "c", name: "gamma" },
+  ];
+  const COLS = [{ key: "name", header: "Name" }];
+  const table = (props: Record<string, unknown>) =>
+    render(<Table columns={COLS} data={ROWS} getRowKey={(r) => r.id} {...props} />);
+
+  it("activates a row on double-click", () => {
+    const onRowActivate = vi.fn();
+    table({ onRowActivate });
+    fireEvent.doubleClick(screen.getByText("beta").closest("tr")!);
+    expect(onRowActivate).toHaveBeenCalledWith(ROWS[1]);
+  });
+
+  it("activates the focused row on Enter, so opening a resource is not pointer-only", () => {
+    const onRowActivate = vi.fn();
+    table({ onRowActivate });
+    const row = screen.getByText("alpha").closest("tr")!;
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onRowActivate).toHaveBeenCalledWith(ROWS[0]);
+  });
+
+  it("carries one tab stop and moves it with the arrows", () => {
+    table({ onRowActivate: vi.fn() });
+    const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("tabindex"));
+    expect(rows.filter((r) => r.getAttribute("tabindex") === "0")).toHaveLength(1);
+    fireEvent.keyDown(rows[0], { key: "ArrowDown" });
+    expect(rows[1].getAttribute("tabindex")).toBe("0");
+    expect(rows[0].getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(rows[1]);
+  });
+
+  it("starts the tab stop on the selected row, not the first", () => {
+    table({ onRowActivate: vi.fn(), selectedKey: "c" });
+    expect(screen.getByText("gamma").closest("tr")!.getAttribute("tabindex")).toBe("0");
+    expect(screen.getByText("alpha").closest("tr")!.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("falls back to a rendered row when selectedKey names one that isn't rendered", () => {
+    // A selected row scrolled out of the virtualised window (stood in here by
+    // a selectedKey matching nothing in `data`) must not leave the table with
+    // zero tab stops — the stop falls back to the first rendered row instead.
+    table({ onRowActivate: vi.fn(), selectedKey: "not-a-real-row" });
+    const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("tabindex"));
+    expect(rows.filter((r) => r.getAttribute("tabindex") === "0")).toHaveLength(1);
+    expect(screen.getByText("alpha").closest("tr")!.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("leaves rows unfocusable when neither gesture is supplied", () => {
+    table({ onRowClick: vi.fn() });
+    // No jest-dom in this package: `hasAttribute` is the vanilla equivalent
+    // of `.not.toHaveAttribute("tabindex")`.
+    expect(screen.getByText("alpha").closest("tr")!.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("opens a per-row menu on right-click, built from that row", async () => {
+    const onPick = vi.fn();
+    table({ rowMenu: (r: { name: string }) => [{ label: `Delete ${r.name}`, onPick }] });
+    fireEvent.contextMenu(screen.getByText("beta").closest("tr")!);
+    await userEvent.click(await screen.findByText("Delete beta"));
+    expect(onPick).toHaveBeenCalled();
   });
 });

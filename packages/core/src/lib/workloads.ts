@@ -8,6 +8,10 @@ export interface PodSummary {
   restarts: number;
   node: string;
   age: string;
+  /** Container image(s) the pod runs; multiple containers are comma-joined,
+   *  e.g. "acme/checkout-api:118a7e, envoyproxy/envoy:v1.30". Empty when the
+   *  pod has no containers. */
+  image: string;
 }
 
 export interface NamespacesOutcome {

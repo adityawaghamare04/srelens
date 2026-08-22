@@ -146,7 +146,13 @@ export function Gallery() {
   const [refresh, setRefresh] = useState("30");
   const [live, setLive] = useState(true);
   const [scope, setScope] = useState("kube-system");
-  const [sort, setSort] = useState<import("../Table").TableSort | null>(null);
+  // Sorted by default so the design's active-sort caret (only column shown, no
+  // funnel) is visible without a click.
+  const [sort, setSort] = useState<import("../Table").TableSort | null>({
+    key: "name",
+    direction: "asc",
+  });
+  const [tableFilterKey, setTableFilterKey] = useState<string | null>(null);
   const [picked2, setPicked2] = useState<Set<string>>(new Set());
   const [picked, setPicked] = useState<string[]>([]);
   const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(new Set(["age"]));
@@ -600,15 +606,20 @@ export function Gallery() {
       </section>
       <section>
         <h2>Table</h2>
-        {/* The states worth seeing: a sortable column, a filterable one, bulk
-            selection, and a row that is clickable. Virtualisation only engages
-            past a threshold, so a gallery-sized list renders whole. */}
+        {/* The states worth seeing: an active sort (only that column gets a
+            caret — the design correction this table exists to show, #319
+            follow-up), a column that opted into a filter funnel, bulk
+            selection, and a row that is clickable. Virtualisation only
+            engages past a threshold, so a gallery-sized list renders whole.
+            Restarts is end-aligned — the design correction that right-aligns
+            every numeric column (READY, RESTARTS, CPU, MEMORY, AGE) so their
+            digits line up down the column. */}
         <Table
           columns={
             [
               { key: "name", header: "Name", sortable: true, filterable: true },
               { key: "phase", header: "Phase", sortable: true },
-              { key: "restarts", header: "Restarts", sortable: true },
+              { key: "restarts", header: "Restarts", sortable: true, align: "end" },
             ] as Column<{ name: string; phase: string; restarts: number }>[]
           }
           data={[
@@ -619,11 +630,14 @@ export function Gallery() {
           getRowKey={(r) => r.name}
           sort={sort}
           onSortChange={setSort}
+          activeFilterKey={tableFilterKey}
+          onActiveFilterKeyChange={setTableFilterKey}
           selection={{ selected: picked2, onChange: setPicked2 }}
           onRowClick={() => {}}
         />
         <p className="text-[0.75rem] text-muted">
-          sorted: {sort ? `${sort.key} ${sort.direction}` : "(unsorted)"} · selected:{" "}
+          sorted: {sort ? `${sort.key} ${sort.direction}` : "(unsorted)"} · filter:{" "}
+          {tableFilterKey ?? "(all columns)"} · selected:{" "}
           {picked2.size === 0 ? "(none)" : [...picked2].join(", ")}
         </p>
         {/* Empty is a state, not an absence: it says what would be here. */}
@@ -633,6 +647,31 @@ export function Gallery() {
           getRowKey={(r) => r.name}
           emptyText="No pods"
           emptyHint="Nothing is scheduled in this namespace."
+        />
+        {/* The row gestures a resource list needs: double-click or Enter on
+            the focused row opens it, right-click (or Shift+F10) opens a menu
+            built from that row. One tab stop for the table; the arrows move
+            it. */}
+        <Table
+          columns={
+            [
+              { key: "name", header: "Name", sortable: true, filterable: true },
+              { key: "phase", header: "Phase", sortable: true },
+            ] as Column<{ name: string; phase: string }>[]
+          }
+          data={[
+            { name: "web-1", phase: "Running" },
+            { name: "web-2", phase: "Pending" },
+            { name: "api-0", phase: "CrashLoopBackOff" },
+          ]}
+          getRowKey={(r) => r.name}
+          onRowActivate={(row) => alert(`open ${row.name}`)}
+          rowMenu={(row) => [
+            { label: "Open logs", icon: DotIcon, onPick: () => alert(`logs for ${row.name}`) },
+            { kind: "sep" },
+            { label: "Delete pod", danger: true, onPick: () => alert(`delete ${row.name}`) },
+          ]}
+          rowMenuLabel="Pod actions"
         />
       </section>
       <section>

@@ -45,6 +45,10 @@ describe("makeTab", () => {
   it("pins the home route", () => {
     expect(makeTab("/").pinned).toBe(true);
   });
+
+  it("has no view until the user sorts or filters it", () => {
+    expect(makeTab("/k/pods").view).toBeUndefined();
+  });
 });
 
 describe("defaultState", () => {

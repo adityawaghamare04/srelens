@@ -2,6 +2,8 @@ import type { ComponentType } from "react";
 import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
+import { Resources } from "../screens/Resources";
+import { Workloads } from "../screens/Workloads";
 
 /**
  * What a tab is about, for the strip's icon and for the context menu. The
@@ -73,7 +75,17 @@ const CLUSTER_SCOPED: Record<string, Omit<RouteInfo, "route" | "sub">> =
 export function describe(route: string, clusterName?: string): RouteInfo {
   const sub = clusterName || undefined;
   if (route.startsWith("/resources/")) {
-    return { route, title: decodeURIComponent(route.split("/")[2] ?? ""), sub, kind: "resource" };
+    const [, , rawName, suffix] = route.split("/");
+    const name = decodeURIComponent(rawName ?? "");
+    // The row menu (`ResourceMenu.tsx`) mints `/resources/<name>/logs|shell|forward`
+    // alongside the bare `/resources/<name>` — same prefix, so without this a
+    // pod opened three ways ("Open in new tab", "Follow logs", "Open shell")
+    // got three tabs with the identical title and kind, indistinguishable in
+    // the strip.
+    if (suffix === "logs") return { route, title: `${name} · logs`, sub, kind: "logs" };
+    if (suffix === "shell") return { route, title: `${name} · shell`, sub, kind: "terminal" };
+    if (suffix === "forward") return { route, title: `${name} · forward`, sub, kind: "forwards" };
+    return { route, title: name, sub, kind: "resource" };
   }
   if (route.startsWith("/edit/")) {
     return { route, title: `Edit ${decodeURIComponent(route.split("/")[2] ?? "")}`, sub, kind: "edit" };
@@ -99,11 +111,27 @@ export type ScreenComponent = ComponentType<{ route: string }>;
 const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(null), {
   "/applog": AppLog,
   "/notes": ReleaseNotes,
+  "/resources": Workloads,
 });
+
+/**
+ * Routes matched by prefix rather than by name, in order. Kept beside the
+ * exact table rather than folded into it: a prefix table is a different kind of
+ * claim — "everything under here" — and reading it as a list makes the reach of
+ * each entry obvious. One screen answers all 34 built-in kinds and every CRD a
+ * cluster has, so enumerating them here would be a second list to keep in step
+ * with the sidebar's.
+ */
+const PREFIXED: ReadonlyArray<[string, ScreenComponent]> = [["/k/", Resources]];
 
 export function screenFor(route: string): ScreenComponent | null {
   // `hasOwnProperty.call` as well as the null prototype: the table is the one
   // thing standing between an arbitrary route string and something rendered as
   // a component, and it costs nothing to say so twice.
-  return Object.prototype.hasOwnProperty.call(SCREENS, route) ? SCREENS[route] : null;
+  if (Object.prototype.hasOwnProperty.call(SCREENS, route)) return SCREENS[route];
+  for (const [prefix, screen] of PREFIXED) {
+    // A bare prefix names no resource; `/k/` is not a route.
+    if (route.startsWith(prefix) && route.length > prefix.length) return screen;
+  }
+  return null;
 }

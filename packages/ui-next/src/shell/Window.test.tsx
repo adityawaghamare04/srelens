@@ -18,6 +18,7 @@ const {
   subscribeForwards,
   isApplePlatform,
   isTauri,
+  loadKubeconfigFiles,
   zoomSpy,
   createWorkspaceSpy,
   switchWorkspaceSpy,
@@ -33,6 +34,7 @@ const {
   subscribeForwards: vi.fn(() => () => {}),
   isApplePlatform: vi.fn(() => true),
   isTauri: vi.fn(() => true),
+  loadKubeconfigFiles: vi.fn((): string[] => []),
   zoomSpy: vi.fn(),
   createWorkspaceSpy: vi.fn(),
   switchWorkspaceSpy: vi.fn(),
@@ -49,6 +51,7 @@ vi.mock("@srelens/core", async (importOriginal) => {
     subscribeForwards: (...a: Parameters<typeof subscribeForwards>) => subscribeForwards(...a),
     isApplePlatform: () => isApplePlatform(),
     isTauri: () => isTauri(),
+    loadKubeconfigFiles: () => loadKubeconfigFiles(),
   };
 });
 
@@ -94,6 +97,7 @@ import { resetProbes } from "../lib/probe";
 import { resetView } from "../lib/workspace";
 import { defaultState, makeTab } from "../lib/tabs";
 import { defaultMark, getMark, setMark, MARKS_KEY } from "../lib/marks";
+import { contextFor, resetContexts } from "../lib/clusters";
 
 const ctx = (stableId: string, name = stableId) => ({ name, stableId, cluster: name, server: "", isCurrent: false });
 
@@ -107,6 +111,7 @@ beforeEach(() => {
   subscribeForwards.mockReset().mockReturnValue(() => {});
   isApplePlatform.mockReset().mockReturnValue(true);
   isTauri.mockReset().mockReturnValue(true);
+  loadKubeconfigFiles.mockReset().mockReturnValue(["/home/u/.kube/config", "/home/u/.kube/other"]);
   zoomSpy.mockReset();
   createWorkspaceSpy.mockReset();
   switchWorkspaceSpy.mockReset();
@@ -117,6 +122,7 @@ beforeEach(() => {
   store.setState(defaultState([]));
   resetProbes();
   resetView();
+  resetContexts();
 });
 
 async function booted() {
@@ -450,5 +456,18 @@ describe("Window new workspace", () => {
     expect(createWorkspaceSpy).toHaveBeenCalledWith("Team", ["dev"]);
     expect(store.currentWorkspace().name).toBe("Team");
     expect(store.currentWorkspace().clusters).toEqual(["dev"]);
+  });
+});
+
+describe("Window contexts", () => {
+  it("fills the contexts store at boot, so a screen can resolve the active cluster", async () => {
+    listContexts.mockResolvedValue({ contexts: [ctx("prod"), ctx("dev")] });
+    await booted();
+    expect(contextFor("prod")?.name).toBe("prod");
+  });
+
+  it("passes the configured kubeconfig files to listContexts", async () => {
+    await booted();
+    expect(listContexts).toHaveBeenCalledWith(["/home/u/.kube/config", "/home/u/.kube/other"]);
   });
 });
