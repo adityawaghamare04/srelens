@@ -12,6 +12,7 @@ import {
 } from "@srelens/ui-kit";
 import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
+import { PodContainersBody, PodDetailsBody } from "./PodBody";
 
 export interface ResourceDetailProps {
   context: string;
@@ -48,18 +49,21 @@ function describeTarget(kind: string, namespace: string | null, name: string): s
 type PaneBody = (props: { object: K8sObject; context: string }) => ReactNode;
 
 /**
- * The Details pane's per-kind content — empty today. Tasks 10-13 each append
- * one entry here, keyed on `k8sKind` (e.g. `Pod: PodDetailView`), as they
- * port a family of classic's `ResourceOverview` bodies. A kind absent from
- * the table (every kind, right now) falls through to `Inspector`'s own
- * "nothing to show" state — a table for later tasks to extend, not a switch
- * for this component to grow.
+ * The Details pane's per-kind content. Tasks 10-13 each append one entry
+ * here, keyed on `k8sKind`, as they port a family of classic's
+ * `ResourceOverview` bodies. A kind absent from the table falls through to
+ * `Inspector`'s own "nothing to show" state — a table for later tasks to
+ * extend, not a switch for this component to grow.
  */
-const DETAILS_BODY: Record<string, PaneBody> = {};
+const DETAILS_BODY: Record<string, PaneBody> = {
+  Pod: PodDetailsBody,
+};
 
 /** Same seam, for the Containers pane a kind's descriptor opts into via
- *  `panes.containers` (Task 10, for Pod). */
-const CONTAINERS_BODY: Record<string, PaneBody> = {};
+ *  `panes.containers` (Task 10 sets it for Pod). */
+const CONTAINERS_BODY: Record<string, PaneBody> = {
+  Pod: PodContainersBody,
+};
 
 /** Same seam, for the Metrics pane a kind's descriptor opts into via
  *  `panes.metrics`. */
