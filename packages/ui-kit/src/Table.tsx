@@ -414,9 +414,15 @@ export function Table<T>({
   const topPad = virtualize ? range.start * metrics.rowHeight : 0;
   const bottomPad = virtualize ? (visibleData.length - range.end) * metrics.rowHeight : 0;
 
-  // The stop lands on the selected row (if any), else the first rendered row —
-  // never a row outside `windowRows`, since the virtualizer may not have it.
-  const stopKey = focusKey ?? selectedKey ?? (windowRows[0] ? getRowKey(windowRows[0]) : null);
+  // The stop prefers the focused/selected row, but only when that row is
+  // actually rendered — a selected row scrolled out of the virtualised window
+  // must not strand the table with zero tab stops. Falls back to the first
+  // rendered row, so there is always exactly one stop whenever there is a row
+  // to hold it.
+  const windowKeys = windowRows.map(getRowKey);
+  const preferredKey = focusKey ?? selectedKey ?? null;
+  const stopKey =
+    preferredKey && windowKeys.includes(preferredKey) ? preferredKey : (windowKeys[0] ?? null);
 
   function onRowKeyDown(event: ReactKeyboardEvent<HTMLTableRowElement>, row: T) {
     if (event.key === "Enter" && onRowActivate) {
@@ -425,7 +431,7 @@ export function Table<T>({
       return;
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const keys = windowRows.map(getRowKey);
+    const keys = windowKeys;
     const index = keys.indexOf(getRowKey(row));
     if (index < 0) return;
     const next = event.key === "ArrowDown" ? index + 1 : index - 1;

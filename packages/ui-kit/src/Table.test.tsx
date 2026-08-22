@@ -464,6 +464,16 @@ describe("row gestures", () => {
     expect(screen.getByText("alpha").closest("tr")!.getAttribute("tabindex")).toBe("-1");
   });
 
+  it("falls back to a rendered row when selectedKey names one that isn't rendered", () => {
+    // A selected row scrolled out of the virtualised window (stood in here by
+    // a selectedKey matching nothing in `data`) must not leave the table with
+    // zero tab stops — the stop falls back to the first rendered row instead.
+    table({ onRowActivate: vi.fn(), selectedKey: "not-a-real-row" });
+    const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("tabindex"));
+    expect(rows.filter((r) => r.getAttribute("tabindex") === "0")).toHaveLength(1);
+    expect(screen.getByText("alpha").closest("tr")!.getAttribute("tabindex")).toBe("0");
+  });
+
   it("leaves rows unfocusable when neither gesture is supplied", () => {
     table({ onRowClick: vi.fn() });
     // No jest-dom in this package: `hasAttribute` is the vanilla equivalent
