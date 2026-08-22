@@ -77,8 +77,8 @@ const CTX: ClusterContext = {
 };
 
 const PODS = [
-  { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 3, node: "n1", age: "2d" },
-  { name: "api-7", namespace: "billing", ready: "1/1", phase: "Running", restarts: 1, node: "n2", age: "5d" },
+  { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 3, node: "n1", age: "2d", image: "acme/checkout-api:118a7e" },
+  { name: "api-7", namespace: "billing", ready: "1/1", phase: "Running", restarts: 1, node: "n2", age: "5d", image: "redis:7.4-alpine" },
 ];
 
 const WIDGETS: CrdRef = {
@@ -218,8 +218,8 @@ describe("Resources", () => {
     watchResource.mockImplementation(
       async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
         onRows([
-          { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "2d" },
-          { name: "bad-1", namespace: "default", ready: "0/1", phase: "CrashLoopBackOff", restarts: 9, node: "n1", age: "2d" },
+          { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "2d", image: "acme/checkout-api:118a7e" },
+          { name: "bad-1", namespace: "default", ready: "0/1", phase: "CrashLoopBackOff", restarts: 9, node: "n1", age: "2d", image: "acme/checkout-worker:118a7e" },
         ]);
         return { stop };
       },
@@ -241,8 +241,8 @@ describe("Resources", () => {
     watchResource.mockImplementation(
       async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
         onRows([
-          { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "2d" },
-          { name: "bad-1", namespace: "default", ready: "0/1", phase: "CrashLoopBackOff", restarts: 9, node: "n1", age: "2d" },
+          { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "2d", image: "acme/checkout-api:118a7e" },
+          { name: "bad-1", namespace: "default", ready: "0/1", phase: "CrashLoopBackOff", restarts: 9, node: "n1", age: "2d", image: "acme/checkout-worker:118a7e" },
         ]);
         return { stop };
       },
@@ -534,8 +534,8 @@ describe("Resources", () => {
     watchResource.mockImplementation(
       async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
         onRows([
-          { name: "web-0", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "1d" },
-          { name: "web-0", namespace: "billing", ready: "1/1", phase: "Running", restarts: 0, node: "n2", age: "1d" },
+          { name: "web-0", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "1d", image: "acme/checkout-api:118a7e" },
+          { name: "web-0", namespace: "billing", ready: "1/1", phase: "Running", restarts: 0, node: "n2", age: "1d", image: "acme/checkout-api:118a7e" },
         ]);
         return { stop };
       },

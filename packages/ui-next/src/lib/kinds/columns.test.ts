@@ -64,7 +64,7 @@ const ALL_TYPED_SETS = [
 
 const pod = (over: Partial<PodRow> = {}): PodRow => ({
   name: "web-0", namespace: "default", phase: "Running", ready: "1/1",
-  restarts: 0, node: "node-a", age: "3d", ...over,
+  restarts: 0, node: "node-a", age: "3d", image: "acme/checkout-api:118a7e", ...over,
 });
 
 describe("pod columns", () => {
@@ -121,18 +121,46 @@ describe("pod columns", () => {
   });
 
   it("flags a pod that is not Running, and only that", () => {
-    const running = { name: "web-0", namespace: "d", phase: "Running", ready: "1/1", restarts: 0, node: "n", age: "1d" };
+    const running = { name: "web-0", namespace: "d", phase: "Running", ready: "1/1", restarts: 0, node: "n", age: "1d", image: "redis:7.4-alpine" };
     expect(podFlagged(running)).toBe(false);
     expect(podFlagged({ ...running, phase: "CrashLoopBackOff" })).toBe(true);
     expect(podFlagged({ ...running, phase: "Pending" })).toBe(true);
   });
 
   it("does not flag a Succeeded pod — phaseKind already renders it a green pill, so the dot must agree", () => {
-    const succeeded = { name: "job-abc", namespace: "d", phase: "Succeeded", ready: "0/1", restarts: 0, node: "n", age: "1d" };
+    const succeeded = { name: "job-abc", namespace: "d", phase: "Succeeded", ready: "0/1", restarts: 0, node: "n", age: "1d", image: "redis:7.4-alpine" };
     expect(podFlagged(succeeded)).toBe(false);
     const phase = podColumns.find((c) => c.key === "phase")!;
     const pill = phase.render!(succeeded) as { props: { kind: string } };
     expect(pill.props.kind).toBe("success");
+  });
+
+  it("shows the pod's container image, comma-joined for a multi-container pod", () => {
+    const image = podColumns.find((c) => c.key === "image")!;
+    expect(image.header).toBe("Image");
+    expect(image.render!(pod({ image: "acme/checkout-api:118a7e, envoyproxy/envoy:v1.30" }))).toBe(
+      "acme/checkout-api:118a7e, envoyproxy/envoy:v1.30",
+    );
+  });
+
+  it("falls back to an em dash for a pod with no containers, like the other optional text columns", () => {
+    const image = podColumns.find((c) => c.key === "image")!;
+    expect(image.render!(pod({ image: "" }))).toBe("—");
+  });
+
+  it("drops the Node column — the design does not show one for pods", () => {
+    expect(podColumns.some((c) => c.key === "node")).toBe(false);
+  });
+
+  it("keeps Image last, matching the design mock's row order", () => {
+    expect(podColumns.map((c) => c.key)).toEqual([
+      "name", "namespace", "ready", "phase", "restarts", "cpu", "memory", "age", "image",
+    ]);
+  });
+
+  it("does not mark Image sortable — a comma-joined image list has no single natural order, and the mock renders a plain header for it", () => {
+    const image = podColumns.find((c) => c.key === "image")!;
+    expect(image.sortable).toBe(false);
   });
 });
 
@@ -265,7 +293,7 @@ describe("column alignment — a count or a measurement is end-aligned, everythi
   it("never right-aligns identity, status or descriptive text — name, status, type, image and the like", () => {
     expect(podColumns.find((c) => c.key === "name")!.align).toBeUndefined();
     expect(podColumns.find((c) => c.key === "phase")!.align).toBeUndefined();
-    expect(podColumns.find((c) => c.key === "node")!.align).toBeUndefined();
+    expect(podColumns.find((c) => c.key === "image")!.align).toBeUndefined();
     expect(secretColumns.find((c) => c.key === "type")!.align).toBeUndefined();
   });
 });

@@ -132,7 +132,10 @@ export function ResourceBulk({ selected, kind, descriptor, context, rows, onDone
   return (
     <>
       {selected.size > 0 && (
-        <div className="mb-3 flex items-center gap-2">
+        // The table runs flush to the panel now (f088d92); this bar sits in
+        // the same container, so — like the stale-rows Alert next to it —
+        // it carries its own inset instead of borrowing the container's.
+        <div className="mx-3 mt-3 mb-3 flex items-center gap-2">
           <span className="text-muted text-[0.8125rem]">{selected.size} selected</span>
           <ActionBar actions={actions} label={`${kind} actions`} />
         </div>

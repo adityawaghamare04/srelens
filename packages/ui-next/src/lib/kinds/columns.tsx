@@ -104,8 +104,12 @@ export const podColumns: Column<PodRow>[] = [
   { key: "restarts", header: "Restarts", sortable: true, align: "end" },
   { key: "cpu", header: "CPU", sortable: true, align: "end", render: (p) => metric(p.cpu, formatCpu), getSortValue: (p) => metricSort(p.cpu) },
   { key: "memory", header: "Memory", sortable: true, align: "end", render: (p) => metric(p.memory, formatMemory), getSortValue: (p) => metricSort(p.memory) },
-  { key: "node", header: "Node", sortable: true },
   { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
+  // Not sortable: a comma-joined list of container images (PodSummary.image)
+  // has no single natural order, and the design mock renders a plain header
+  // for it — no SortHeader. Left filterable-unset like every other column
+  // here, so it still joins the toolbar's whole-row search.
+  { key: "image", header: "Image", sortable: false, render: (p) => p.image || "—" },
 ];
 
 /** "N/M" is short of desired when N < M — how Deployment and StatefulSet
