@@ -1,5 +1,15 @@
-import { K8S_KIND, WATCHABLE_KINDS, listResource, type ResourceKind } from "@srelens/core";
+import { K8S_KIND, WATCHABLE_KINDS, listNodes, listResource, nodeMetrics, type ResourceKind } from "@srelens/core";
 import type { Column } from "@srelens/ui-kit";
+import {
+  cronJobColumns,
+  daemonSetColumns,
+  deploymentColumns,
+  jobColumns,
+  nodeColumns,
+  podColumns,
+  statefulSetColumns,
+  type NodeRow,
+} from "./columns";
 import { genericClusterColumns, genericColumns } from "./generic";
 import type { KindDescriptor, ListRow } from "./types";
 
@@ -26,7 +36,86 @@ const isClusterScoped = (kind: string) => (CLUSTER_SCOPED as readonly string[]).
  * promises callers — the widening is confined to this table and to
  * `descriptorFor`'s per-kind casts below; nothing exported gets looser.
  */
-const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {};
+/**
+ * Merges `listNodes` with `nodeMetrics` by name. Best-effort on the metrics
+ * half: a cluster with no metrics-server (so `nodeMetrics` errors) must still
+ * list its nodes, just without CPU/memory readings — only `list.error`
+ * propagates.
+ */
+const loadNodes = async (context: string) => {
+  const [list, metrics] = await Promise.all([listNodes(context), nodeMetrics(context)]);
+  const byName = new Map((metrics.metrics ?? []).map((m) => [m.name, m]));
+  const rows: NodeRow[] = (list.nodes ?? []).map((n) => ({
+    ...n,
+    cpu: byName.get(n.name)?.cpuMillicores,
+    memory: byName.get(n.name)?.memoryMiB,
+  }));
+  return { rows, error: list.error };
+};
+
+/**
+ * The seven typed entries this task adds (workloads and nodes). Each column
+ * set is typed over its own row (`Column<PodRow>[]`, etc.), a proper subtype
+ * of `ListRow` on the data side — but `Column`'s `render`/`getSortValue`
+ * take the row contravariantly, so TypeScript can't see the assignment into
+ * `Column<ListRow>[]` is safe on its own. Same cast `descriptors.ts` already
+ * uses for the generic columns (Task 3), confined to this table: every
+ * function these typed columns hold only reads fields `ListRow` doesn't
+ * guarantee (`phase`, `cpu`, …), never a field a bare `ListRow` caller could
+ * supply instead — so a `ListRow`-typed caller cannot actually reach one.
+ */
+const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
+  pods: {
+    k8sKind: "Pod",
+    columns: podColumns as Column<ListRow>[],
+    source: "watch",
+    scope: "namespaced",
+    actions: { logs: true, shell: true, forward: true, evict: true },
+  },
+  deployments: {
+    k8sKind: "Deployment",
+    columns: deploymentColumns as Column<ListRow>[],
+    source: "watch",
+    scope: "namespaced",
+    actions: { logs: true, scale: true, restart: true },
+  },
+  statefulsets: {
+    k8sKind: "StatefulSet",
+    columns: statefulSetColumns as Column<ListRow>[],
+    source: "watch",
+    scope: "namespaced",
+    actions: { logs: true, scale: true, restart: true },
+  },
+  daemonsets: {
+    k8sKind: "DaemonSet",
+    columns: daemonSetColumns as Column<ListRow>[],
+    source: "watch",
+    scope: "namespaced",
+    actions: { logs: true, restart: true },
+  },
+  jobs: {
+    k8sKind: "Job",
+    columns: jobColumns as Column<ListRow>[],
+    source: "watch",
+    scope: "namespaced",
+    actions: { logs: true },
+  },
+  cronjobs: {
+    k8sKind: "CronJob",
+    columns: cronJobColumns as Column<ListRow>[],
+    source: "watch",
+    scope: "namespaced",
+    actions: {},
+  },
+  nodes: {
+    k8sKind: "Node",
+    columns: nodeColumns as Column<ListRow>[],
+    source: "poll",
+    scope: "cluster",
+    load: loadNodes,
+    actions: {},
+  },
+};
 
 /**
  * `overview`, `portforwards`, `helmreleases`, `settings` and friends are in
