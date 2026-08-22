@@ -195,6 +195,31 @@ describe("ResourceBulk", () => {
     expect(screen.queryByText(/some failed/i)).toBeNull();
   });
 
+  // Whole-branch review (FIX 7): the report dialog set both confirmLabel and
+  // cancelLabel to "Close" — two controls a screen reader cannot tell apart,
+  // since an accessible name is what distinguishes them, not which side of
+  // the dialog they render on.
+  it("gives the report dialog's two buttons distinct accessible names", async () => {
+    deleteResource.mockResolvedValueOnce({ error: "forbidden" }).mockResolvedValue({ ok: true });
+    render(
+      <ResourceBulk
+        selected={ALL_SELECTED}
+        kind="pods"
+        descriptor={POD_DESCRIPTOR}
+        context="prod"
+        rows={PODS}
+        onDone={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const confirmDialog = within(screen.getByRole("dialog"));
+    await userEvent.click(confirmDialog.getByRole("button", { name: "Delete" }));
+
+    const report = within(await screen.findByRole("dialog"));
+    const names = report.getAllByRole("button").map((button) => button.textContent);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
   // Whole-branch review (FIX 3): same reason as the row menu's own gate — a
   // custom resource's Delete always fails against the backend's kind→GVR
   // resolution, so the bulk bar must not offer it either.

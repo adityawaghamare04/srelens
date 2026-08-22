@@ -178,8 +178,13 @@ export function ResourceBulk({ selected, kind, descriptor, context, rows, onDone
           title={`${report.outcomes.length} ${kind}: ${summarize(report.outcomes).ok} ${PAST[report.type]}, ${
             summarize(report.outcomes).failed
           } failed`}
+          // Both buttons do the same thing — there is nothing left to confirm
+          // or cancel, only to acknowledge — but `ConfirmDialog` always
+          // renders two, and a screen reader tells them apart by accessible
+          // name, not by which side of the dialog they sit on. Two "Close"s
+          // read as one control repeated, not two.
           confirmLabel="Close"
-          cancelLabel="Close"
+          cancelLabel="Dismiss"
           onConfirm={close}
           onCancel={close}
           message={
