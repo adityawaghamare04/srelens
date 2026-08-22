@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import * as ws from "./workspace";
 
@@ -6,7 +6,7 @@ beforeEach(() => ws.resetView());
 
 describe("workspace view", () => {
   it("starts with no links and nothing expanded", () => {
-    expect(ws.getView()).toEqual({ links: {}, expanded: [] });
+    expect(ws.getView()).toEqual({ links: {}, expanded: [], namespaces: {} });
   });
 
   it("tells the hook when a link changes", () => {
@@ -75,5 +75,24 @@ describe("workspace view", () => {
     ws.resetView();
     expect(n).toBe(2);
     off();
+  });
+
+  it("keeps a namespace selection per cluster, so two clusters do not share one", () => {
+    ws.setNamespaces("prod", ["default"]);
+    ws.setNamespaces("dev", ["kube-system"]);
+    expect(ws.getView().namespaces).toEqual({ prod: ["default"], dev: ["kube-system"] });
+  });
+
+  it("reads an unset cluster as all namespaces", () => {
+    expect(ws.getView().namespaces["never-set"]).toBeUndefined();
+  });
+
+  it("does not notify when the selection is set to what it already is", () => {
+    ws.setNamespaces("prod", ["default"]);
+    const seen = vi.fn();
+    const off = ws.subscribe(seen);
+    ws.setNamespaces("prod", ["default"]);
+    off();
+    expect(seen).not.toHaveBeenCalled();
   });
 });

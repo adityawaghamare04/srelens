@@ -7,6 +7,14 @@ export interface WorkspaceView {
   links: Record<string, { state: LinkState; error?: string }>;
   /** Which sidebar sections are open. Not persisted. */
   expanded: string[];
+  /**
+   * Namespace selection per cluster, keyed by `ClusterContext.stableId`, never
+   * a display name. One selection per cluster, shared by every screen looking
+   * at that cluster, rather than one per tab. An empty array means "all
+   * namespaces", and so does a cluster with no entry at all — a cluster is
+   * only ever added here when something narrows it, never seeded up front.
+   */
+  namespaces: Record<string, string[]>;
 }
 
 /**
@@ -17,7 +25,7 @@ export interface WorkspaceView {
  * cluster's reachability is a fact about now and an expanded section is a
  * fact about this sitting.
  */
-const initial = (): WorkspaceView => ({ links: {}, expanded: [] });
+const initial = (): WorkspaceView => ({ links: {}, expanded: [], namespaces: {} });
 let view: WorkspaceView = initial();
 const listeners = new Set<() => void>();
 
@@ -27,12 +35,12 @@ function emit(next: WorkspaceView) {
 }
 
 /** Order is significant: the sidebar renders sections in the order given. */
-function sameExpanded(a: readonly string[], b: readonly string[]): boolean {
+function sameArray(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
 function isInitial(v: WorkspaceView): boolean {
-  return Object.keys(v.links).length === 0 && v.expanded.length === 0;
+  return Object.keys(v.links).length === 0 && v.expanded.length === 0 && Object.keys(v.namespaces).length === 0;
 }
 
 export function getView(): WorkspaceView {
@@ -91,6 +99,28 @@ export function toggleExpanded(id: string): void {
 }
 
 export function setExpanded(ids: string[]): void {
-  if (sameExpanded(view.expanded, ids)) return;
+  if (sameArray(view.expanded, ids)) return;
   emit({ ...view, expanded: [...ids] });
+}
+
+/**
+ * Sets a cluster's namespace selection. Per cluster, not per tab: two tabs on
+ * the same cluster agree, because both read this same record.
+ */
+export function setNamespaces(clusterId: string, namespaces: string[]): void {
+  const current = view.namespaces[clusterId];
+  if (current && sameArray(current, namespaces)) return;
+  emit({ ...view, namespaces: { ...view.namespaces, [clusterId]: [...namespaces] } });
+}
+
+/** A stable empty selection, so an unset cluster's snapshot never changes identity. */
+const NO_NAMESPACES: string[] = [];
+
+/** The cluster's namespace selection, re-rendering whoever reads it when it changes. */
+export function useNamespaces(clusterId: string | undefined): string[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => (clusterId === undefined ? NO_NAMESPACES : (view.namespaces[clusterId] ?? NO_NAMESPACES)),
+    () => NO_NAMESPACES,
+  );
 }
