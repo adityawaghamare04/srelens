@@ -13,6 +13,7 @@ import {
 import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
 import { PodContainersBody, PodDetailsBody } from "./PodBody";
+import { WorkloadDetailsBody } from "./WorkloadBody";
 
 export interface ResourceDetailProps {
   context: string;
@@ -57,6 +58,10 @@ type PaneBody = (props: { object: K8sObject; context: string }) => ReactNode;
  */
 const DETAILS_BODY: Record<string, PaneBody> = {
   Pod: PodDetailsBody,
+  Deployment: WorkloadDetailsBody,
+  StatefulSet: WorkloadDetailsBody,
+  DaemonSet: WorkloadDetailsBody,
+  ReplicaSet: WorkloadDetailsBody,
 };
 
 /** Same seam, for the Containers pane a kind's descriptor opts into via
