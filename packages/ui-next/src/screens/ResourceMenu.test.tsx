@@ -105,9 +105,28 @@ describe("useRowMenu", () => {
     expect(cmLabels).not.toContain("Open shell");
     expect(cmLabels).not.toContain("Port forward");
     expect(cmLabels).not.toContain("Evict");
-    // Delete, Edit and Open in new tab are not gated by KindActions — every
-    // kind can be deleted, opened and edited.
+    // Edit and Open in new tab are not gated by KindActions at all — every
+    // kind gets them. Delete defaults to offered the same way (every one of
+    // the 34 built-in kinds passes `actions: {}` and still gets it) — but,
+    // unlike every other entry in `KindActions`, it can be turned off, for
+    // the one family that needs to: see the `actions.delete === false` test
+    // below.
     expect(cmLabels).toEqual(expect.arrayContaining(["Open in new tab", "Edit", "Copy as kubectl", "Delete"]));
+  });
+
+  // Whole-branch review (FIX 3): a custom resource's `k8sKind` is the CRD's
+  // own kind, and the backend resolves kind→GVR through a closed match with
+  // no CRD path — Delete on a custom resource's row always fails, with a
+  // confirm dialog (and a kubectl preview that lies, by falling back to
+  // lowercasing) that makes it look like a real operation right up until it
+  // isn't. `actions.delete === false` is the one way to turn Delete off;
+  // every other `KindActions` field turns something on.
+  it("withholds Delete when the kind's actions say so, without touching anything else", () => {
+    const labels = menuItems({ context: "prod", kind: "Widget", actions: { delete: false } }, CM_ROW).map((i) =>
+      i.kind === "sep" ? "—" : i.label,
+    );
+    expect(labels).not.toContain("Delete");
+    expect(labels).toEqual(expect.arrayContaining(["Open in new tab", "Edit", "Copy as kubectl"]));
   });
 
   it("opens the resource in a tab", async () => {

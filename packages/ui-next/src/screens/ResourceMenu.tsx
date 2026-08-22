@@ -188,7 +188,9 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
     if (actions.evict) {
       destructive.push({ label: "Evict", icon: Icons.evict, danger: true, onPick: () => open({ type: "evict", row }) });
     }
-    destructive.push({ label: "Delete", icon: Icons.trash, danger: true, onPick: () => open({ type: "delete", row }) });
+    if (actions.delete !== false) {
+      destructive.push({ label: "Delete", icon: Icons.trash, danger: true, onPick: () => open({ type: "delete", row }) });
+    }
     if (destructive.length) list.push({ kind: "sep" }, ...destructive);
 
     return list;

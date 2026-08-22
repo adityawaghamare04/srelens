@@ -47,7 +47,9 @@ export function customDescriptor(crd: CrdRef): KindDescriptor<CustomRow> {
     scope: crd.namespaced ? "namespaced" : "cluster",
     load: (context, namespace) =>
       listCustomResource(context, crd, namespace || null).then((o) => ({ rows: o.items, error: o.error })),
-    actions: {},
+    // The backend resolves kind→GVR through a closed match with no CRD path,
+    // so Delete on a custom resource always fails — see `KindActions.delete`.
+    actions: { delete: false },
   };
 }
 

@@ -18,6 +18,17 @@ export interface KindActions {
   suspend?: boolean;
   /** CronJob only: offers Run now — not destructive, takes no confirm. */
   trigger?: boolean;
+  /**
+   * Opposite default from every field above: absent (or `true`) offers
+   * Delete, which is what keeps all 34 built-in kinds offering it without
+   * every one of their descriptors having to say so. Only `false` withholds
+   * it — for a custom resource, whose `k8sKind` is the CRD's own kind and
+   * which the backend's kind→GVR resolution has no path for, so Delete would
+   * always fail: the confirm (and even the kubectl preview, which falls back
+   * to lowercasing) reads as a real operation right up until it isn't.
+   * Offering an action that cannot work is worse than not offering it.
+   */
+  delete?: boolean;
 }
 
 /**

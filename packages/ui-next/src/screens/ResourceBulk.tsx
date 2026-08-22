@@ -133,7 +133,9 @@ export function ResourceBulk({ selected, kind, descriptor, context, rows, onDone
   if (descriptor.actions.evict) {
     actions.push({ id: "evict", label: "Evict", danger: true, onSelect: () => open("evict") });
   }
-  actions.push({ id: "delete", label: "Delete", danger: true, onSelect: () => open("delete") });
+  if (descriptor.actions.delete !== false) {
+    actions.push({ id: "delete", label: "Delete", danger: true, onSelect: () => open("delete") });
+  }
 
   return (
     <>

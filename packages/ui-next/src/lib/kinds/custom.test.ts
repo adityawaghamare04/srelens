@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { CrdRef } from "@srelens/core";
-import { customColumns, customDescriptorFor } from "./custom";
+import { customDescriptor, customColumns, customDescriptorFor } from "./custom";
 
 const crd = (over: Partial<CrdRef> = {}): CrdRef => ({
   name: "widgets.example.com", group: "example.com", version: "v1", plural: "widgets",
@@ -63,6 +63,15 @@ describe("custom columns", () => {
       };
       expect(since.getSortValue!(fresh) as number).toBeLessThan(since.getSortValue!(stale) as number);
     });
+  });
+});
+
+describe("customDescriptor", () => {
+  // Whole-branch review (FIX 3): the backend resolves kind→GVR through a
+  // closed match with no CRD path, so Delete on a custom resource always
+  // fails — offering it is worse than not offering it.
+  it("withholds Delete, since the backend has no kind→GVR path for a CRD's kind", () => {
+    expect(customDescriptor(crd()).actions.delete).toBe(false);
   });
 });
 

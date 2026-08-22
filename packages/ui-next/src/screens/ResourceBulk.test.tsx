@@ -195,6 +195,30 @@ describe("ResourceBulk", () => {
     expect(screen.queryByText(/some failed/i)).toBeNull();
   });
 
+  // Whole-branch review (FIX 3): same reason as the row menu's own gate — a
+  // custom resource's Delete always fails against the backend's kind→GVR
+  // resolution, so the bulk bar must not offer it either.
+  it("withholds Delete when the kind's actions say so", () => {
+    const noDeleteDescriptor: KindDescriptor = {
+      k8sKind: "Widget",
+      columns: [],
+      source: "poll",
+      scope: "namespaced",
+      actions: { delete: false },
+    };
+    render(
+      <ResourceBulk
+        selected={ALL_SELECTED}
+        kind="widgets"
+        descriptor={noDeleteDescriptor}
+        context="prod"
+        rows={PODS}
+        onDone={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
   it("offers evict only where the kind has it", () => {
     const pods = render(
       <ResourceBulk
