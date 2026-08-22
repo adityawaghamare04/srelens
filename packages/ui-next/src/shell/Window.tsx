@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isApplePlatform, isTauri, listContexts, loadKubeconfigFiles, type ClusterContext } from "@srelens/core";
 import { Button, Checkbox, Drawer, LoadingState, TabStrip, TextInput, type ContextMenuItem, type StripTab } from "@srelens/ui-kit";
 import { setContexts, setKubeconfigFiles, useContexts } from "../lib/clusters";
+import { loadColumnPrefs } from "../lib/columnPrefs";
 import { loadMarks } from "../lib/marks";
 import { defaultState, reconcile } from "../lib/tabs";
 import { flushSave, installFlushOnUnload, loadTabsState, scheduleSave } from "../lib/tabsPersist";
@@ -114,6 +115,9 @@ export function Window({
       // spreads over that empty record and persists it, erasing every other
       // cluster's stored appearance.
       loadMarks();
+      // Same reason as `loadMarks` above: without this, the first column
+      // toggle spreads over an empty record and erases every other kind's.
+      loadColumnPrefs();
       // Classic threads these through every call for a reason: a context that
       // came from an additional kubeconfig file cannot have a client built for
       // it until the backend has been told the file's path, and the list races
