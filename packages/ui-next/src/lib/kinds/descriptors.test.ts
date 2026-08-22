@@ -65,4 +65,22 @@ describe("descriptors", () => {
     expect(descriptorFor("widgets.example.com")).toBeUndefined();
     expect(descriptorFor("constructor")).toBeUndefined();
   });
+
+  /**
+   * The kinds that must have a typed view: every kind the backend streams, plus
+   * nodes. This is classic's TYPED_KINDS, which is exactly WATCHABLE_KINDS + nodes.
+   * A kind added to that set without columns falls back to the generic table and
+   * silently loses its detail — this is what catches that.
+   */
+  const MUST_BE_TYPED = [...WATCHABLE_KINDS, "nodes"].filter((k) => k !== "events");
+
+  it("gives every kind that should have a typed view one, rather than the generic table", () => {
+    const generic = ["name", "namespace", "age"];
+    const genericCluster = ["name", "age"];
+    const untyped = MUST_BE_TYPED.filter((kind) => {
+      const keys = descriptorFor(kind)!.columns.map((c) => c.key);
+      return keys.join() === generic.join() || keys.join() === genericCluster.join();
+    });
+    expect(untyped).toEqual([]);
+  });
 });

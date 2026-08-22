@@ -1,12 +1,29 @@
 import {
   ageSortValue,
+  formatStorageSize,
+  type ClusterRoleBindingSummary,
+  type ClusterRoleSummary,
+  type ConfigMapSummary,
   type CronJobSummary,
   type DaemonSetSummary,
   type DeploymentSummary,
+  type EndpointSliceSummary,
+  type IngressSummary,
   type JobSummary,
+  type LimitRangeSummary,
+  type NetworkPolicySummary,
   type NodeSummary,
   type PodSummary,
+  type PvSummary,
+  type PvcSummary,
+  type ResourceQuotaSummary,
+  type RoleBindingSummary,
+  type RoleSummary,
+  type SecretSummary,
+  type ServiceAccountSummary,
+  type ServiceSummary,
   type StatefulSetSummary,
+  type StorageClassSummary,
 } from "@srelens/core";
 import { Badge, StatusPill, type Column, type StatusKind, type Tone } from "@srelens/ui-kit";
 
@@ -141,5 +158,148 @@ export const nodeColumns: Column<NodeRow>[] = [
   { key: "cpu", header: "CPU", sortable: true, render: (n) => metric(n.cpu, "m"), getSortValue: (n) => metricSort(n.cpu) },
   { key: "memory", header: "Memory", sortable: true, render: (n) => metric(n.memory, "Mi"), getSortValue: (n) => metricSort(n.memory) },
   { key: "version", header: "Version" },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const configMapColumns: Column<ConfigMapSummary>[] = [
+  { key: "name", header: "ConfigMap", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "keys", header: "Keys", sortable: true, render: (c) => String(c.keys) },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const secretColumns: Column<SecretSummary>[] = [
+  { key: "name", header: "Secret", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "type", header: "Type", filterable: true },
+  { key: "keys", header: "Keys", sortable: true, render: (s) => String(s.keys) },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const resourceQuotaColumns: Column<ResourceQuotaSummary>[] = [
+  { key: "name", header: "Resource Quota", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "resources", header: "Resources", sortable: true },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const limitRangeColumns: Column<LimitRangeSummary>[] = [
+  { key: "name", header: "Limit Range", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "limits", header: "Limits", sortable: true },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const serviceColumns: Column<ServiceSummary>[] = [
+  { key: "name", header: "Service", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "type", header: "Type", filterable: true },
+  { key: "clusterIP", header: "Cluster IP" },
+  { key: "externalIP", header: "External IP", render: (s) => s.externalIP || "—" },
+  { key: "ports", header: "Ports" },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const ingressColumns: Column<IngressSummary>[] = [
+  { key: "name", header: "Ingress", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "class", header: "Class", filterable: true },
+  { key: "hosts", header: "Hosts", render: (i) => i.hosts || "*" },
+  { key: "address", header: "Address", render: (i) => i.address || "—" },
+  { key: "ports", header: "Ports" },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const endpointSliceColumns: Column<EndpointSliceSummary>[] = [
+  { key: "name", header: "Endpoint Slice", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "addressType", header: "Address Type" },
+  { key: "endpoints", header: "Endpoints" },
+  { key: "ports", header: "Ports", render: (e) => e.ports || "—" },
+  { key: "service", header: "Service", render: (e) => e.service || "—" },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const networkPolicyColumns: Column<NetworkPolicySummary>[] = [
+  { key: "name", header: "Network Policy", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "podSelector", header: "Pod Selector" },
+  { key: "ingress", header: "Ingress", sortable: true },
+  { key: "egress", header: "Egress", sortable: true },
+  { key: "policyTypes", header: "Policy Types", render: (n) => n.policyTypes || "—" },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const pvcColumns: Column<PvcSummary>[] = [
+  { key: "name", header: "Claim", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  {
+    key: "status", header: "Status", sortable: true, filterable: true,
+    render: (p) => <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" ? "Ready" : p.status)} />,
+  },
+  { key: "capacity", header: "Capacity", render: (p) => formatStorageSize(p.capacity) },
+  { key: "accessModes", header: "Access Modes", render: (p) => p.accessModes || "—" },
+  { key: "storageClass", header: "Storage Class", filterable: true, render: (p) => p.storageClass || "—" },
+  { key: "volume", header: "Volume", render: (p) => p.volume || "—" },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const pvColumns: Column<PvSummary>[] = [
+  { key: "name", header: "Volume", sortable: true, filterable: true },
+  { key: "capacity", header: "Capacity", render: (p) => formatStorageSize(p.capacity) },
+  { key: "accessModes", header: "Access Modes", render: (p) => p.accessModes || "—" },
+  { key: "reclaimPolicy", header: "Reclaim", render: (p) => p.reclaimPolicy || "—" },
+  {
+    key: "status", header: "Status", sortable: true, filterable: true,
+    render: (p) => (
+      <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" || p.status === "Available" ? "Ready" : p.status)} />
+    ),
+  },
+  { key: "claim", header: "Claim", render: (p) => p.claim || "—" },
+  { key: "storageClass", header: "Storage Class", filterable: true, render: (p) => p.storageClass || "—" },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const storageClassColumns: Column<StorageClassSummary>[] = [
+  { key: "name", header: "Storage Class", sortable: true, filterable: true },
+  { key: "provisioner", header: "Provisioner", filterable: true },
+  { key: "reclaimPolicy", header: "Reclaim", render: (s) => s.reclaimPolicy || "—" },
+  { key: "volumeBindingMode", header: "Binding Mode", render: (s) => s.volumeBindingMode || "—" },
+  { key: "default", header: "Default", render: (s) => (s.default ? <StatusPill status="Default" kind="success" /> : "—") },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const serviceAccountColumns: Column<ServiceAccountSummary>[] = [
+  { key: "name", header: "Service Account", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "secrets", header: "Secrets", sortable: true },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const roleColumns: Column<RoleSummary>[] = [
+  { key: "name", header: "Role", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "rules", header: "Rules", sortable: true },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const clusterRoleColumns: Column<ClusterRoleSummary>[] = [
+  { key: "name", header: "Cluster Role", sortable: true, filterable: true },
+  { key: "rules", header: "Rules", sortable: true },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const roleBindingColumns: Column<RoleBindingSummary>[] = [
+  { key: "name", header: "Role Binding", sortable: true, filterable: true },
+  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "role", header: "Role", filterable: true },
+  { key: "subjects", header: "Subjects", sortable: true },
+  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+];
+
+export const clusterRoleBindingColumns: Column<ClusterRoleBindingSummary>[] = [
+  { key: "name", header: "Cluster Role Binding", sortable: true, filterable: true },
+  { key: "role", header: "Role", filterable: true },
+  { key: "subjects", header: "Subjects", sortable: true },
   { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
 ];

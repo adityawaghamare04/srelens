@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { podColumns, nodeColumns, type PodRow } from "./columns";
+import { podColumns, nodeColumns, serviceColumns, secretColumns, clusterRoleColumns, type PodRow } from "./columns";
 
 const pod = (over: Partial<PodRow> = {}): PodRow => ({
   name: "web-0", namespace: "default", phase: "Running", ready: "1/1",
@@ -33,5 +33,21 @@ describe("pod columns", () => {
 describe("node columns", () => {
   it("keeps no namespace column, because a node has none", () => {
     expect(nodeColumns.some((c) => c.key === "namespace")).toBe(false);
+  });
+});
+
+describe("the rules every typed set follows", () => {
+  it("shows a service's external IP, an em dash rather than a blank when it has none", () => {
+    const external = serviceColumns.find((c) => c.key === "externalIP")!;
+    expect(external.render!({ name: "s", namespace: "d", type: "ClusterIP", clusterIP: "10.0.0.1", externalIP: "", ports: "", age: "1d" })).toBe("—");
+  });
+
+  it("counts a secret's keys rather than showing them", () => {
+    const keys = secretColumns.find((c) => c.key === "keys")!;
+    expect(keys.render!({ name: "s", namespace: "d", type: "Opaque", keys: 3, age: "1d" })).toBe("3");
+  });
+
+  it("keeps no namespace column on a cluster-scoped kind", () => {
+    expect(clusterRoleColumns.some((c) => c.key === "namespace")).toBe(false);
   });
 });
