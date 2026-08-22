@@ -12,6 +12,7 @@ import {
 } from "@srelens/ui-kit";
 import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
+import { GenericBody } from "./GenericBody";
 import { PodContainersBody, PodDetailsBody } from "./PodBody";
 import { WorkloadDetailsBody } from "./WorkloadBody";
 
@@ -52,9 +53,12 @@ type PaneBody = (props: { object: K8sObject; context: string }) => ReactNode;
 /**
  * The Details pane's per-kind content. Tasks 10-13 each append one entry
  * here, keyed on `k8sKind`, as they port a family of classic's
- * `ResourceOverview` bodies. A kind absent from the table falls through to
- * `Inspector`'s own "nothing to show" state — a table for later tasks to
- * extend, not a switch for this component to grow.
+ * `ResourceOverview` bodies. A kind absent from the table renders no nested
+ * body of its own — `GenericBody` (below) still gives it a complete,
+ * correct Details pane (classic's `GenericDetail`), and a kind in
+ * `SELF_DESCRIBING_KINDS` renders its own entry with no wrapper at all —
+ * a table for later tasks to extend, not a switch for this component to
+ * grow.
  */
 const DETAILS_BODY: Record<string, PaneBody> = {
   Pod: PodDetailsBody,
@@ -286,7 +290,11 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
       tabsLabel="Resource views"
       onClose={onClose}
     >
-      {active === PANE_DETAILS && (DetailsBody ? <DetailsBody object={object} context={context} /> : null)}
+      {active === PANE_DETAILS && (
+        <GenericBody kind={kind} object={object} context={context}>
+          {DetailsBody && <DetailsBody object={object} context={context} />}
+        </GenericBody>
+      )}
       {active === PANE_CONTAINERS && (ContainersBody ? <ContainersBody object={object} context={context} /> : null)}
       {active === PANE_METRICS && (MetricsBody ? <MetricsBody object={object} context={context} /> : null)}
       {active === PANE_YAML && <YamlPane state={yamlState} kind={kind} namespace={namespace} name={name} />}
