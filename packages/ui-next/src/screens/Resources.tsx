@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   listCrds,
   rowInSelection,
@@ -31,6 +31,7 @@ import { describe, isBuiltInKind } from "../lib/routes";
 import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
+import { ResourceBulk } from "./ResourceBulk";
 import { useRowMenu } from "./ResourceMenu";
 
 /** The row identifier: always shown, never offered to the column picker. */
@@ -193,6 +194,12 @@ function KindList({
     actions: descriptor?.actions ?? {},
   });
 
+  // The checkbox column's selection. Table owns the interaction (toggle,
+  // shift-click range, select-all-of-filtered); this screen only holds the
+  // set and hands it to `ResourceBulk`, which resolves each key back to a
+  // row through the same `getRowKey` formula passed to `Table` below.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
   const lower = title.toLocaleLowerCase();
 
   function onToggleColumn(key: string) {
@@ -292,10 +299,19 @@ function KindList({
                 {list.error}
               </Alert>
             )}
+            <ResourceBulk
+              selected={selected}
+              kind={lower}
+              descriptor={descriptor}
+              context={name}
+              rows={filtered}
+              onDone={() => setSelected(new Set())}
+            />
             <Table
               columns={columns}
               data={filtered}
               getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
+              selection={{ selected, onChange: setSelected }}
               sort={sort}
               onSortChange={(next) => setTabView(tabId, { sort: next })}
               activeFilterKey={filterKey}
