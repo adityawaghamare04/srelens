@@ -31,6 +31,39 @@ describe("custom columns", () => {
     const cols = customColumns(crd({ printerColumns: [] }));
     expect(cols.map((c) => c.key)).toEqual(["name", "namespace", "age"]);
   });
+
+  // `printerSortValue(type, value, sortKey)` takes three `string` parameters,
+  // so a future argument swap at the call site in customColumns still
+  // compiles. These pin the order by giving `columns` and `sortKeys` values
+  // that disagree, so a swap changes the result rather than passing by luck.
+  describe("printer column sort values", () => {
+    it("sorts a string-typed column by its rendered value, not the raw sort key", () => {
+      const cols = customColumns(crd());
+      const phase = cols.find((c) => c.header === "Phase")!;
+      const row = { name: "w", namespace: "d", age: "1d", columns: ["Ready"], sortKeys: ["NotReady"] };
+      expect(phase.getSortValue!(row)).toBe("Ready");
+    });
+
+    it("sorts a date-typed column by its raw timestamp, not its rendered age text", () => {
+      const cols = customColumns(crd());
+      const since = cols.find((c) => c.header === "Since")!;
+      const now = Date.now();
+      // Rendered text says the opposite of the truth: "fresh" looks old
+      // ("10d") and "stale" looks recent ("2h"). Only the raw sort key —
+      // the third argument — carries the real age.
+      // "Since" is the second printer column (index 1); index 0 is filler
+      // for "Phase" so the positional lookup lands on the right entry.
+      const fresh = {
+        name: "a", namespace: "d", age: "1d",
+        columns: ["Ready", "10d"], sortKeys: ["", new Date(now - 60_000).toISOString()],
+      };
+      const stale = {
+        name: "b", namespace: "d", age: "1d",
+        columns: ["Ready", "2h"], sortKeys: ["", new Date(now - 30 * 86_400_000).toISOString()],
+      };
+      expect(since.getSortValue!(fresh) as number).toBeLessThan(since.getSortValue!(stale) as number);
+    });
+  });
 });
 
 describe("customDescriptorFor", () => {
