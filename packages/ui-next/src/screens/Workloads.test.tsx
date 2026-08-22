@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const { watchResource, useNamespaceOptions } = vi.hoisted(() => ({
@@ -192,5 +192,55 @@ describe("Workloads", () => {
 
     expect(screen.getByText(/could not list deployments/i)).toBeTruthy();
     expect(screen.getByText(/forbidden: cannot list deployments/i)).toBeTruthy();
+  });
+
+  // A union row's actions differ by kind — this is the per-row correctness
+  // that matters: the menu is dispatched by `row.kind`, not by whichever
+  // kind the segment control happens to be on, so it must never leak one
+  // kind's actions onto another's row.
+  it("offers a Pod row's own actions — logs and shell — and none of CronJob's", async () => {
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+
+    fireEvent.contextMenu(screen.getByText("web-1").closest("tr")!);
+
+    expect(await screen.findByText("Follow logs")).toBeTruthy();
+    expect(screen.getByText("Open shell")).toBeTruthy();
+    expect(screen.getByText("Port forward")).toBeTruthy();
+    expect(screen.getByText("Evict")).toBeTruthy();
+
+    expect(screen.queryByText("Suspend")).toBeNull();
+    expect(screen.queryByText("Run now")).toBeNull();
+    expect(screen.queryByText("Scale")).toBeNull();
+  });
+
+  it("offers a CronJob row's own actions — suspend and run now — and none of Pod's", async () => {
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+
+    fireEvent.contextMenu(screen.getByText("nightly-backup").closest("tr")!);
+
+    expect(await screen.findByText("Suspend")).toBeTruthy();
+    expect(screen.getByText("Run now")).toBeTruthy();
+
+    expect(screen.queryByText("Follow logs")).toBeNull();
+    expect(screen.queryByText("Open shell")).toBeNull();
+    expect(screen.queryByText("Port forward")).toBeNull();
+    expect(screen.queryByText("Evict")).toBeNull();
+    expect(screen.queryByText("Scale")).toBeNull();
+  });
+
+  it("opens a Deployment row's menu with scale and restart, and confirms a scale from the rendered screen", async () => {
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+
+    fireEvent.contextMenu(screen.getByText("checkout").closest("tr")!);
+    expect(await screen.findByText("Scale")).toBeTruthy();
+    expect(screen.getByText("Restart rollout")).toBeTruthy();
+    expect(screen.queryByText("Suspend")).toBeNull();
+
+    await userEvent.click(screen.getByText("Scale"));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("checkout");
   });
 });

@@ -26,6 +26,7 @@ import {
   filterTableData,
   toneColor,
   type Column,
+  type ContextMenuItem,
   type StatusKind,
   type TabItem,
 } from "@srelens/ui-kit";
@@ -39,6 +40,7 @@ import { useResourceList, type ResourceList } from "../lib/resourceList";
 import { describe } from "../lib/routes";
 import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
+import { useRowMenu } from "./ResourceMenu";
 
 /** The row identifier: always shown, never offered to the column picker. */
 const NAME_KEY = "name";
@@ -64,6 +66,13 @@ interface WorkloadRow extends ListRow {
   image?: string;
   age?: string;
   flagged: boolean;
+  /**
+   * CronJob only, and only for the row menu: `useRowMenu`'s own `isSuspended`
+   * reads this straight off the row it's handed to decide Suspend vs. Resume.
+   * Every other kind's menu reads nothing else off the row beyond
+   * `name`/`namespace`, which `ListRow` already promises.
+   */
+  suspended?: boolean;
 }
 
 /** The design's segment vocabulary and order — not alphabetical, the mock's own. */
@@ -205,6 +214,7 @@ function fromCronJob(row: ListRow): WorkloadRow {
     statusKind: c.suspended ? "neutral" : "success",
     age: c.age,
     flagged: false,
+    suspended: c.suspended,
   };
 }
 
@@ -381,6 +391,59 @@ function WorkloadList({
   const podsList = useResourceList<ListRow>(name, "pods", podsDescriptor, namespaceFilter, files);
   const cronJobsList = useResourceList<ListRow>(name, "cronjobs", cronJobsDescriptor, namespaceFilter, files);
 
+  // `useRowMenu` is itself a hook — five fixed calls for the same reason the
+  // five watches above are five fixed calls, one per kind's own descriptor
+  // and actions, rather than one call sized to whichever kind a row happens
+  // to be. A union row's actions genuinely differ by kind (Pod offers
+  // shell/logs/evict, CronJob offers suspend/run-now, Deployment/StatefulSet
+  // offer scale/restart, DaemonSet offers restart only), and this is what
+  // keeps that parity with `/k/<kind>` without widening `useRowMenu` itself.
+  const deploymentMenu = useRowMenu({
+    context: name,
+    kind: deploymentsDescriptor?.k8sKind ?? "Deployment",
+    actions: deploymentsDescriptor?.actions ?? {},
+  });
+  const statefulSetMenu = useRowMenu({
+    context: name,
+    kind: statefulSetsDescriptor?.k8sKind ?? "StatefulSet",
+    actions: statefulSetsDescriptor?.actions ?? {},
+  });
+  const daemonSetMenu = useRowMenu({
+    context: name,
+    kind: daemonSetsDescriptor?.k8sKind ?? "DaemonSet",
+    actions: daemonSetsDescriptor?.actions ?? {},
+  });
+  const podMenu = useRowMenu({
+    context: name,
+    kind: podsDescriptor?.k8sKind ?? "Pod",
+    actions: podsDescriptor?.actions ?? {},
+  });
+  const cronJobMenu = useRowMenu({
+    context: name,
+    kind: cronJobsDescriptor?.k8sKind ?? "CronJob",
+    actions: cronJobsDescriptor?.actions ?? {},
+  });
+
+  /** Dispatched per row by `row.kind` — never by which kind the table was
+   *  last sorted or filtered to, so a Pod row offers Pod actions even while
+   *  the segment control sits on "All". */
+  function rowMenuItems(row: WorkloadRow): ContextMenuItem[] {
+    switch (row.kind) {
+      case "Deployment":
+        return deploymentMenu.items(row);
+      case "StatefulSet":
+        return statefulSetMenu.items(row);
+      case "DaemonSet":
+        return daemonSetMenu.items(row);
+      case "Pod":
+        return podMenu.items(row);
+      case "CronJob":
+        return cronJobMenu.items(row);
+      default:
+        return [];
+    }
+  }
+
   // A namespace-restricted credential has one namespace and no way to ask
   // for another — same rule `KindList` follows.
   useEffect(() => {
@@ -556,6 +619,8 @@ function WorkloadList({
               activeFilterKey={filterKey}
               onActiveFilterKeyChange={(key) => setTabView(tabId, { filterKey: key })}
               onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
+              rowMenu={rowMenuItems}
+              rowMenuLabel={`${title} actions`}
               emptyText={segmented.length === 0 ? `No ${segmentLower}` : `No ${segmentLower} match this filter`}
               emptyHint={
                 segmented.length === 0
@@ -566,6 +631,16 @@ function WorkloadList({
           </>
         )}
       </div>
+      {/* Outside the scrolling table body, same reason `KindList` keeps its
+          one dialog there: a `ConfirmDialog` is a portal anyway, but a
+          clipped ancestor is one fewer thing to reason about. Five, not one
+          — but only the kind whose row menu is actually open ever has a
+          non-null `pending`, so at most one of these five renders anything. */}
+      {deploymentMenu.dialog}
+      {statefulSetMenu.dialog}
+      {daemonSetMenu.dialog}
+      {podMenu.dialog}
+      {cronJobMenu.dialog}
     </Screen>
   );
 }
