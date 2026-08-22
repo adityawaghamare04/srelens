@@ -95,17 +95,61 @@ describe("ResourceDetail", () => {
     expect(queryByRole("tab", { name: "Containers" })).toBeNull();
   });
 
-  it("does not refetch the object when switching panes", async () => {
+  it("loads YAML and Events lazily, only once each pane is opened, and never refetches a pane already opened", async () => {
     getObject.mockResolvedValue({ object: POD });
     const { getByRole } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+
+    // A reader who never leaves Details pays for the object alone — a peek
+    // fills on nearly every row click, and YAML/Events are usually never
+    // looked at.
     expect(getObject).toHaveBeenCalledTimes(1);
+    expect(getManifest).not.toHaveBeenCalled();
+    expect(listEvents).not.toHaveBeenCalled();
 
     await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1));
+    expect(listEvents).not.toHaveBeenCalled();
+
     await userEvent.click(getByRole("tab", { name: "Events" }));
+    await waitFor(() => expect(listEvents).toHaveBeenCalledTimes(1));
+
+    // Switching back to Details, then to both already-opened panes again,
+    // must not re-fire any of the three loads.
     await userEvent.click(getByRole("tab", { name: "Details" }));
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await userEvent.click(getByRole("tab", { name: "Events" }));
 
     expect(getObject).toHaveBeenCalledTimes(1);
+    expect(getManifest).toHaveBeenCalledTimes(1);
+    expect(listEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a labelled empty state for a resource with no events, not a blank pane", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    listEvents.mockResolvedValue({ events: [] });
+    const { getByRole, getByText, queryByRole } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "Events" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "Events" }));
+    await waitFor(() => expect(getByText("No events")).toBeDefined());
+    // Distinguishable from the error state below: no alert renders alongside it.
+    expect(queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the error state for events that failed to load, distinct from the empty-events state", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    listEvents.mockResolvedValue({ error: "forbidden" });
+    const { getByRole, queryByText } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "Events" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "Events" }));
+    await waitFor(() => expect(getByRole("alert")).toBeDefined());
+    expect(getByRole("alert").textContent ?? "").toContain("web-1");
+    // Distinguishable from the empty state above: no "No events" label renders.
+    expect(queryByText("No events")).toBeNull();
   });
 
   it("behaves identically with and without onClose, apart from the close affordance", async () => {
