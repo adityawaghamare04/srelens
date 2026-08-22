@@ -503,6 +503,28 @@ describe("Resources", () => {
     expect(rowNames()).toEqual(["web-1", "api-7"]);
   });
 
+  // D6+D7 review: in the mock both banners sit outside the scrolling region,
+  // pinned above it. A reader who scrolls the table must still see them —
+  // a staleness warning that scrolls away no longer warns anyone, and
+  // selection actions that scroll out of reach are worse.
+  it("keeps the stale-rows alert and the bulk selection bar outside the scrolling table body", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    act(() => stream.error("connection reset"));
+    await waitFor(() => expect(screen.getByText(/stale/i)).toBeTruthy());
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select default/web-1" }));
+    await screen.findByText("1 selected");
+
+    const scrollBody = document.querySelector(".scroll")!;
+    expect(within(scrollBody).queryByText(/stale/i)).toBeNull();
+    expect(within(scrollBody).queryByText("1 selected")).toBeNull();
+    // Both still render — pinned above the scrolling body, not gone.
+    expect(screen.getByText(/stale/i)).toBeTruthy();
+    expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+
   it("shows the rows and says the stream dropped when the watch is reconnecting", async () => {
     open("/k/pods");
     await waitFor(() => expect(rowNames()).toHaveLength(2));

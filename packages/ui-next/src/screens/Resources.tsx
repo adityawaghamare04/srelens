@@ -315,6 +315,11 @@ function KindList({
     label: typeof column.header === "string" ? column.header : column.key,
   }));
 
+  // Loading and error each replace the table with their own state below; the
+  // stale-rows alert and the bulk bar only ever mean something once there is
+  // a table to warn about or select from.
+  const showRows = list.status !== "loading" && list.status !== "error";
+
   return (
     <Screen
       title={title}
@@ -373,6 +378,31 @@ function KindList({
         </Alert>
       )}
 
+      {showRows && list.error && (
+        // Rows and an error together: the last good list is still on screen
+        // and is no longer being refreshed. Emptying the table would throw
+        // away the only information the reader has. Pinned above the
+        // scrolling table rather than inside it (D6+D7 review) — a "these
+        // rows are stale" warning the reader scrolls past no longer warns
+        // anyone. The table runs flush to the panel, so the alert carries
+        // its own inset rather than borrowing the container's.
+        <Alert tone="warn" title={`These ${lower} are stale`} className="mx-3 mt-3 mb-3">
+          {list.error}
+        </Alert>
+      )}
+      {showRows && (
+        // Same reason as the alert above: selection actions that scroll out
+        // of reach while the selection persists are worse than a warning
+        // nobody sees.
+        <ResourceBulk
+          selected={selected}
+          kind={lower}
+          descriptor={descriptor}
+          context={name}
+          rows={filtered}
+          onDone={() => setSelected(new Set())}
+        />
+      )}
       <div className="scroll min-h-0 flex-1">
         {list.status === "loading" ? (
           <LoadingState label={`Loading ${lower}`} />
@@ -383,47 +413,27 @@ function KindList({
             onRetry={list.reload}
           />
         ) : (
-          <>
-            {list.error && (
-              // Rows and an error together: the last good list is still on
-              // screen and is no longer being refreshed. Emptying the table
-              // would throw away the only information the reader has. The
-              // table itself runs flush to the panel now, so the alert
-              // carries its own inset rather than borrowing the container's.
-              <Alert tone="warn" title={`These ${lower} are stale`} className="mx-3 mt-3 mb-3">
-                {list.error}
-              </Alert>
-            )}
-            <ResourceBulk
-              selected={selected}
-              kind={lower}
-              descriptor={descriptor}
-              context={name}
-              rows={filtered}
-              onDone={() => setSelected(new Set())}
-            />
-            <Table
-              columns={renderedColumns}
-              data={filtered}
-              getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
-              selection={{ selected, onChange: setSelected }}
-              sort={sort}
-              onSortChange={(next) => setTabView(tabId, { sort: next })}
-              activeFilterKey={filterKey}
-              onActiveFilterKeyChange={(key) => setTabView(tabId, { filterKey: key })}
-              onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
-              rowMenu={rowMenuItems}
-              rowMenuLabel={`${title} actions`}
-              // "This kind has none" and "the filter matched none" are
-              // different facts, and the second one is the reader's own doing.
-              emptyText={rows.length === 0 ? `No ${lower}` : `No ${lower} match this filter`}
-              emptyHint={
-                rows.length === 0
-                  ? `${name} has no ${lower}${clusterScoped ? "" : " in the namespaces you are looking at"}.`
-                  : `Clear the filter to see all ${rows.length}.`
-              }
-            />
-          </>
+          <Table
+            columns={renderedColumns}
+            data={filtered}
+            getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
+            selection={{ selected, onChange: setSelected }}
+            sort={sort}
+            onSortChange={(next) => setTabView(tabId, { sort: next })}
+            activeFilterKey={filterKey}
+            onActiveFilterKeyChange={(key) => setTabView(tabId, { filterKey: key })}
+            onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
+            rowMenu={rowMenuItems}
+            rowMenuLabel={`${title} actions`}
+            // "This kind has none" and "the filter matched none" are
+            // different facts, and the second one is the reader's own doing.
+            emptyText={rows.length === 0 ? `No ${lower}` : `No ${lower} match this filter`}
+            emptyHint={
+              rows.length === 0
+                ? `${name} has no ${lower}${clusterScoped ? "" : " in the namespaces you are looking at"}.`
+                : `Clear the filter to see all ${rows.length}.`
+            }
+          />
         )}
       </div>
       {/* Outside the scrolling table body: a `ConfirmDialog` is a portal
