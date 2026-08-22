@@ -5,6 +5,7 @@ import {
   asArray,
   asRecord,
   conditionKind,
+  plural,
   podMetrics,
   podsForSelector,
   relatedPodSelector,
@@ -15,7 +16,7 @@ import {
   type PodMetric,
   type PodSummary,
 } from "@srelens/core";
-import { KV, LoadingState, PairList, Panel, StatusPill, Table, type Column } from "@srelens/ui-kit";
+import { Button, KV, LoadingState, PairList, Panel, StatusPill, Table, type Column } from "@srelens/ui-kit";
 import { phaseKind } from "../../lib/kinds/columns";
 
 /**
@@ -52,6 +53,44 @@ function StringList({ items }: { items: string[] }) {
 }
 
 /**
+ * Annotations, collapsed behind an explicit toggle and mounting nothing until
+ * expanded — classic's `Expandable`/`ChipMap`, whose own code comment names
+ * the exact reason: a `kubectl apply`-managed object carries
+ * `kubectl.kubernetes.io/last-applied-configuration`, an annotation whose
+ * value is the ENTIRE applied manifest — for a Secret, that includes the
+ * complete base64 `data` map. `k8s.getObject`'s Secret redaction only blanks
+ * `data`/`stringData`; it never touches `metadata.annotations`, so this is
+ * the only gate standing between that value and the document.
+ *
+ * Deliberately NOT `PairList`: `PairList` puts every value into a `title`
+ * attribute (`packages/ui-kit/src/PairList.tsx`), which would defeat the
+ * point even while collapsed — a `title` on a mounted element is still in the
+ * DOM. Nothing here uses `title`, `aria-label`, or any `data-*` for a value;
+ * the toggle's own accessible name is just its visible "Show"/"Hide" text,
+ * counting entries, never naming one.
+ */
+function AnnotationsToggle({ annotations }: { annotations: Record<string, string> }) {
+  const [open, setOpen] = useState(false);
+  const entries = Object.entries(annotations);
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <Button type="button" variant="ghost" size="xs" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide" : `Show ${plural(entries.length, "annotation")}`}
+      </Button>
+      {open && (
+        <ul className="flex flex-col gap-0.5">
+          {entries.map(([k, v]) => (
+            <li key={k} className="break-all font-mono text-[0.8125rem]">
+              {k}={v}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
  * A kind's identity — classic's `GenericDetail` "Metadata" section, ported
  * fact-for-fact and in classic's own order: Name, Namespace, Created (age
  * plus absolute time), Controlled by, Labels, Annotations. Namespace and
@@ -59,10 +98,12 @@ function StringList({ items }: { items: string[] }) {
  * navigate — Namespace to the Namespace object, Controlled by to each
  * owner's own kind/name; neither can navigate here (`PaneBody` has no
  * navigation contract — see the task report), so both render as plain text
- * instead. Labels/Annotations are omitted outright when empty, rather than
- * shown as classic's chip widget does ("None") — the same convention
- * `PodBody`'s and `WorkloadBody`'s own Properties sections use, kept here
- * too rather than reintroducing classic's "None" text for this body alone.
+ * instead. Labels is omitted outright when empty, rather than shown as
+ * classic's chip widget does ("None") — the same convention `PodBody`'s and
+ * `WorkloadBody`'s own Properties sections use, kept here too rather than
+ * reintroducing classic's "None" text for this body alone. Annotations gets
+ * its own rule (`AnnotationsToggle`, above): unlike Labels, an annotation
+ * value is not safe to mount unconditionally — see its doc comment.
  */
 function MetadataSection({ object }: { object: K8sObject }) {
   const meta = object.metadata ?? {};
@@ -81,7 +122,7 @@ function MetadataSection({ object }: { object: K8sObject }) {
       )}
       {Object.keys(labels).length > 0 && <KV k="Labels" v={<PairList pairs={Object.entries(labels)} />} />}
       {Object.keys(annotations).length > 0 && (
-        <KV k="Annotations" v={<PairList pairs={Object.entries(annotations)} />} />
+        <KV k="Annotations" v={<AnnotationsToggle annotations={annotations} />} />
       )}
     </Panel>
   );

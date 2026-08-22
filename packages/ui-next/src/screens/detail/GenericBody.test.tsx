@@ -18,6 +18,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   podMetrics,
 }));
 
+import userEvent from "@testing-library/user-event";
 import { GenericBody, SELF_DESCRIBING_KINDS } from "./GenericBody";
 
 function object(
@@ -27,6 +28,16 @@ function object(
   metadata: NonNullable<K8sObject["metadata"]> = { name: "obj-1", namespace: "default" },
 ): K8sObject {
   return { kind, apiVersion: "v1", metadata, spec, status } as K8sObject;
+}
+
+/** Scans the whole rendered document for a substring — text content, `title`,
+ *  `aria-label`, `data-*`, everything a DOM inspector or a screen reader
+ *  would see, not only what a text query happens to match. A boolean
+ *  assertion rather than an element query, so a failure here never prints
+ *  the sensitive value into the test output — matches `SecretBody.test.tsx`'s
+ *  own `documentContains` helper. */
+function documentContains(value: string): boolean {
+  return document.body.innerHTML.includes(value);
 }
 
 describe("GenericBody", () => {
@@ -63,7 +74,10 @@ describe("GenericBody", () => {
       expect(screen.getByText(/ago \(/)).toBeDefined(); // Created: timestampWithAge
       expect(screen.getByText("Node/node-a")).toBeDefined();
       expect(screen.getByTitle("app=controller")).toBeDefined();
-      expect(screen.getByTitle("kubectl.kubernetes.io/note=renewed automatically")).toBeDefined();
+      // Annotations render behind a collapsed toggle — see the "annotations
+      // secrecy" describe block below for why, and for what a value does and
+      // does not appear in before/after it's expanded.
+      expect(screen.getByRole("button", { name: "Show 1 annotation" })).toBeDefined();
 
       // Namespace and Controlled by are `ResourceLink`/`LinkedResources` in
       // classic that navigate; nothing here can (`PaneBody` has no
@@ -82,6 +96,67 @@ describe("GenericBody", () => {
       expect(screen.queryByText("Controlled by")).toBeNull();
       expect(screen.queryByText("Labels")).toBeNull();
       expect(screen.queryByText("Annotations")).toBeNull();
+    });
+  });
+
+  describe("the annotations secrecy gate", () => {
+    // Obviously-fake fixture text — never anything that reads as a real
+    // manifest or credential.
+    const FIXTURE_VALUE = "fixture-only-not-a-real-last-applied-manifest";
+
+    // A `kubectl apply`-managed Secret: `last-applied-configuration` holds
+    // the ENTIRE applied manifest, including the base64 `data` map —
+    // `k8s.getObject`'s Secret redaction never touches `metadata.annotations`,
+    // so this fixture is the exact shape the finding was about.
+    const KUBECTL_MANAGED_SECRET = object(
+      "Secret",
+      {},
+      {},
+      {
+        name: "managed-secret",
+        namespace: "default",
+        annotations: { "kubectl.kubernetes.io/last-applied-configuration": FIXTURE_VALUE },
+      },
+    );
+
+    it("keeps the annotation value out of the document until expanded, then shows it, then hides it again", async () => {
+      render(<GenericBody kind="Secret" object={KUBECTL_MANAGED_SECRET} context="ctx" />);
+
+      // Not as text, not as a title/aria-label/data-*, not anywhere in the
+      // markup — nothing under the toggle is mounted at all yet.
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+      expect(screen.queryByText(FIXTURE_VALUE)).toBeNull();
+
+      const toggle = screen.getByRole("button", { name: "Show 1 annotation" });
+      await userEvent.click(toggle);
+      await waitFor(() => expect(documentContains(FIXTURE_VALUE)).toBe(true));
+
+      await userEvent.click(screen.getByRole("button", { name: "Hide" }));
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+    });
+
+    it("never carries the value in the toggle's own title or accessible name", () => {
+      render(<GenericBody kind="Secret" object={KUBECTL_MANAGED_SECRET} context="ctx" />);
+      const toggle = screen.getByRole("button", { name: "Show 1 annotation" });
+      expect(toggle.getAttribute("title")).toBeNull();
+      expect(toggle.getAttribute("aria-label")).toBeNull();
+      // The accessible name itself (asserted via `getByRole`'s `name` match
+      // above) is the count-only "Show 1 annotation" text, not the value.
+    });
+
+    it("applies the same gate on any kind, not only Secret — an annotation on any object can carry a manifest", () => {
+      const configMapWithLastApplied = object(
+        "ConfigMap",
+        {},
+        {},
+        {
+          name: "cm-1",
+          namespace: "default",
+          annotations: { "kubectl.kubernetes.io/last-applied-configuration": FIXTURE_VALUE },
+        },
+      );
+      render(<GenericBody kind="ConfigMap" object={configMapWithLastApplied} context="ctx" />);
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
     });
   });
 
