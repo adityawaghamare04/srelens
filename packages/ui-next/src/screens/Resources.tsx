@@ -353,7 +353,7 @@ function KindList({
         )}
       </FilterBar>
 
-      <div className="scroll min-h-0 flex-1 p-3">
+      <div className="scroll min-h-0 flex-1">
         {list.status === "loading" ? (
           <LoadingState label={`Loading ${lower}`} />
         ) : list.status === "error" ? (
@@ -367,8 +367,10 @@ function KindList({
             {list.error && (
               // Rows and an error together: the last good list is still on
               // screen and is no longer being refreshed. Emptying the table
-              // would throw away the only information the reader has.
-              <Alert tone="warn" title={`These ${lower} are stale`} className="mb-3">
+              // would throw away the only information the reader has. The
+              // table itself runs flush to the panel now, so the alert
+              // carries its own inset rather than borrowing the container's.
+              <Alert tone="warn" title={`These ${lower} are stale`} className="mx-3 mt-3 mb-3">
                 {list.error}
               </Alert>
             )}
