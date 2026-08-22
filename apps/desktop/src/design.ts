@@ -191,6 +191,11 @@ export function toggleNextDesignTheme(): void {
 export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [
   { route: "/applog", name: "Application log" },
   { route: "/notes", name: "Release notes" },
+  { route: "/resources", name: "Workloads" },
+  // Not one screen: every `/k/<slug>` route, around 34 built-in kinds plus
+  // every custom resource the cluster has, all sharing one screen keyed off
+  // a descriptor. "/k" names the family here — it is not itself a route.
+  { route: "/k", name: "Resource lists" },
 ];
 
 /**
