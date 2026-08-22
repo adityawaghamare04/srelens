@@ -9,6 +9,7 @@ import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from
 import { updateConfigData } from "@srelens/core";
 import { ageFromTimestamp, durationBetween, absoluteTimestamp, timestampWithAge } from "@srelens/core";
 import { type Condition, conditionKind, containerStateText, orderPodConditions } from "@srelens/core";
+import { asRecord, asArray, str, plural } from "@srelens/core";
 import { useAccess, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
 import { describeError } from "@srelens/core";
 import {
@@ -31,25 +32,6 @@ import {
   type OpenResource,
   type ResourceTarget,
 } from "@srelens/core";
-
-/* ------------------------------------------------------------------ */
-/* small value helpers                                                 */
-/* ------------------------------------------------------------------ */
-
-function asRecord(v: unknown): Record<string, unknown> {
-  return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-}
-function asArray(v: unknown): unknown[] {
-  return Array.isArray(v) ? v : [];
-}
-function str(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  return String(v);
-}
-function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
 
 type Pair = [label: string, value: React.ReactNode];
 

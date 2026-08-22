@@ -8,6 +8,8 @@
  * convenience for today's two UIs, not a coupling — if either renames its
  * tokens, it maps at its own boundary, not here.
  */
+import { asRecord, str } from "./k8sRaw";
+
 export type HealthKind = "neutral" | "success" | "warning" | "danger" | "info";
 
 export interface Condition {
@@ -16,16 +18,6 @@ export interface Condition {
   reason?: string;
   message?: string;
   lastTransitionTime?: string;
-}
-
-function asRecord(v: unknown): Record<string, unknown> {
-  return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-}
-
-function str(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  return String(v);
 }
 
 export function conditionKind(c: Condition): HealthKind {

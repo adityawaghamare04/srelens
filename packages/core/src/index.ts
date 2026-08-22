@@ -32,6 +32,7 @@ export * from "./lib/files";
 export * from "./lib/forward";
 export * from "./lib/helm";
 export * from "./lib/k8sHealth";
+export * from "./lib/k8sRaw";
 export * from "./lib/k8sTime";
 export * from "./lib/kinds";
 export * from "./lib/kubectlMapper";
