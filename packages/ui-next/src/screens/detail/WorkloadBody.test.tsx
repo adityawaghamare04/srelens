@@ -1,21 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import type { K8sObject, PodSummary, PodMetric } from "@srelens/core";
+import type { K8sObject, PodSummary, PodMetric, ReplicaSetSummary } from "@srelens/core";
 
 // `WorkloadDetailsBody`'s "Pods" section reads live pods/metrics for the
-// workload's selector, via core's `podsForSelector`/`podMetrics` — mocked
-// here so a test controls what "the cluster said" without one.
-// `importOriginal` keeps every formatter (`updateStrategyText`, `str`,
-// `asRecord`, ...) intact.
-const { podsForSelector, podMetrics } = vi.hoisted(() => ({
+// workload's selector, and a Deployment's "Deploy Revisions" section reads
+// its rolled-out ReplicaSets, via core's `podsForSelector`/`podMetrics`/
+// `listReplicaSets` — mocked here so a test controls what "the cluster
+// said" without one. `importOriginal` keeps every formatter
+// (`updateStrategyText`, `str`, `asRecord`, ...) intact.
+const { podsForSelector, podMetrics, listReplicaSets } = vi.hoisted(() => ({
   podsForSelector: vi.fn(async (): Promise<{ pods?: PodSummary[]; error?: string }> => ({ pods: [] })),
   podMetrics: vi.fn(async (): Promise<{ metrics?: PodMetric[]; error?: string }> => ({ metrics: [] })),
+  listReplicaSets: vi.fn(async (): Promise<{ replicasets?: ReplicaSetSummary[]; error?: string }> => ({
+    replicasets: [],
+  })),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@srelens/core")>()),
   podsForSelector,
   podMetrics,
+  listReplicaSets,
 }));
 
 import { WorkloadDetailsBody } from "./WorkloadBody";
@@ -45,6 +50,7 @@ describe("WorkloadDetailsBody", () => {
     vi.clearAllMocks();
     podsForSelector.mockResolvedValue({ pods: [] });
     podMetrics.mockResolvedValue({ metrics: [] });
+    listReplicaSets.mockResolvedValue({ replicasets: [] });
   });
 
   describe("Properties (Deployment/StatefulSet/ReplicaSet)", () => {
@@ -317,6 +323,96 @@ describe("WorkloadDetailsBody", () => {
         />,
       );
       await waitFor(() => expect(screen.getByText("No pods")).toBeDefined());
+    });
+  });
+
+  describe("Deploy Revisions (Deployment)", () => {
+    const REVISION_2: ReplicaSetSummary = {
+      name: "web-def456",
+      revision: "2",
+      desired: 3,
+      ready: 3,
+      current: 3,
+      age: "5m",
+    };
+    const REVISION_1: ReplicaSetSummary = {
+      name: "web-abc123",
+      revision: "1",
+      desired: 0,
+      ready: 0,
+      current: 0,
+      age: "2d",
+    };
+
+    it("shows each revision's number, name, pod count and age", async () => {
+      listReplicaSets.mockResolvedValue({ replicasets: [REVISION_2, REVISION_1] });
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", { replicas: 3, selector: { matchLabels: {} } })}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("Deploy Revisions")).toBeDefined());
+      expect(listReplicaSets).toHaveBeenCalledWith("ctx", "default", "web");
+      expect(screen.getByText("2")).toBeDefined();
+      expect(screen.getByText("web-def456")).toBeDefined();
+      expect(screen.getByText("3/3")).toBeDefined();
+      expect(screen.getByText("5m")).toBeDefined();
+      expect(screen.getByText("1")).toBeDefined();
+      expect(screen.getByText("web-abc123")).toBeDefined();
+      expect(screen.getByText("0/0")).toBeDefined();
+      expect(screen.getByText("2d")).toBeDefined();
+    });
+
+    it("shows a Deployment's single, no-history revision as an ordinary case, not an empty state", async () => {
+      listReplicaSets.mockResolvedValue({ replicasets: [REVISION_2] });
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", { replicas: 3, selector: { matchLabels: {} } })}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("web-def456")).toBeDefined());
+      expect(screen.queryByText("No revisions")).toBeNull();
+    });
+
+    it("shows No revisions when the Deployment has none yet", async () => {
+      listReplicaSets.mockResolvedValue({ replicasets: [] });
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", { replicas: 3, selector: { matchLabels: {} } })}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("No revisions")).toBeDefined());
+    });
+
+    it("does not fetch revisions for a StatefulSet, DaemonSet or ReplicaSet", async () => {
+      render(
+        <WorkloadDetailsBody
+          object={workload("StatefulSet", { replicas: 1, selector: { matchLabels: {} } })}
+          context="ctx"
+        />,
+      );
+      await Promise.resolve();
+      expect(listReplicaSets).not.toHaveBeenCalled();
+      expect(screen.queryByText("Deploy Revisions")).toBeNull();
+    });
+
+    it("renders the revision's name inert, with no navigation control", async () => {
+      listReplicaSets.mockResolvedValue({ replicasets: [REVISION_1] });
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", { replicas: 3, selector: { matchLabels: {} } })}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("web-abc123")).toBeDefined());
+      // Deploy Revisions and related pods share the same inert-value limit:
+      // nothing here can navigate (see the task report). Table's own
+      // column-sort buttons are excluded on purpose — a real control, just
+      // not a navigation one.
+      expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
   });
 

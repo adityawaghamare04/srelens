@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
+  ageSortValue,
   asArray,
   asRecord,
   conditionKind,
+  listReplicaSets,
   podMetrics,
   podsForSelector,
   str,
@@ -12,6 +14,7 @@ import {
   type K8sObject,
   type PodMetric,
   type PodSummary,
+  type ReplicaSetSummary,
 } from "@srelens/core";
 import { EmptyState, KV, LoadingState, PairList, Panel, StatusPill, Table, type Column } from "@srelens/ui-kit";
 import { phaseKind } from "../../lib/kinds/columns";
@@ -45,6 +48,74 @@ function ConditionPills({ conditions }: { conditions: Condition[] }) {
         <StatusPill key={c.type} status={c.type} kind={conditionKind(c)} />
       ))}
     </div>
+  );
+}
+
+const DEPLOY_REVISION_COLUMNS: Column<ReplicaSetSummary>[] = [
+  { key: "revision", header: "#", render: (r) => <span className="font-mono">{r.revision || "—"}</span> },
+  { key: "name", header: "Name", render: (r) => <span className="font-mono">{r.name}</span> },
+  { key: "pods", header: "Pods", render: (r) => `${r.ready}/${r.desired}` },
+  { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => r.age },
+];
+
+/**
+ * The ReplicaSets a Deployment has rolled out — classic's `DeployRevisions`,
+ * fetched live via core's `listReplicaSets`. Deployment-only: classic never
+ * calls this for StatefulSet/DaemonSet/ReplicaSet either, since only a
+ * Deployment has revision history of its own. Name is a `ResourceLink` in
+ * classic, and the whole row is `onRowClick`-navigable; both render as
+ * plain mono text here — see the task report for the full inert-value
+ * list. Classic's own component has no write action (no rollback button, no
+ * menu) — only navigation — so nothing needed to be scoped out on that
+ * account; it only ever SHOWS revisions.
+ */
+function DeployRevisionsSection({
+  context,
+  namespace,
+  ownerName,
+}: {
+  context: string;
+  namespace: string;
+  ownerName: string;
+}) {
+  const [state, setState] = useState<{ status: "loading" | "ready" | "error"; revisions?: ReplicaSetSummary[] }>({
+    status: "loading",
+  });
+
+  useEffect(() => {
+    let active = true;
+    setState({ status: "loading" });
+    listReplicaSets(context, namespace, ownerName).then((out) => {
+      if (!active) return;
+      if (out.error) {
+        setState({ status: "error" });
+        return;
+      }
+      setState({ status: "ready", revisions: out.replicasets ?? [] });
+    });
+    return () => {
+      active = false;
+    };
+  }, [context, namespace, ownerName]);
+
+  if (state.status === "error") return null; // a missing revisions list shouldn't break the panel
+  if (state.status === "loading") {
+    return (
+      <Panel title="Deploy Revisions">
+        <LoadingState label="Loading revisions" />
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="Deploy Revisions">
+      <Table
+        columns={DEPLOY_REVISION_COLUMNS}
+        data={state.revisions ?? []}
+        getRowKey={(r) => r.name}
+        emptyText="No revisions"
+      />
+    </Panel>
   );
 }
 
@@ -230,13 +301,17 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
  * classic's `WorkloadDetailView` (Deployment/StatefulSet/ReplicaSet) and
  * `DaemonSetBody` (DaemonSet), which classic renders as genuinely different
  * shapes (replica counts vs. per-node counts), not variations on one KV
- * list. Both then show the workload's related pods (classic's `ManagedPods`)
- * when the workload has a selector to match them by.
+ * list. A Deployment then shows its rolled-out revisions (classic's
+ * `DeployRevisions`), and every kind with a selector shows its related pods
+ * (classic's `ManagedPods`) — in that order, matching classic's own
+ * `WorkloadDetailView`, which renders `DeployRevisions` before
+ * `ManagedPods`.
  */
 export function WorkloadDetailsBody({ object, context }: { object: K8sObject; context: string }) {
   const kind = str(object.kind);
   const spec = asRecord(object.spec);
   const namespace = str(object.metadata?.namespace);
+  const name = str(object.metadata?.name);
   const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
   const hasSelector = Object.keys(selector).length > 0;
 
@@ -248,6 +323,9 @@ export function WorkloadDetailsBody({ object, context }: { object: K8sObject; co
         <DaemonSetSchedulingSection object={object} />
       ) : (
         <WorkloadPropertiesSection kind={kind} object={object} />
+      )}
+      {kind === "Deployment" && namespace && name && (
+        <DeployRevisionsSection context={context} namespace={namespace} ownerName={name} />
       )}
       {hasSelector && namespace && (
         <RelatedPodsSection context={context} namespace={namespace} selector={selector} />
