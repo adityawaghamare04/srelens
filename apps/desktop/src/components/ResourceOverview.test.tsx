@@ -44,7 +44,6 @@ import { useAccess } from "@srelens/core/react";
 import {
   ResourceOverview,
   ObjectDetail,
-  containerLastRestartTime,
   parseQuantity,
   summarizeAffinity,
 } from "./ResourceOverview";
@@ -100,18 +99,6 @@ describe("summarizeAffinity", () => {
 
   it("returns an empty list when there is no affinity", () => {
     expect(summarizeAffinity({})).toEqual([]);
-  });
-});
-
-describe("containerLastRestartTime", () => {
-  it("uses the previous termination time only for restarted containers", () => {
-    expect(
-      containerLastRestartTime({
-        restartCount: 2,
-        lastState: { terminated: { finishedAt: "2025-12-31T23:55:00Z" } },
-      }),
-    ).toBe("2025-12-31T23:55:00Z");
-    expect(containerLastRestartTime({ restartCount: 0, lastState: {} })).toBe("");
   });
 });
 
