@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isApplePlatform, isTauri, listContexts, type ClusterContext } from "@srelens/core";
 import { Button, Checkbox, Drawer, LoadingState, TabStrip, TextInput, type ContextMenuItem, type StripTab } from "@srelens/ui-kit";
+import { loadMarks } from "../lib/marks";
 import { defaultState, reconcile } from "../lib/tabs";
 import { flushSave, installFlushOnUnload, loadTabsState, scheduleSave } from "../lib/tabsPersist";
 import {
@@ -76,6 +77,10 @@ export function Window({
   // names, the sidebar looks up CRDs by name, and the new-tab action turns the
   // active cluster's id into the name a tab carries.
   const [contexts, setContexts] = useState<ClusterContext[]>([]);
+  // Kept rather than dropped once read: a failed list still preserves the
+  // saved cluster ids (see below), and the rail has to say why it cannot draw
+  // them rather than leaving the user to guess.
+  const [contextsError, setContextsError] = useState<string | undefined>(undefined);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -99,17 +104,31 @@ export function Window({
       // The contexts are read first so that `found` is already filled if the
       // saved state is what fails: the fallback is then a Default workspace
       // over the user's real clusters rather than an empty rail.
+      // Loaded before anything else in boot: it try/catches internally and
+      // cannot throw, so there is no reason to make the tabs/contexts work
+      // wait on it. Without this call the module never reads what is on disk
+      // — every mark starts at the default, and the first `setMark` then
+      // spreads over that empty record and persists it, erasing every other
+      // cluster's stored appearance.
+      loadMarks();
       let found: ClusterContext[] = [];
       try {
         const outcome = await listContexts();
         if (cancelled) return;
         found = outcome.contexts ?? [];
+        if (outcome.error) setContextsError(outcome.error);
         const saved = loadTabsState();
         if (saved && outcome.error) {
           // The list failed, not the clusters: reconciling against nothing would
           // strip every workspace's cluster ids and the next change would persist
-          // that. Trust the disk until the backend answers.
-          setState(saved);
+          // that. Trust the disk until the backend answers — unless there is
+          // nothing to trust: `parseStoredState` can legitimately return zero
+          // workspaces (every stored one failed to parse), and installing that
+          // raw skips `reconcile`, the only thing that restores a default
+          // workspace. `currentWorkspace()` on an empty list is `undefined`,
+          // and `useTabs` dereferencing it is a render-time crash — the one
+          // thing "boot must always reach `setBooted(true)`" exists to prevent.
+          setState(saved.workspaces.length > 0 ? saved : defaultState(found));
         } else {
           setState(saved ? reconcile(saved, found) : defaultState(found));
         }
@@ -200,11 +219,22 @@ export function Window({
     function onKey(e: KeyboardEvent) {
       const action = matchWindowKey(e, apple);
       if (!action) return;
-      // In web mode a zoom chord is the browser's own — neither dispatched
-      // nor preventDefault-ed, so Cmd/Ctrl +/-/0 falls through to it exactly
-      // as it would with no listener here at all.
-      const zooms = action.type === "zoom-in" || action.type === "zoom-out" || action.type === "zoom-reset";
-      if (zooms && !desktop) return;
+      // In web mode these chords are the browser's own — neither dispatched
+      // nor preventDefault-ed, so they fall through exactly as they would with
+      // no listener here at all. Zoom is the browser's native zoom (core's
+      // uiScale doc); ⌘W/⌘T/⌘1-9 are tab chords a page cannot cancel, so
+      // acting on them here would desync this workspace's tabs from the one
+      // the browser just closed/opened/switched to. `reopen-tab`,
+      // `prev-tab`/`next-tab` and `console` collide with nothing the browser
+      // owns, so they still fire.
+      const browserOwned =
+        action.type === "zoom-in" ||
+        action.type === "zoom-out" ||
+        action.type === "zoom-reset" ||
+        action.type === "close-tab" ||
+        action.type === "new-tab" ||
+        action.type === "select-tab";
+      if (browserOwned && !desktop) return;
       e.preventDefault();
       runRef.current(action);
     }
@@ -254,7 +284,7 @@ export function Window({
         />
       )}
       <div className="flex min-h-0 flex-1">
-        {active && <Rail contexts={contexts} onConnect={() => openTab("/connect")} />}
+        {active && <Rail contexts={contexts} error={contextsError} onConnect={() => openTab("/connect")} />}
         {active && <Nav contexts={contexts} />}
         <div className="flex min-h-0 flex-1 flex-col">
           {active && (

@@ -10,6 +10,13 @@ export interface RailProps {
   contexts: ClusterContext[];
   /** Opens /connect. The rail knows the gesture, the window knows the route. */
   onConnect: () => void;
+  /**
+   * Why the cluster list could not be read — a kubeconfig that failed to
+   * parse, usually. The saved cluster ids are kept and drawn once their
+   * contexts come back, but until then the rail would otherwise be silently
+   * empty with no way to tell "nothing configured" from "couldn't read it".
+   */
+  error?: string;
 }
 
 /**
@@ -61,7 +68,7 @@ const MAX_IMAGE_BYTES = 64 * 1024;
  * asked about, so it re-renders this rail on any mark change and the items then
  * read the plain `getMark` beside it.
  */
-export function Rail({ contexts, onConnect }: RailProps) {
+export function Rail({ contexts, onConnect, error }: RailProps) {
   const { workspace } = useTabs();
   const active = useActiveCluster();
   const { links } = useWorkspaceView();
@@ -140,6 +147,7 @@ export function Rail({ contexts, onConnect }: RailProps) {
         onSelect={setActiveCluster}
         onMenu={(id) => setEditing(id)}
         onAdd={onConnect}
+        error={error}
       />
       {target && (
         <Drawer open title={target.name} onClose={() => setEditing(null)}>

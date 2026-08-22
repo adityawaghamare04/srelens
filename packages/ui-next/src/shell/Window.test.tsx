@@ -93,6 +93,7 @@ import * as store from "../lib/tabsStore";
 import { resetProbes } from "../lib/probe";
 import { resetView } from "../lib/workspace";
 import { defaultState, makeTab } from "../lib/tabs";
+import { defaultMark, getMark, setMark, MARKS_KEY } from "../lib/marks";
 
 const ctx = (stableId: string, name = stableId) => ({ name, stableId, cluster: name, server: "", isCurrent: false });
 
@@ -193,6 +194,19 @@ describe("Window boot", () => {
     expect(store.getState().workspaces[0].clusters).toEqual(["prod"]);
   });
 
+  it("boots to a usable window when every saved workspace fails to parse and the cluster list also errors", async () => {
+    // `parseStoredState` can legitimately return zero workspaces (every stored
+    // one failed to parse). Before the fix, the `saved && outcome.error`
+    // branch installed that raw — bypassing `reconcile`, the only thing that
+    // restores a default workspace — and `currentWorkspace()` returning
+    // `undefined` threw at render.
+    loadTabsState.mockReturnValue({ workspaces: [], currentId: "gone" });
+    listContexts.mockResolvedValue({ error: "kubeconfig unreadable" });
+    await booted();
+    expect(store.getState().workspaces.length).toBeGreaterThan(0);
+    expect(screen.getByRole("tablist")).toBeDefined();
+  });
+
   it("saves on every store change after boot, and flushes on unload", async () => {
     await booted();
     expect(installFlushOnUnload).toHaveBeenCalled();
@@ -214,6 +228,41 @@ describe("Window boot", () => {
     expect(flushSave).not.toHaveBeenCalled();
     view.unmount();
     expect(flushSave).toHaveBeenCalled();
+  });
+});
+
+describe("Window marks", () => {
+  it("loads stored cluster marks at boot, so a colour set before this launch is not lost", async () => {
+    localStorage.setItem(
+      MARKS_KEY,
+      JSON.stringify({ prod: { name: "prod", short: "PR", color: "var(--ok)", mark: "text", withText: true } }),
+    );
+    await booted();
+    expect(getMark("prod", "prod").color).toBe("var(--ok)");
+  });
+
+  it("setting one cluster's mark does not erase another cluster's stored entry", async () => {
+    // Before the fix, the module started at `marks = {}` (nothing had ever
+    // loaded it), so the first `setMark` spread over an empty record and
+    // persisted that — every other cluster's stored mark vanished from disk.
+    localStorage.setItem(
+      MARKS_KEY,
+      JSON.stringify({ prod: { name: "prod", short: "PR", color: "var(--ok)", mark: "text", withText: true } }),
+    );
+    listContexts.mockResolvedValue({ contexts: [ctx("prod"), ctx("dev")] });
+    await booted();
+    act(() => setMark("dev", { ...defaultMark("dev"), color: "var(--warn)" }));
+    const stored = JSON.parse(localStorage.getItem(MARKS_KEY)!);
+    expect(stored.prod.color).toBe("var(--ok)");
+    expect(stored.dev.color).toBe("var(--warn)");
+  });
+});
+
+describe("Window cluster list error", () => {
+  it("surfaces a failed cluster list to the rail instead of just leaving it empty", async () => {
+    listContexts.mockResolvedValue({ error: "kubeconfig unreadable" });
+    await booted();
+    expect(screen.getByRole("img", { name: "kubeconfig unreadable" })).toBeDefined();
   });
 });
 
@@ -350,6 +399,18 @@ describe("Window accelerators", () => {
     expect(zoomSpy).toHaveBeenCalledWith("in");
     // `false` means preventDefault() was called on a cancelable event.
     expect(notCancelled).toBe(false);
+  });
+
+  it("leaves ⌘W alone in web mode too — the browser owns it, and closing the tab under it would look like data loss", async () => {
+    // A browser delivers ⌘W without letting the page cancel it; if `closeTab`
+    // still ran here, `installFlushOnUnload` would persist the close as the
+    // page unloads and the tab would be missing on the next visit.
+    isTauri.mockReturnValue(false);
+    await booted();
+    act(() => store.openTab("/k/pods"));
+    const notCancelled = fireEvent.keyDown(window, { key: "w", metaKey: true });
+    expect(store.currentWorkspace().tabs).toHaveLength(2);
+    expect(notCancelled).toBe(true);
   });
 
   it("leaves the browser's own zoom alone in web mode", async () => {
