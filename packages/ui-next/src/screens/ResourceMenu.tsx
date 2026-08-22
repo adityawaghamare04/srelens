@@ -189,12 +189,13 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
   return { items, dialog };
 }
 
-const TITLES: Record<Pending["type"], (kind: string) => string> = {
+// `suspend` isn't here: its title depends on direction (Suspend vs. Resume),
+// decided per-instance in `PendingDialog` rather than by a fixed lookup.
+const TITLES: Record<Exclude<Pending["type"], "suspend">, (kind: string) => string> = {
   delete: (kind) => `Delete ${kind}?`,
   scale: (kind) => `Scale ${kind}`,
   restart: (kind) => `Restart ${kind}`,
   evict: () => "Evict pod?",
-  suspend: () => "", // overridden per-instance, below — the label depends on direction
 };
 
 function messageFor(pending: Pending): ReactNode {

@@ -206,12 +206,24 @@ describe("useRowMenu", () => {
     expect(deployLabels).not.toContain("Run now");
   });
 
-  it("suspends the row that was picked, and resumes when it is already suspended", async () => {
+  it("suspends the row that was picked", async () => {
     render(<Harness args={CRON_ARGS} row={CRON_ROW} />);
     await userEvent.click(screen.getByRole("button", { name: "Suspend" }));
     const dialog = within(screen.getByRole("dialog"));
     await userEvent.click(dialog.getByRole("button", { name: "Suspend" }));
     await waitFor(() => expect(cronjobSetSuspend).toHaveBeenCalledWith("prod", "ops", "nightly", true));
+  });
+
+  it("resumes the row when it is already suspended, inverting the direction rather than repeating it", async () => {
+    // The other half of the pair above: a regression that broke the
+    // inversion specifically on the resume side (e.g. always passing `true`)
+    // would still pass a test that only ever exercised `suspended: false`.
+    const suspendedRow: ListRow & { suspended: boolean } = { ...CRON_ROW, suspended: true };
+    render(<Harness args={CRON_ARGS} row={suspendedRow} />);
+    await userEvent.click(screen.getByRole("button", { name: "Resume" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await userEvent.click(dialog.getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(cronjobSetSuspend).toHaveBeenCalledWith("prod", "ops", "nightly", false));
   });
 
   it("runs a CronJob now with no confirm at all", async () => {

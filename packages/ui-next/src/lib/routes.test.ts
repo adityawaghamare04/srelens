@@ -55,6 +55,25 @@ suite("describe", () => {
     expect(describe("/resources/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
   });
 
+  it("titles the row menu's logs/shell/forward tabs distinctly from the bare resource tab and from each other", () => {
+    // Same prefix as the bare resource route, so without a distinct title and
+    // kind for each suffix, opening a pod three ways (Open in new tab, Follow
+    // logs, Open shell) produced three indistinguishable tabs in the strip.
+    expect(describe("/resources/web-1/logs", "c")).toMatchObject({ title: "web-1 · logs", kind: "logs", sub: "c" });
+    expect(describe("/resources/web-1/shell", "c")).toMatchObject({
+      title: "web-1 · shell",
+      kind: "terminal",
+      sub: "c",
+    });
+    expect(describe("/resources/web-1/forward", "c")).toMatchObject({
+      title: "web-1 · forward",
+      kind: "forwards",
+      sub: "c",
+    });
+    // The bare route is unaffected — same title and kind as before.
+    expect(describe("/resources/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
+  });
+
   it("names an edit tab after what it edits", () => {
     expect(describe("/edit/web-1", "c")).toMatchObject({ title: "Edit web-1", kind: "edit" });
   });

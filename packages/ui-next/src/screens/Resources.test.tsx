@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Everything the screen reaches into core for. `watchResource` is held open by
@@ -407,5 +407,21 @@ describe("Resources", () => {
     expect(watchResource).not.toHaveBeenCalled();
     expect(listCrds).not.toHaveBeenCalled();
     expect(useNamespaceOptions).not.toHaveBeenCalled();
+  });
+
+  // The seam between this screen and `useRowMenu` (`ResourceMenu.tsx`): the
+  // hook itself is tested on its own contract in `ResourceMenu.test.tsx`,
+  // but nothing there renders `Resources` — this is what proves `rowMenu`,
+  // `rowMenuLabel` and the dialog are actually wired to the table this
+  // screen renders, not merely both present in the file.
+  it("opens a row's menu and its confirm dialog from the rendered screen", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    fireEvent.contextMenu(screen.getByText("web-1").closest("tr")!);
+    await userEvent.click(await screen.findByText("Delete"));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("web-1");
   });
 });

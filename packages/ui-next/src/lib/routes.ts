@@ -74,7 +74,17 @@ const CLUSTER_SCOPED: Record<string, Omit<RouteInfo, "route" | "sub">> =
 export function describe(route: string, clusterName?: string): RouteInfo {
   const sub = clusterName || undefined;
   if (route.startsWith("/resources/")) {
-    return { route, title: decodeURIComponent(route.split("/")[2] ?? ""), sub, kind: "resource" };
+    const [, , rawName, suffix] = route.split("/");
+    const name = decodeURIComponent(rawName ?? "");
+    // The row menu (`ResourceMenu.tsx`) mints `/resources/<name>/logs|shell|forward`
+    // alongside the bare `/resources/<name>` — same prefix, so without this a
+    // pod opened three ways ("Open in new tab", "Follow logs", "Open shell")
+    // got three tabs with the identical title and kind, indistinguishable in
+    // the strip.
+    if (suffix === "logs") return { route, title: `${name} · logs`, sub, kind: "logs" };
+    if (suffix === "shell") return { route, title: `${name} · shell`, sub, kind: "terminal" };
+    if (suffix === "forward") return { route, title: `${name} · forward`, sub, kind: "forwards" };
+    return { route, title: name, sub, kind: "resource" };
   }
   if (route.startsWith("/edit/")) {
     return { route, title: `Edit ${decodeURIComponent(route.split("/")[2] ?? "")}`, sub, kind: "edit" };
