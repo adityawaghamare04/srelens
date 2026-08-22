@@ -89,9 +89,14 @@ export interface Column<T> {
    *  sortable column stays clickable regardless of which one is the active
    *  sort — this only gates the header button existing at all. */
   sortable?: boolean;
-  /** Opt-in: shows a funnel button that scopes the toolbar search to this
-   *  column. Off by default — a funnel on every column was the bug (design
-   *  correction, #319 follow-up); most columns don't need one. */
+  /** Dual role with opposite defaults:
+   *  (1) Opt-in for the header filter funnel button: `filterable === true` shows
+   *      a funnel that scopes the toolbar search to this column alone.
+   *  (2) Opt-out for filterTableData's free-text search scope: `filterable !== false`
+   *      includes this column in the default search-all-columns path (when no
+   *      funnel is active). An undefined column still searches; only explicit
+   *      `filterable: false` excludes it entirely from searches.
+   *  Most columns don't need a funnel; off by default for that reason. */
   filterable?: boolean;
   /** Header and cell alignment. Logical values, not "left"/"right": the table
    *  renders in right-to-left locales eventually, where `end` does the right
@@ -554,6 +559,12 @@ export function Table<T>({
                       // Hidden at rest — the design shows a caret only on the
                       // active sort column — but revealed on hover/keyboard
                       // focus so the button stays discoverable without it.
+                      // Reveal is driven by Tailwind utilities (group-hover:opacity-100,
+                      // group-focus-visible:opacity-100) that beat the .th-caret component
+                      // layer rule (opacity: 0) because Tailwind's utilities layer is
+                      // declared after kit.css's @layer components. If .th-caret ever
+                      // leaves the component layer or gains !important, this reveal breaks
+                      // silently — the affordance disappears for keyboard and pointer users.
                       <span className="th-caret opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100">
                         <ArrowUpDown />
                       </span>

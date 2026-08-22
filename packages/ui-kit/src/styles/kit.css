@@ -327,6 +327,13 @@
     text-transform: inherit;
   }
   .th-sort:hover { color: var(--ink); }
+  /* The inactive sort caret starts hidden (opacity: 0) and is revealed on
+     hover/focus by Tailwind utilities applied in the JSX (group-hover:opacity-100,
+     group-focus-visible:opacity-100). This works because Tailwind's utilities
+     layer is declared after this @layer components block, so the utilities win
+     the cascade regardless of specificity. If .th-caret ever moves outside the
+     component layer or gains !important, the reveal mechanism breaks silently —
+     the affordance disappears and keyboard/pointer users lose discoverability. */
   .th-caret { opacity: 0; }
   .th-sort[data-on="true"] .th-caret { opacity: 1; color: var(--accent); }
 
