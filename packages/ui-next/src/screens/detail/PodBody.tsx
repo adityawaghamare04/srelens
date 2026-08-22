@@ -30,8 +30,8 @@ import {
   SubHead,
   Table,
   type Column,
-  type StatusKind,
 } from "@srelens/ui-kit";
+import { phaseKind } from "../../lib/kinds/columns";
 
 /**
  * Kubernetes' own labels for a pod volume's source kind, keyed on which field
@@ -49,19 +49,6 @@ const VOLUME_TYPE_LABELS: Record<string, string> = {
   nfs: "NFS",
   csi: "CSI",
 };
-
-/**
- * A pod's phase, coloured. Not sourced from core: core has no notion of a UI
- * severity for a bare phase string, and this mapping is specific to the small
- * set of values `status.phase` actually takes — unlike `conditionKind` (which
- * core does own, because it is shared across every condition-bearing kind).
- */
-function phaseKind(phase: string): StatusKind {
-  if (phase === "Running" || phase === "Succeeded") return "success";
-  if (phase === "Pending") return "warning";
-  if (phase === "Failed" || phase === "Unknown") return "danger";
-  return "neutral";
-}
 
 /** A formatted list, one item per line — env vars, mounts, ports, probe chips. */
 function StringList({ items }: { items: string[] }) {
