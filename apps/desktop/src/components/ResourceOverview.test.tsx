@@ -41,12 +41,7 @@ vi.mock("@srelens/core/react", async (importOriginal) => {
 });
 import { useAccess } from "@srelens/core/react";
 
-import {
-  ResourceOverview,
-  ObjectDetail,
-  parseQuantity,
-  summarizeAffinity,
-} from "./ResourceOverview";
+import { ResourceOverview, ObjectDetail } from "./ResourceOverview";
 import type { K8sObject } from "@srelens/core";
 
 const NOW = Date.parse("2026-01-01T00:00:00Z");
@@ -66,41 +61,6 @@ beforeEach(() => {
   });
 });
 const TLS_CERTIFICATE = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURPakNDQWlLZ0F3SUJBZ0lVSjVQdnk1NXRIbUhESkd3elhNVld2YnV4ck5nd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0Z6RVZNQk1HQTFVRUF3d01aWGhoYlhCc1pTNTBaWE4wTUI0WERUSTJNRGN3TmpFeE1qazFOVm9YRFRNMgpNRGN3TXpFeE1qazFOVm93RnpFVk1CTUdBMVVFQXd3TVpYaGhiWEJzWlM1MFpYTjBNSUlCSWpBTkJna3Foa2lHCjl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFzeFc2aHU0MVVwYittNXpHZm5aZ2tpT0xuaVhYTmhPYzhvTWgKaFZCcDVXL0Y5aXluelBGQjRGM0NOK2VlaEp1aVhYWHVFUWdQUVFqOVIrV3ErYlBUK1JPOHd6cEJqQ1BYaHo1TAp2Z0dzNDR1cXBQQ2JvUXVpV0RYcmZDWWtUT2xyd0tIZWJDcVRRM2FQUk1hUGk0YkhzRHdNdmlUcDRhMERGVTFWCkhGc2RXcHM0Uis3TG1MSXBhU3RUTTV1bU1qSC9FTzJGZ2psQmhYUUVGT1M0UnZ2WGpoV0E1ZGZiMEtwNUVSNFIKZjFGdktCRTNaTzVmbG5ldlFlTGdyMnZZT2Jhalg5OTQ1NVE0L1UwMTJJZG1ldWV4L2Q1ZU5VV0VNelprZzlrUQp1U00vMFpwbkhEVFU4UXZQTHh0Qy9jSlU1ekdKMzM0ZnppTGVmQUlpbDR2NFRvVzBQd0lEQVFBQm8zNHdmREFkCkJnTlZIUTRFRmdRVWxadEVndTl1L3ZTTVptSmNNa2RUcWhWVmJDSXdId1lEVlIwakJCZ3dGb0FVbFp0RWd1OXUKL3ZTTVptSmNNa2RUcWhWVmJDSXdEd1lEVlIwVEFRSC9CQVV3QXdFQi96QXBCZ05WSFJFRUlqQWdnZ3hsZUdGdApjR3hsTG5SbGMzU0NFSGQzZHk1bGVHRnRjR3hsTG5SbGMzUXdEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBR2svCnp6cGhUNnRuNCtxUXg5Ly9meWNkSzFtNjg1eW1TRFZqT3ZXeWRQaWg4RzI4OUJkQ1BmYlc4ZVVrOXJqakJVZWcKR1k5OUJMcEhvcW9zZDNVWEhOUDJzWUdnZ0dZOG40QXdSbFFWZi9qajBPenVWUzZpS0FDM1ZXWFBtdGk5Q1JQZwpHVkdaR0VZMWI1SXYwVStaSzBjYlJ6c1NSN0FBN05VWGhTUUg0NjJDQlpJa1JSTXNFcVhSV2huUG5Kd3phLzJJCmJ1REdiTG1WMmhRUTdJeWJtb0FpL1FQVUM5WldrMExOV2pGYlpDa0kvem4wd2QxWVhham1iTHBSV0dsTjR1LzcKL2NDSER6NDNyWTZXeHJNRjVwYkJ5aWcvWk5obUVZK25rSFhwK2ZoRFdZOGV1QVVxT1p4bUQrNFIzL2lPQ2dhYgpsVWMzUnNCdmExVjNSbFB6K0pvPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==";
-
-describe("parseQuantity", () => {
-  it("parses plain, milli, binary, and decimal suffixes", () => {
-    expect(parseQuantity("4")).toBe(4);
-    expect(parseQuantity("500m")).toBe(0.5);
-    expect(parseQuantity("2Gi")).toBe(2 * 2 ** 30);
-    expect(parseQuantity("1G")).toBe(1e9);
-  });
-  it("returns null for unparseable input", () => {
-    expect(parseQuantity("")).toBeNull();
-    expect(parseQuantity("abc")).toBeNull();
-  });
-});
-
-describe("summarizeAffinity", () => {
-  it("summarizes required and preferred rules per affinity type", () => {
-    const affinity = {
-      nodeAffinity: {
-        requiredDuringSchedulingIgnoredDuringExecution: { nodeSelectorTerms: [{}, {}] },
-        preferredDuringSchedulingIgnoredDuringExecution: [{}],
-      },
-      podAntiAffinity: {
-        requiredDuringSchedulingIgnoredDuringExecution: [{}],
-      },
-    };
-    expect(summarizeAffinity(affinity)).toEqual([
-      "Node affinity: 2 required, 1 preferred",
-      "Pod anti-affinity: 1 required",
-    ]);
-  });
-
-  it("returns an empty list when there is no affinity", () => {
-    expect(summarizeAffinity({})).toEqual([]);
-  });
-});
 
 const podObject: K8sObject = {
   kind: "Pod",

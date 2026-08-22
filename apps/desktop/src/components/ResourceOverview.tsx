@@ -20,6 +20,8 @@ import {
   mountText,
   tolerationText,
 } from "@srelens/core";
+import { summarizeAffinity, updateStrategyText, relatedPodSelector } from "@srelens/core";
+import { parseQuantity, usagePercent, formatBytes, decodedByteLength } from "@srelens/core";
 import { useAccess, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
 import { describeError } from "@srelens/core";
 import {
@@ -220,30 +222,6 @@ function conditionBadgeVariant(c: Condition): BadgeVariant {
   if (c.status !== "True") return negative ? "success" : "neutral";
   if (/Progressing/i.test(c.type)) return "info";
   return negative ? "danger" : "success";
-}
-
-/**
- * One line per affinity type in use, e.g. "Node affinity: 2 required, 1
- * preferred". `nodeAffinity` counts `nodeSelectorTerms`; pod (anti-)affinity
- * count their rule arrays directly. Types with no rules are omitted.
- */
-export function summarizeAffinity(affinity: Record<string, unknown>): string[] {
-  const lines: string[] = [];
-  const describe = (label: string, rule: Record<string, unknown>, requiredIsTerms: boolean) => {
-    const required = requiredIsTerms
-      ? asArray(asRecord(rule.requiredDuringSchedulingIgnoredDuringExecution).nodeSelectorTerms).length
-      : asArray(rule.requiredDuringSchedulingIgnoredDuringExecution).length;
-    const preferred = asArray(rule.preferredDuringSchedulingIgnoredDuringExecution).length;
-    if (required === 0 && preferred === 0) return;
-    const parts: string[] = [];
-    if (required) parts.push(`${required} required`);
-    if (preferred) parts.push(`${preferred} preferred`);
-    lines.push(`${label}: ${parts.join(", ")}`);
-  };
-  describe("Node affinity", asRecord(affinity.nodeAffinity), true);
-  describe("Pod affinity", asRecord(affinity.podAffinity), false);
-  describe("Pod anti-affinity", asRecord(affinity.podAntiAffinity), false);
-  return lines;
 }
 
 /** Conditions as a row of coloured badges (Pod/Deployment-style). */
@@ -993,17 +971,6 @@ function WorkloadDetailView({
   );
 }
 
-/** "RollingUpdate (partition 2)" / "RollingUpdate (max unavailable 1)" / "OnDelete". */
-function updateStrategyText(strategy: Record<string, unknown>): string {
-  const type = str(strategy.type) || "RollingUpdate";
-  const ru = asRecord(strategy.rollingUpdate);
-  const parts: string[] = [];
-  if (ru.partition != null) parts.push(`partition ${str(ru.partition)}`);
-  if (ru.maxUnavailable != null) parts.push(`max unavailable ${str(ru.maxUnavailable)}`);
-  if (ru.maxSurge != null) parts.push(`max surge ${str(ru.maxSurge)}`);
-  return parts.length ? `${type} (${parts.join(", ")})` : type;
-}
-
 function DaemonSetBody({ obj }: { obj: K8sObject }) {
   const status = asRecord(obj.status);
   const spec = asRecord(obj.spec);
@@ -1265,20 +1232,6 @@ function decodeBase64(v: string): string {
   } catch {
     return v;
   }
-}
-
-function decodedByteLength(v: string): number {
-  try {
-    return atob(v).length;
-  } catch {
-    return new TextEncoder().encode(v).length;
-  }
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 /** One ConfigMap/Secret entry: key + value. Secret values are base64-decoded
@@ -2055,29 +2008,6 @@ interface QuotaRow {
   hard: string;
 }
 
-/** Parse a Kubernetes quantity (e.g. "500m", "2Gi", "4") to a base-unit number. */
-export function parseQuantity(q: string): number | null {
-  const m = /^([0-9.]+)\s*([a-zA-Z]*)$/.exec((q ?? "").trim());
-  if (!m) return null;
-  const n = parseFloat(m[1]);
-  if (Number.isNaN(n)) return null;
-  const unit = m[2];
-  const binary: Record<string, number> = { Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60 };
-  const decimal: Record<string, number> = { k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18 };
-  if (unit === "") return n;
-  if (unit === "m") return n / 1000;
-  if (binary[unit]) return n * binary[unit];
-  if (decimal[unit]) return n * decimal[unit];
-  return n; // unknown unit — same on both sides, so the ratio still holds
-}
-
-function usagePercent(used: string, hard: string): number | null {
-  const u = parseQuantity(used);
-  const h = parseQuantity(hard);
-  if (u == null || h == null || h === 0) return null;
-  return Math.round((u / h) * 100);
-}
-
 function ResourceQuotaBody({ obj }: { obj: K8sObject }) {
   const status = asRecord(obj.status);
   const hard = asRecord(status.hard);
@@ -2613,23 +2543,6 @@ function KindBody({
       return <WebhookBody obj={obj} />;
     default:
       return null;
-  }
-}
-
-function relatedPodSelector(kind: string, obj: K8sObject): Record<string, string> {
-  const spec = asRecord(obj.spec);
-  switch (kind) {
-    case "Service":
-      return asRecord(spec.selector) as Record<string, string>;
-    case "DaemonSet":
-    case "Job":
-      return asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
-    case "PodDisruptionBudget":
-      return asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
-    case "NetworkPolicy":
-      return asRecord(asRecord(spec.podSelector).matchLabels) as Record<string, string>;
-    default:
-      return {};
   }
 }
 
