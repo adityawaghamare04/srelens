@@ -38,6 +38,18 @@ const POD: K8sObject = {
   metadata: { name: "web-1", namespace: "default" },
 };
 
+const POD_2: K8sObject = {
+  kind: "Pod",
+  apiVersion: "v1",
+  metadata: { name: "web-2", namespace: "default" },
+};
+
+const CONFIGMAP: K8sObject = {
+  kind: "ConfigMap",
+  apiVersion: "v1",
+  metadata: { name: "cm-1", namespace: "default" },
+};
+
 function baseDescriptor(overrides: Partial<KindDescriptor<ListRow>> = {}): KindDescriptor<ListRow> {
   return { k8sKind: "Pod", columns: [], source: "watch", scope: "namespaced", actions: {}, ...overrides };
 }
@@ -150,6 +162,72 @@ describe("ResourceDetail", () => {
     expect(getByRole("alert").textContent ?? "").toContain("web-1");
     // Distinguishable from the empty state above: no "No events" label renders.
     expect(queryByText("No events")).toBeNull();
+  });
+
+  it("does not reuse a previously-opened pane's data after the subject changes on an already-mounted shell", async () => {
+    getObject.mockResolvedValueOnce({ object: POD });
+    getManifest.mockResolvedValueOnce({ yaml: "kind: Pod\nmetadata:\n  name: web-1\n" });
+
+    const { getByRole, container, rerender } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("web-1"));
+
+    // A different pod, same shell instance — the peek fills like this on
+    // nearly every row click.
+    getObject.mockResolvedValueOnce({ object: POD_2 });
+    getManifest.mockResolvedValueOnce({ yaml: "kind: Pod\nmetadata:\n  name: web-2\n" });
+    rerender(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-2" />);
+
+    await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("web-2"));
+    expect(container.querySelector(".cm-content")?.textContent).not.toContain("web-1");
+    expect(getManifest).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists the selected pane across a subject change when the new subject's kind also offers it", async () => {
+    getObject.mockResolvedValueOnce({ object: POD });
+    const { getByRole, rerender } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
+
+    getObject.mockResolvedValueOnce({ object: POD_2 });
+    rerender(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-2" />);
+
+    await waitFor(() => expect(getByRole("heading").textContent).toBe("web-2"));
+    // Still on YAML — comparing YAML (or scanning Events) across several rows
+    // is a normal workflow, and every row click must not throw the reader
+    // back to Details.
+    expect(getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("falls back to Details when the newly selected subject's kind doesn't offer the previously selected pane", async () => {
+    descriptorFor.mockImplementation((slug: string) =>
+      slug === "pods" ? baseDescriptor({ panes: { containers: true } }) : undefined,
+    );
+    getObject.mockResolvedValueOnce({ object: POD });
+    const { getByRole, queryByRole, rerender } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "Containers" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "Containers" }));
+    await waitFor(() =>
+      expect(getByRole("tab", { name: "Containers" }).getAttribute("aria-selected")).toBe("true"),
+    );
+
+    // A ConfigMap's descriptor offers no Containers pane — the guard that
+    // already exists for "this kind doesn't have the selected pane" is what
+    // must catch this, not a reset that also clobbers the persist case above.
+    getObject.mockResolvedValueOnce({ object: CONFIGMAP });
+    rerender(<ResourceDetail context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />);
+
+    await waitFor(() => expect(getByRole("heading").textContent).toBe("cm-1"));
+    expect(queryByRole("tab", { name: "Containers" })).toBeNull();
+    expect(getByRole("tab", { name: "Details" }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("behaves identically with and without onClose, apart from the close affordance", async () => {
