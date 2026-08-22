@@ -1,0 +1,289 @@
+import { useEffect, useMemo } from "react";
+import {
+  listCrds,
+  rowInSelection,
+  watchNamespaceForSelection,
+  type ClusterContext,
+  type CrdRef,
+} from "@srelens/core";
+import { useNamespaceOptions } from "@srelens/core/react";
+import {
+  Alert,
+  ColumnPicker,
+  EmptyState,
+  ErrorState,
+  FilterBar,
+  LiveSignal,
+  LoadingState,
+  MultiSelect,
+  Screen,
+  Table,
+  filterTableData,
+  type Column,
+} from "@srelens/ui-kit";
+import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
+import { toggleColumn, useHiddenColumns } from "../lib/columnPrefs";
+import { customDescriptorFor } from "../lib/kinds/custom";
+import { descriptorFor } from "../lib/kinds/descriptors";
+import type { KindDescriptor, ListRow } from "../lib/kinds/types";
+import { useResourceList } from "../lib/resourceList";
+import { describe, isBuiltInKind } from "../lib/routes";
+import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
+import { useResource } from "../lib/useResource";
+import { setNamespaces, useNamespaces } from "../lib/workspace";
+
+/** The row identifier: always shown, never offered to the column picker. */
+const NAME_KEY = "name";
+
+/** Stable identity for "no columns", so a memo on it does not churn. */
+const NO_COLUMNS: Column<ListRow>[] = [];
+
+/**
+ * The resource list: one screen for every `/k/<slug>` route there is.
+ *
+ * It names no kind. The slug is looked up as a descriptor — a built-in one for
+ * core's kinds, or one built from the cluster's own CRDs — and everything on
+ * screen is composed around that: the columns, the scope, whether there is a
+ * namespace picker, whether the rows arrive on a watch or a poll. That is what
+ * lets 34 sidebar entries plus every custom resource an operator installed
+ * share a single screen instead of 34 near-copies.
+ *
+ * Split in two because of the guard rail at the top: with no cluster in focus
+ * there is no context name to call core with, and a hook cannot be skipped.
+ * The half below the split is only ever mounted once there is one.
+ */
+export function Resources({ route }: { route: string }) {
+  const context = useActiveContext();
+  const slug = route.slice("/k/".length);
+  // The tab strip already knows what this route is called; asking `describe`
+  // keeps the screen's title and the tab's title the same string.
+  const title = describe(route, context?.name).title;
+
+  if (!context) {
+    return (
+      <Screen title={title} fill>
+        <EmptyState
+          title="No cluster in focus"
+          hint="Pick a cluster in the rail to list its resources."
+          className="flex-1"
+        />
+      </Screen>
+    );
+  }
+
+  return <KindList slug={slug} title={title} context={context} />;
+}
+
+function KindList({
+  slug,
+  title,
+  context,
+}: {
+  slug: string;
+  title: string;
+  context: ClusterContext;
+}) {
+  // Core takes a context *name*; the workspace holds a `stableId`. The two are
+  // never interchangeable — see `lib/clusters`.
+  const name = context.name;
+  const files = getKubeconfigFiles();
+  const builtIn = isBuiltInKind(slug);
+
+  // Discovery runs only for a slug that is not one of core's kinds: listing
+  // pods must not cost a CRD round trip, and must not fail on a cluster whose
+  // RBAC refuses `listCRDs`.
+  const discovery = useResource<CrdRef[]>(
+    async () => {
+      if (builtIn) return [];
+      const out = await listCrds(name);
+      // `listCrds` reports failure in its result rather than by rejecting, and
+      // "this cluster has no such CRD" is different news from "we were not
+      // allowed to look".
+      if (out.error) throw new Error(out.error);
+      return out.crds ?? [];
+    },
+    [name, builtIn],
+  );
+  const crds = discovery.data;
+
+  const descriptor = useMemo(() => {
+    if (builtIn) return descriptorFor(slug);
+    if (!crds) return undefined;
+    // The same variance cast `descriptors.ts` makes for its typed column sets:
+    // `CustomRow` is a proper subtype of `ListRow` on the data side, but
+    // `Column`'s render/sort functions take the row contravariantly, so
+    // TypeScript cannot see the assignment is safe. Every function on a custom
+    // column only reads fields `ListRow` does not promise (`columns`,
+    // `sortKeys`), so a bare `ListRow` cannot reach one wrongly.
+    return customDescriptorFor(slug, crds) as KindDescriptor<ListRow> | undefined;
+  }, [builtIn, slug, crds]);
+
+  const selection = useNamespaces(context.stableId);
+  const { namespaces, scope } = useNamespaceOptions(name, files);
+
+  // A namespace-restricted credential has one namespace and no way to ask for
+  // another. Written to the workspace store rather than held here, so every
+  // screen looking at this cluster follows the same scope.
+  useEffect(() => {
+    if (scope) setNamespaces(context.stableId, [scope]);
+  }, [scope, context.stableId]);
+
+  const clusterScoped = descriptor?.scope === "cluster";
+  // One selected namespace is watched directly; none or several are watched
+  // across the cluster and narrowed below, which is core's own rule.
+  const namespace = clusterScoped ? "" : watchNamespaceForSelection(selection);
+  const list = useResourceList<ListRow>(name, slug, descriptor, namespace, files);
+
+  const hidden = useHiddenColumns(slug);
+  const allColumns = descriptor?.columns ?? NO_COLUMNS;
+  const columns = useMemo(
+    // The identifier is never hidden: a table whose rows lost their name is
+    // not a table any more. `ColumnPicker` pins the same key.
+    () => allColumns.filter((column) => column.key === NAME_KEY || !hidden.has(column.key)),
+    [allColumns, hidden],
+  );
+
+  // Sort, filter text and filter column live on the tab, so they survive a
+  // restart with it (#254). Component state would pass every render assertion
+  // and lose all three on the next launch.
+  const { activeId } = useTabs();
+  const view = useTabView(activeId);
+  const sort = view.sort ?? null;
+  const filter = view.filter ?? "";
+  const filterKey = view.filterKey ?? null;
+
+  const rows = useMemo(
+    () =>
+      clusterScoped
+        ? list.rows
+        : list.rows.filter((row) => rowInSelection(row.namespace ?? "", selection)),
+    [list.rows, clusterScoped, selection],
+  );
+  const filtered = useMemo(
+    () => filterTableData(rows, columns, filter, filterKey),
+    [rows, columns, filter, filterKey],
+  );
+
+  const lower = title.toLocaleLowerCase();
+
+  function onToggleColumn(key: string) {
+    // Hiding the column the search is pointed at leaves a filter nobody can
+    // see and nothing can match — the classic design shipped exactly that.
+    if (!hidden.has(key) && filterKey === key) setTabView(activeId, { filterKey: null });
+    toggleColumn(slug, key);
+  }
+
+  if (!descriptor) {
+    return (
+      <Screen title={title} eyebrow={name} fill>
+        {!builtIn && discovery.status === "loading" ? (
+          <LoadingState label={`Looking for ${slug}`} />
+        ) : discovery.status === "error" ? (
+          <ErrorState
+            title={`Could not look up ${slug}`}
+            detail={discovery.error}
+            onRetry={discovery.reload}
+          />
+        ) : (
+          // A route string outlives the cluster it was written against: a tab
+          // restored from a session can name a custom resource whose operator
+          // has since been uninstalled. Naming the slug is what tells the
+          // reader which tab to close.
+          <ErrorState
+            title={`Nothing on ${name} is called ${slug}`}
+            detail="It is neither one of the kinds srelens knows nor a custom resource this cluster has. If an operator defined it, that operator may be gone."
+            onRetry={builtIn ? undefined : discovery.reload}
+          />
+        )}
+      </Screen>
+    );
+  }
+
+  const columnOptions = allColumns.map((column) => ({
+    key: column.key,
+    label: typeof column.header === "string" ? column.header : column.key,
+  }));
+
+  return (
+    <Screen
+      title={title}
+      eyebrow={name}
+      fill
+      actions={
+        <>
+          {descriptor.source === "watch" && (
+            <LiveSignal
+              // The label carries the meaning; the tone only colours it.
+              label={list.watch === "live" ? "Live" : "Stream lost"}
+              tone={list.watch === "live" ? "ok" : "warn"}
+            />
+          )}
+          <ColumnPicker
+            columns={columnOptions}
+            hidden={hidden}
+            onToggle={onToggleColumn}
+            pinnedKey={NAME_KEY}
+          />
+        </>
+      }
+    >
+      <FilterBar
+        value={filter}
+        onValueChange={(value) => setTabView(activeId, { filter: value })}
+        label={`Filter ${lower}`}
+        placeholder={`Filter ${lower}…`}
+      >
+        {!clusterScoped && (
+          <MultiSelect
+            options={(namespaces ?? []).map((ns) => ({ value: ns }))}
+            selection={selection}
+            onChange={(next) => setNamespaces(context.stableId, next)}
+            allLabel="All namespaces"
+            ariaLabel="Namespaces"
+          />
+        )}
+      </FilterBar>
+
+      <div className="scroll min-h-0 flex-1 p-3">
+        {list.status === "loading" ? (
+          <LoadingState label={`Loading ${lower}`} />
+        ) : list.status === "error" ? (
+          <ErrorState
+            title={`Could not list ${lower} on ${name}`}
+            detail={list.error}
+            onRetry={list.reload}
+          />
+        ) : (
+          <>
+            {list.error && (
+              // Rows and an error together: the last good list is still on
+              // screen and is no longer being refreshed. Emptying the table
+              // would throw away the only information the reader has.
+              <Alert tone="warn" title={`These ${lower} are stale`} className="mb-3">
+                {list.error}
+              </Alert>
+            )}
+            <Table
+              columns={columns}
+              data={filtered}
+              getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
+              sort={sort}
+              onSortChange={(next) => setTabView(activeId, { sort: next })}
+              activeFilterKey={filterKey}
+              onActiveFilterKeyChange={(key) => setTabView(activeId, { filterKey: key })}
+              onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
+              // "This kind has none" and "the filter matched none" are
+              // different facts, and the second one is the reader's own doing.
+              emptyText={rows.length === 0 ? `No ${lower}` : `No ${lower} match this filter`}
+              emptyHint={
+                rows.length === 0
+                  ? `${name} has no ${lower}${clusterScoped ? "" : " in the namespaces you are looking at"}.`
+                  : `Clear the filter to see all ${rows.length}.`
+              }
+            />
+          </>
+        )}
+      </div>
+    </Screen>
+  );
+}

@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import { Suspense, createElement, type ComponentType } from "react";
 import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
@@ -101,9 +101,49 @@ const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(nul
   "/notes": ReleaseNotes,
 });
 
+/**
+ * The resource list, fetched as its own module rather than imported at the top.
+ *
+ * Deliberate, and the only screen that needs it. `Resources` reads the active
+ * cluster and the tab's view out of the stores, and `lib/tabs` reads `describe`
+ * out of *this* module — so a plain import here would close a cycle whose
+ * weakest point is `tabsStore`, which builds its first state (and so calls
+ * `describe`) while its own module body is still running. Whenever `lib/tabs`
+ * happened to load first, that call found an uninitialised binding and half
+ * the package failed to load at all. A module fetched outside the import graph
+ * has no such ordering: the request goes out as this module finishes, so by
+ * the time React renders anything the screen is already here.
+ *
+ * The `Suspense` is this indirection's, not the router's: whoever asks
+ * `screenFor` for a screen must get one they can render, not one that suspends
+ * in their face. It is only ever reached in the sliver between boot and the
+ * module landing — after that, `loaded` is set and every render is synchronous.
+ */
+let loaded: ScreenComponent | null = null;
+const arriving = import("../screens/Resources").then((module) => {
+  loaded = module.Resources;
+});
+
+function Deferred(props: { route: string }) {
+  // The lazy-component protocol: throw the promise, and the boundary below
+  // re-renders this when it settles.
+  if (!loaded) throw arriving;
+  return createElement(loaded, props);
+}
+
+const Resources: ScreenComponent = (props) =>
+  createElement(Suspense, { fallback: null }, createElement(Deferred, props));
+
+const PREFIXED: ReadonlyArray<[string, ScreenComponent]> = [["/k/", Resources]];
+
 export function screenFor(route: string): ScreenComponent | null {
   // `hasOwnProperty.call` as well as the null prototype: the table is the one
   // thing standing between an arbitrary route string and something rendered as
   // a component, and it costs nothing to say so twice.
-  return Object.prototype.hasOwnProperty.call(SCREENS, route) ? SCREENS[route] : null;
+  if (Object.prototype.hasOwnProperty.call(SCREENS, route)) return SCREENS[route];
+  for (const [prefix, screen] of PREFIXED) {
+    // A bare prefix names no resource; `/k/` is not a route.
+    if (route.startsWith(prefix) && route.length > prefix.length) return screen;
+  }
+  return null;
 }

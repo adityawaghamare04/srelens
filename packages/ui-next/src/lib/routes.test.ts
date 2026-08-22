@@ -76,7 +76,26 @@ suite("screenFor", () => {
   });
 
   it("gives a route with no screen a placeholder", () => {
-    for (const route of ["/", "/k/pods", "/settings"]) {
+    for (const route of ["/", "/settings"]) {
+      expect(screenFor(route), route).toBeNull();
+    }
+  });
+
+  it("resolves a built-in kind's list route", () => {
+    expect(screenFor("/k/pods")).not.toBeNull();
+  });
+
+  it("resolves a custom resource's list route", () => {
+    // One screen answers every `/k/` route, so a slug nobody enumerated —
+    // a CRD this cluster happens to have — reaches the same one.
+    expect(screenFor("/k/widgets.example.com")).not.toBeNull();
+    expect(screenFor("/k/widgets.example.com")).toBe(screenFor("/k/pods"));
+  });
+
+  it("still refuses a route with no screen", () => {
+    // `/k/` on its own names no kind, so it is not a route: a prefix that
+    // matched itself would render the list screen with an empty slug.
+    for (const route of ["/topology", "/k/", "constructor"]) {
       expect(screenFor(route), route).toBeNull();
     }
   });
