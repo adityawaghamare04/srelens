@@ -517,7 +517,7 @@ describe("Resources", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Select default/web-1" }));
     await screen.findByText("1 selected");
 
-    const scrollBody = document.querySelector(".scroll")!;
+    const scrollBody = document.querySelector<HTMLElement>(".scroll")!;
     expect(within(scrollBody).queryByText(/stale/i)).toBeNull();
     expect(within(scrollBody).queryByText("1 selected")).toBeNull();
     // Both still render — pinned above the scrolling body, not gone.
