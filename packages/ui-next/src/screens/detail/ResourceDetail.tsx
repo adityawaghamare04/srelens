@@ -192,7 +192,7 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
   // one case that genuinely needs it: the new subject's kind doesn't have
   // the pane that was selected (e.g. a Pod's Containers tab, followed by a
   // ConfigMap).
-  const targetKey = `${context} ${kind} ${namespace ?? ""} ${name}`;
+  const targetKey = `${context}|${kind}|${namespace ?? ""}|${name}`;
   const [trackedTargetKey, setTrackedTargetKey] = useState(targetKey);
   const [openedPanes, setOpenedPanes] = useState<ReadonlySet<string>>(() => new Set());
   if (targetKey !== trackedTargetKey) {
