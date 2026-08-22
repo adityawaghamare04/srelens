@@ -13,8 +13,12 @@ const crd = (over: Partial<CrdRef> = {}): CrdRef => ({
 });
 
 describe("custom columns", () => {
-  it("names the first column after the CRD's kind", () => {
-    expect(customColumns(crd())[0].header).toBe("Widget");
+  // Whole-branch review (FIX 4): this used to assert the opposite — written
+  // before the "Name" rule existed. All 23 typed sets and the generic three
+  // title their identifier column "Name", never the kind; a custom resource
+  // is no exception.
+  it("titles the identifier column Name, not the CRD's kind", () => {
+    expect(customColumns(crd())[0].header).toBe("Name");
   });
 
   it("gives each printer column a cell from the row's positional values", () => {
@@ -78,7 +82,9 @@ describe("customDescriptor", () => {
 describe("customDescriptorFor", () => {
   it("resolves a slug that matches a CRD to a descriptor for that kind", () => {
     const descriptor = customDescriptorFor("widgets.example.com", [crd()]);
-    expect(descriptor?.columns[0].header).toBe("Widget");
+    // The column header no longer names the kind (FIX 4) — `k8sKind` is the
+    // identity check now.
+    expect(descriptor?.k8sKind).toBe("Widget");
   });
 
   it("returns undefined for a slug that matches no CRD", () => {

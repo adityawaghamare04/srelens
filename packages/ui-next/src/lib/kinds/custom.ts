@@ -20,7 +20,9 @@ export function customColumns(crd: CrdRef): Column<CustomRow>[] {
   const printers = crd.printerColumns ?? [];
   const keys = printerColumnKeys(printers);
   const columns: Column<CustomRow>[] = [
-    { key: "name", header: crd.kind, sortable: true },
+    // The mock titles every list's identifier column "Name", never the kind
+    // — the same rule every typed set and the generic three follow.
+    { key: "name", header: "Name", sortable: true },
   ];
   if (crd.namespaced) {
     columns.push({ key: "namespace", header: "Namespace", sortable: true });
@@ -34,7 +36,7 @@ export function customColumns(crd: CrdRef): Column<CustomRow>[] {
       getSortValue: (row) => printerSortValue(printer.type, row.columns?.[index] ?? "", row.sortKeys?.[index]),
     });
   });
-  columns.push({ key: "age", header: "Age", sortable: true, getSortValue: ageSortValue });
+  columns.push({ key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue });
   return columns;
 }
 

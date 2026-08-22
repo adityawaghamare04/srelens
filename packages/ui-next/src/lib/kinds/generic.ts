@@ -9,7 +9,7 @@ import type { Column } from "@srelens/ui-kit";
 export const genericColumns: Column<ResourceRow>[] = [
   { key: "name", header: "Name", sortable: true },
   { key: "namespace", header: "Namespace", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 /** The same, for a kind that has no namespace to show. */

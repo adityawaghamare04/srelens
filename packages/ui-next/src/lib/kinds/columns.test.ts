@@ -31,6 +31,7 @@ import {
   type PodRow,
 } from "./columns";
 import { customColumns } from "./custom";
+import { genericClusterColumns, genericColumns } from "./generic";
 import type { CrdRef } from "@srelens/core";
 
 /** Every typed column set columns.tsx exports — the design mock titles every
@@ -295,5 +296,31 @@ describe("column alignment — a count or a measurement is end-aligned, everythi
     expect(podColumns.find((c) => c.key === "phase")!.align).toBeUndefined();
     expect(podColumns.find((c) => c.key === "image")!.align).toBeUndefined();
     expect(secretColumns.find((c) => c.key === "type")!.align).toBeUndefined();
+  });
+});
+
+// Whole-branch review (FIX 6): every test above is scoped to the 23 typed
+// sets, which is exactly why the generic and custom families drifted from
+// the same two rules — custom.ts headered its first column with the CRD's
+// kind, and neither generic.ts nor custom.ts end-aligned Age. Widened here so
+// a future drift on either family fails a test, not just a reviewer's eye.
+describe("the generic and custom families follow the same two rules as the 23 typed sets", () => {
+  const crd = (over: Partial<CrdRef> = {}): CrdRef => ({
+    name: "widgets.example.com", group: "example.com", version: "v1", plural: "widgets",
+    kind: "Widget", namespaced: true,
+    printerColumns: [{ name: "Phase", type: "string", jsonPath: ".status.phase" }],
+    ...over,
+  });
+
+  it("titles the identifier column Name, never the kind — generic and custom included", () => {
+    expect(genericColumns[0].header).toBe("Name");
+    expect(genericClusterColumns[0].header).toBe("Name");
+    expect(customColumns(crd())[0].header).toBe("Name");
+  });
+
+  it("end-aligns Age — generic and custom included", () => {
+    expect(genericColumns.find((c) => c.key === "age")!.align).toBe("end");
+    expect(genericClusterColumns.find((c) => c.key === "age")!.align).toBe("end");
+    expect(customColumns(crd()).find((c) => c.key === "age")!.align).toBe("end");
   });
 });
