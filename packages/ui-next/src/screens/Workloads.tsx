@@ -12,7 +12,6 @@ import {
 import { useNamespaceOptions } from "@srelens/core/react";
 import {
   Alert,
-  AskChip,
   ColumnPicker,
   EmptyState,
   FilterBar,
@@ -24,7 +23,6 @@ import {
   Table,
   Tabs,
   filterTableData,
-  toneColor,
   type Column,
   type ContextMenuItem,
   type StatusKind,
@@ -33,8 +31,9 @@ import {
 import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { toggleColumn, useHiddenColumns } from "../lib/columnPrefs";
+import { formatCpu, formatMemory, phaseKind, type PodRow } from "../lib/kinds/columns";
 import { descriptorFor } from "../lib/kinds/descriptors";
-import type { PodRow } from "../lib/kinds/columns";
+import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { ListRow } from "../lib/kinds/types";
 import { useResourceList, type ResourceList } from "../lib/resourceList";
 import { describe } from "../lib/routes";
@@ -84,43 +83,6 @@ const SEGMENTS: TabItem[] = [
   { id: "Pod", label: "Pod" },
   { id: "CronJob", label: "CronJob" },
 ];
-
-/** A thin space (U+2009) — the design's CPU thousands separator (`columns.tsx`). */
-const THIN_SPACE = " ";
-
-/**
- * Duplicated from `lib/kinds/columns.tsx` rather than imported: that module
- * is owned by another task's file boundary here, and these two are pure
- * formatting with no per-kind knowledge worth sharing a seam over.
- */
-function formatCpu(value: number): string {
-  const rounded = Math.round(value);
-  const digits = Math.abs(rounded).toString();
-  const grouped = digits.length > 3 ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, THIN_SPACE) : digits;
-  return `${rounded < 0 ? "-" : ""}${grouped}m`;
-}
-
-function formatMemory(value: number): string {
-  if (value >= 1024) return `${(value / 1024).toFixed(1)} Gi`;
-  return `${value} Mi`;
-}
-
-/** Pod's phase-to-tone mapping — the subset `columns.tsx`'s private `phaseKind`
- *  covers for Pod, needed here for the same reason the formatters are. */
-function podStatusKind(phase: string): StatusKind {
-  switch (phase) {
-    case "Running":
-    case "Succeeded":
-      return "success";
-    case "Pending":
-      return "warning";
-    case "Failed":
-    case "Unknown":
-      return "danger";
-    default:
-      return "neutral";
-  }
-}
 
 /**
  * Deployment, StatefulSet and DaemonSet have no native status field — only a
@@ -188,7 +150,7 @@ function fromPod(row: ListRow, flagged: boolean): WorkloadRow {
     kind: "Pod",
     ready: p.ready,
     statusLabel: p.phase,
-    statusKind: podStatusKind(p.phase),
+    statusKind: phaseKind(p.phase),
     restarts: p.restarts,
     cpu: p.cpu,
     memory: p.memory,
@@ -263,59 +225,6 @@ const UNION_COLUMNS: Column<WorkloadRow>[] = [
   // of images has no single natural order.
   { key: "image", header: "Image", sortable: false, render: (r) => r.image || "—" },
 ];
-
-/**
- * The dot and the ask chip (Correction 3), composed here the same way
- * `Resources.tsx`'s `withRowAffordances` does — duplicated rather than
- * imported, since that screen is outside this task's file boundary. Reads
- * `row.flagged` directly rather than a descriptor's `flagged` function: five
- * kinds, five different `flagged` shapes, already reduced to one boolean per
- * row when the union was built.
- */
-function withRowAffordances(
-  columns: Column<WorkloadRow>[],
-  ask: (question: string) => void,
-): Column<WorkloadRow>[] {
-  const decorated = columns.map((column) => {
-    if (column.key !== NAME_KEY) return column;
-    const render = column.render;
-    return {
-      ...column,
-      render: (row: WorkloadRow) => (
-        <span className="flex items-center gap-1.5">
-          {row.flagged && (
-            <>
-              <span
-                aria-hidden="true"
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ background: toneColor("sev") }}
-              />
-              <span className="sr-only">Needs attention</span>
-            </>
-          )}
-          <span className="truncate">{render ? render(row) : row.name}</span>
-        </span>
-      ),
-    };
-  });
-  return [
-    ...decorated,
-    {
-      key: "ask",
-      header: "",
-      sortable: false,
-      filterable: false,
-      render: (row: WorkloadRow) => (
-        <AskChip
-          question={
-            row.flagged ? `Why is ${row.name} unhealthy?` : `What is ${row.name} using right now?`
-          }
-          onAsk={ask}
-        />
-      ),
-    },
-  ];
-}
 
 /**
  * `/resources`: the design's Workloads view — five kinds (Deployment,
@@ -513,7 +422,10 @@ function WorkloadList({
     () => UNION_COLUMNS.filter((column) => column.key === NAME_KEY || !hidden.has(column.key)),
     [hidden],
   );
-  const renderedColumns = useMemo(() => withRowAffordances(columns, ask), [columns, ask]);
+  const renderedColumns = useMemo(
+    () => withRowAffordances(columns, (row) => row.flagged, ask),
+    [columns, ask],
+  );
 
   const { tabs } = useTabs();
   const tabId = tabs.find((tab) => tab.route === route)?.id ?? "";

@@ -9,7 +9,6 @@ import {
 import { useNamespaceOptions } from "@srelens/core/react";
 import {
   Alert,
-  AskChip,
   Button,
   ColumnPicker,
   EmptyState,
@@ -22,7 +21,6 @@ import {
   Spinner,
   Table,
   filterTableData,
-  toneColor,
   type Column,
 } from "@srelens/ui-kit";
 import { useConsole } from "../console";
@@ -30,6 +28,7 @@ import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { toggleColumn, useHiddenColumns } from "../lib/columnPrefs";
 import { customDescriptorFor } from "../lib/kinds/custom";
 import { descriptorFor } from "../lib/kinds/descriptors";
+import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { KindDescriptor, ListRow } from "../lib/kinds/types";
 import { useResourceList } from "../lib/resourceList";
 import { describe, isBuiltInKind } from "../lib/routes";
@@ -44,68 +43,6 @@ const NAME_KEY = "name";
 
 /** Stable identity for "no columns", so a memo on it does not churn. */
 const NO_COLUMNS: Column<ListRow>[] = [];
-
-/**
- * The two row affordances the design mock has and the classic port lacked —
- * composed here once for whatever descriptor the screen is showing, rather
- * than duplicated per typed column set. `flagged` is the only per-kind
- * knowledge either one needs, and most kinds have none.
- *
- * An unhealthy dot rides in the name cell, never colour alone: the reason
- * goes beside it as `sr-only` text, the same "a word, not just a tint"
- * contract the cluster rail's `unavailable` follows (`ClusterRail.tsx`).
- *
- * A trailing ask chip sends the row to the console dock, naming the actual
- * resource and its state — kept out of `descriptor.columns` (and so out of
- * `ColumnPicker`) because it is not a column a reader would ever hide.
- */
-function withRowAffordances(
-  columns: Column<ListRow>[],
-  descriptor: KindDescriptor<ListRow> | undefined,
-  ask: (question: string) => void,
-): Column<ListRow>[] {
-  if (!descriptor) return columns;
-  const flagged = descriptor.flagged;
-  const decorated = columns.map((column) => {
-    if (column.key !== NAME_KEY) return column;
-    const render = column.render;
-    return {
-      ...column,
-      render: (row: ListRow) => (
-        <span className="flex items-center gap-1.5">
-          {flagged?.(row) && (
-            <>
-              <span
-                aria-hidden="true"
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ background: toneColor("sev") }}
-              />
-              <span className="sr-only">Needs attention</span>
-            </>
-          )}
-          <span className="truncate">{render ? render(row) : row.name}</span>
-        </span>
-      ),
-    };
-  });
-  return [
-    ...decorated,
-    {
-      key: "ask",
-      header: "",
-      sortable: false,
-      filterable: false,
-      render: (row: ListRow) => (
-        <AskChip
-          question={
-            flagged?.(row) ? `Why is ${row.name} unhealthy?` : `What is ${row.name} using right now?`
-          }
-          onAsk={ask}
-        />
-      ),
-    },
-  ];
-}
 
 /**
  * The resource list: one screen for every `/k/<slug>` route there is.
@@ -216,9 +153,14 @@ function KindList({
   );
   // The dot and the ask chip, layered on after hiding — not offered to
   // `ColumnPicker` (which is built from `allColumns` below) and not part of
-  // what `filterTableData` searches.
+  // what `filterTableData` searches. `flagged` is the only per-kind
+  // knowledge either affordance needs, and most kinds have none; with no
+  // descriptor yet, columns pass through undecorated, same as before.
   const renderedColumns = useMemo(
-    () => withRowAffordances(columns, descriptor, ask),
+    () =>
+      descriptor
+        ? withRowAffordances(columns, (row) => descriptor.flagged?.(row) ?? false, ask)
+        : columns,
     [columns, descriptor, ask],
   );
 

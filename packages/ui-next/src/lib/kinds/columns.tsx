@@ -39,7 +39,7 @@ const THIN_SPACE = " ";
  * distinct from a locale-formatted comma and readable at four digits, where a
  * bare run of digits is not.
  */
-function formatCpu(value: number): string {
+export function formatCpu(value: number): string {
   const rounded = Math.round(value);
   const digits = Math.abs(rounded).toString();
   const grouped =
@@ -52,7 +52,7 @@ function formatCpu(value: number): string {
  * decimal place at or above it ("3.1 Gi") — the design shows both, and a
  * space before the unit either way (classic ran the two together: "988Mi").
  */
-function formatMemory(value: number): string {
+export function formatMemory(value: number): string {
   if (value >= 1024) return `${(value / 1024).toFixed(1)} Gi`;
   return `${value} Mi`;
 }
@@ -68,9 +68,15 @@ const metric = (value: number | undefined, format: (value: number) => string) =>
   value == null ? "—" : format(value);
 const metricSort = (value: number | undefined) => value ?? -1;
 
-/** Classic's phase-to-tone mapping (`ResourceBrowser.tsx:135`), ported verbatim
- *  onto the kit's `StatusKind` vocabulary — the names already match one-for-one. */
-function phaseKind(phase: string): StatusKind {
+/**
+ * Classic's phase-to-tone mapping (`ResourceBrowser.tsx:135`), ported verbatim
+ * onto the kit's `StatusKind` vocabulary — the names already match one-for-one.
+ *
+ * Exported rather than kept private: `Workloads.tsx` needs the same mapping
+ * for a Pod's `phase` (its `Ready`/`NotReady` cases just never come up there,
+ * since a Pod never reports either).
+ */
+export function phaseKind(phase: string): StatusKind {
   switch (phase) {
     case "Running":
     case "Succeeded":
