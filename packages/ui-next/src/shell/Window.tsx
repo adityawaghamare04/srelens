@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isApplePlatform, isTauri, listContexts, type ClusterContext } from "@srelens/core";
+import { isApplePlatform, isTauri, listContexts, loadKubeconfigFiles, type ClusterContext } from "@srelens/core";
 import { Button, Checkbox, Drawer, LoadingState, TabStrip, TextInput, type ContextMenuItem, type StripTab } from "@srelens/ui-kit";
+import { setContexts, setKubeconfigFiles, useContexts } from "../lib/clusters";
 import { loadMarks } from "../lib/marks";
 import { defaultState, reconcile } from "../lib/tabs";
 import { flushSave, installFlushOnUnload, loadTabsState, scheduleSave } from "../lib/tabsPersist";
@@ -75,8 +76,10 @@ export function Window({
   const [booted, setBooted] = useState(false);
   // Kept from boot because half the chrome wants it: the rail resolves ids to
   // names, the sidebar looks up CRDs by name, and the new-tab action turns the
-  // active cluster's id into the name a tab carries.
-  const [contexts, setContexts] = useState<ClusterContext[]>([]);
+  // active cluster's id into the name a tab carries. Held in the shared store
+  // rather than local state, so a screen that receives only `{ route }` can
+  // resolve a workspace's cluster ids the same way `Window` does.
+  const contexts = useContexts();
   // Kept rather than dropped once read: a failed list still preserves the
   // saved cluster ids (see below), and the rail has to say why it cannot draw
   // them rather than leaving the user to guess.
@@ -111,9 +114,15 @@ export function Window({
       // spreads over that empty record and persists it, erasing every other
       // cluster's stored appearance.
       loadMarks();
+      // Classic threads these through every call for a reason: a context that
+      // came from an additional kubeconfig file cannot have a client built for
+      // it until the backend has been told the file's path, and the list races
+      // the first use otherwise.
+      const files = isTauri() ? loadKubeconfigFiles() : [];
+      setKubeconfigFiles(files);
       let found: ClusterContext[] = [];
       try {
-        const outcome = await listContexts();
+        const outcome = await listContexts(files);
         if (cancelled) return;
         found = outcome.contexts ?? [];
         if (outcome.error) setContextsError(outcome.error);
