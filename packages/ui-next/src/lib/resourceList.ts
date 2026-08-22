@@ -104,15 +104,24 @@ export function useResourceList<Row extends ListRow>(
           setState((s) => ({ ...s, error, loading: false }));
         },
         files,
-      ).then((h) => {
-        if (stopped || gen.current !== mine) {
-          // A handle that resolves after cleanup is stopped immediately
-          // rather than leaked.
-          h.stop();
-          return;
-        }
-        handle = h;
-      });
+      ).then(
+        (h) => {
+          if (stopped || gen.current !== mine) {
+            // A handle that resolves after cleanup is stopped immediately
+            // rather than leaked.
+            h.stop();
+            return;
+          }
+          handle = h;
+        },
+        (e: unknown) => {
+          // A failed watch start (e.g. the backend's invokeCommand rejects)
+          // must surface as `error`, not leave the hook on `loading`
+          // forever — errors are returned, never thrown.
+          if (gen.current !== mine) return;
+          setState((s) => ({ ...s, error: e instanceof Error ? e.message : String(e), loading: false }));
+        },
+      );
 
       return () => {
         if (gen.current === mine) gen.current++;
@@ -150,7 +159,7 @@ export function useResourceList<Row extends ListRow>(
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context, namespace, kind, descriptor, tick]);
+  }, [context, namespace, kind, descriptor, tick, files.join(",")]);
 
   return {
     rows: state.rows as Row[],

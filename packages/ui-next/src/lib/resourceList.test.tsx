@@ -58,6 +58,14 @@ describe("useResourceList", () => {
     expect(result.current.rows).toHaveLength(1);
   });
 
+  it("settles on error, not stuck loading, when the watch fails to start", async () => {
+    watchResource.mockRejectedValueOnce(new Error("rbac denied"));
+    const { result } = renderHook(() => useResourceList("prod", "pods", watched, "default", []));
+    expect(result.current.status).toBe("loading");
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(result.current.error).toBe("rbac denied");
+  });
+
   it("says empty, not ready, when the kind has none — the states differ to a reader", async () => {
     const { result } = renderHook(() => useResourceList("prod", "pods", watched, "default", []));
     await waitFor(() => expect(mockState.emitRows).not.toBeNull());
@@ -115,4 +123,33 @@ describe("useResourceList", () => {
     await waitFor(() => expect(result.current.error).toBe("connection refused"));
     expect(result.current.rows).toHaveLength(1);
   });
+
+  it("evicts the oldest view key at the 40-entry cap, but spares one just refreshed", async () => {
+    // Seed a view's cache entry by mounting it, waiting for its first
+    // snapshot, and emitting rows for it — this both inserts (a new key)
+    // and refreshes (an existing key, moved to most-recently-written) the
+    // same way, since cacheSet always re-inserts on write.
+    const seed = async (ctx: string, name: string) => {
+      const { unmount } = renderHook(() => useResourceList(ctx, "pods", watched, "default", []));
+      await waitFor(() => expect(mockState.emitRows).not.toBeNull());
+      act(() => mockState.emitRows!([{ name }]));
+      unmount();
+    };
+
+    for (let i = 0; i < 40; i++) {
+      await seed(`ctx${i}`, `row${i}`);
+    }
+    // Refresh ctx0 last, so it is no longer the oldest entry.
+    await seed("ctx0", "row0-refreshed");
+    // A 41st distinct key pushes the cache over its cap: the true oldest
+    // entry (ctx1, not the just-refreshed ctx0) must be the one evicted.
+    await seed("ctx40", "row40");
+
+    const refreshed = renderHook(() => useResourceList("ctx0", "pods", watched, "default", []));
+    expect(refreshed.result.current.rows).toHaveLength(1);
+
+    const evicted = renderHook(() => useResourceList("ctx1", "pods", watched, "default", []));
+    expect(evicted.result.current.status).toBe("loading");
+    expect(evicted.result.current.rows).toHaveLength(0);
+  }, 20000);
 });
