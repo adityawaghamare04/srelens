@@ -530,6 +530,63 @@ describe("Resources", () => {
   // hand-built selection, so it proves the wiring in this screen, not just
   // `ResourceBulk`'s own contract (which `ResourceBulk.test.tsx` covers with
   // constructed keys).
+  it("shows a loading state while a custom resource's CRD is being discovered", async () => {
+    // Never resolves: the assertion below only holds if the screen renders
+    // the loading branch itself, not just a fleeting frame before a mock
+    // resolves on the next microtask.
+    listCrds.mockReturnValue(new Promise(() => {}));
+
+    open("/k/widgets.example.com");
+
+    expect(await screen.findByText("Looking for widgets.example.com")).toBeTruthy();
+    expect(document.querySelector("table")).toBeNull();
+  });
+
+  it("says the CRD lookup failed, and retries it on request", async () => {
+    listCrds.mockResolvedValueOnce({ error: "customresourcedefinitions is forbidden" });
+
+    open("/k/widgets.example.com");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Could not look up widgets.example.com");
+    expect(alert.textContent).toContain("customresourcedefinitions is forbidden");
+
+    listCrds.mockResolvedValueOnce({ crds: [WIDGETS] });
+    listCustomResource.mockResolvedValueOnce({
+      items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(rowNames()).toEqual(["left"]));
+    expect(headers()).toContain("Phase");
+  });
+
+  // `LiveSignal` names what a *watch* is doing; a polled kind has no stream
+  // to report on, so it must not appear at all — showing it would claim a
+  // liveness this list does not have.
+  it("shows no LiveSignal for a polled kind", async () => {
+    listCrds.mockResolvedValue({ crds: [WIDGETS] });
+    listCustomResource.mockResolvedValue({
+      items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
+    });
+
+    open("/k/widgets.example.com");
+
+    await waitFor(() => expect(rowNames()).toEqual(["left"]));
+    expect(screen.queryByText("Live")).toBeNull();
+    expect(screen.queryByText("Stream lost")).toBeNull();
+  });
+
+  it("opens the resource route when a row is activated", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    fireEvent.doubleClick(screen.getByText("web-1").closest("tr")!);
+
+    await waitFor(() => expect(tabFor("/resources/web-1")).toBeTruthy());
+    expect(store.currentWorkspace().activeId).toBe(tabFor("/resources/web-1").id);
+  });
+
   it("deletes only the checked row when two selected candidates share a name across namespaces", async () => {
     watchResource.mockImplementation(
       async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
