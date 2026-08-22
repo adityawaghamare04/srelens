@@ -6,7 +6,9 @@ import {
   configMapColumns,
   cronJobColumns,
   daemonSetColumns,
+  daemonSetFlagged,
   deploymentColumns,
+  deploymentFlagged,
   endpointSliceColumns,
   ingressColumns,
   jobColumns,
@@ -14,6 +16,7 @@ import {
   networkPolicyColumns,
   nodeColumns,
   podColumns,
+  podFlagged,
   pvColumns,
   pvcColumns,
   resourceQuotaColumns,
@@ -23,6 +26,7 @@ import {
   serviceAccountColumns,
   serviceColumns,
   statefulSetColumns,
+  statefulSetFlagged,
   storageClassColumns,
   type NodeRow,
   type PodRow,
@@ -103,6 +107,9 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     enrich: podEnrich as (context: string, namespace: string) => Promise<Map<string, Partial<ListRow>>>,
     enrichMs: 10000,
     actions: { logs: true, shell: true, forward: true, evict: true },
+    // Same variance cast every function on this table already needs: `flagged`
+    // only reads `phase`, a field `ListRow` does not promise.
+    flagged: podFlagged as (row: ListRow) => boolean,
   },
   deployments: {
     k8sKind: "Deployment",
@@ -110,6 +117,7 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     source: "watch",
     scope: "namespaced",
     actions: { logs: true, scale: true, restart: true },
+    flagged: deploymentFlagged as (row: ListRow) => boolean,
   },
   statefulsets: {
     k8sKind: "StatefulSet",
@@ -117,6 +125,7 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     source: "watch",
     scope: "namespaced",
     actions: { logs: true, scale: true, restart: true },
+    flagged: statefulSetFlagged as (row: ListRow) => boolean,
   },
   daemonsets: {
     k8sKind: "DaemonSet",
@@ -124,6 +133,7 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     source: "watch",
     scope: "namespaced",
     actions: { logs: true, restart: true },
+    flagged: daemonSetFlagged as (row: ListRow) => boolean,
   },
   jobs: {
     k8sKind: "Job",

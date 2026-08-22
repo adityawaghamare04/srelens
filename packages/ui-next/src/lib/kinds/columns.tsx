@@ -30,12 +30,42 @@ import { Badge, StatusPill, type Column, type StatusKind, type Tone } from "@sre
 export type PodRow = PodSummary & { cpu?: number; memory?: number };
 export type NodeRow = NodeSummary & { cpu?: number; memory?: number };
 
+/** A thin space (U+2009), not a locale comma — the design's CPU thousands separator. */
+const THIN_SPACE = " ";
+
 /**
- * A reading metrics-server did not give us is not zero: an em dash says so, and
- * `-1` sorts it below every real reading rather than into the middle of the
- * idle pods.
+ * CPU in millicores: a bare number under 1000 ("241m"), thousands-grouped
+ * with a thin space at or above it ("2 410m") — the design's own grouping,
+ * distinct from a locale-formatted comma and readable at four digits, where a
+ * bare run of digits is not.
  */
-const metric = (value: number | undefined, unit: string) => (value == null ? "—" : `${value}${unit}`);
+function formatCpu(value: number): string {
+  const rounded = Math.round(value);
+  const digits = Math.abs(rounded).toString();
+  const grouped =
+    digits.length > 3 ? digits.replace(/\B(?=(\d{3})+(?!\d))/g, THIN_SPACE) : digits;
+  return `${rounded < 0 ? "-" : ""}${grouped}m`;
+}
+
+/**
+ * Memory in Mi: a bare number under 1024 Mi ("412 Mi"), scaled to Gi with one
+ * decimal place at or above it ("3.1 Gi") — the design shows both, and a
+ * space before the unit either way (classic ran the two together: "988Mi").
+ */
+function formatMemory(value: number): string {
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} Gi`;
+  return `${value} Mi`;
+}
+
+/**
+ * A reading metrics-server did not give us is not zero: an em dash says so,
+ * and `-1` sorts it below every real reading rather than into the middle of
+ * the idle pods. `getSortValue` reads this straight — never the string
+ * `format` renders — so the raw Mi value orders "3.1 Gi" correctly against
+ * "988 Mi", which a comparator pointed at the display text could not.
+ */
+const metric = (value: number | undefined, format: (value: number) => string) =>
+  value == null ? "—" : format(value);
 const metricSort = (value: number | undefined) => value ?? -1;
 
 /** Classic's phase-to-tone mapping (`ResourceBrowser.tsx:135`), ported verbatim
@@ -57,54 +87,74 @@ function phaseKind(phase: string): StatusKind {
   }
 }
 
+/** The design's unhealthy dot for a pod: not Running. */
+export const podFlagged = (row: PodRow): boolean => row.phase !== "Running";
+
 export const podColumns: Column<PodRow>[] = [
-  { key: "name", header: "Pod", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "ready", header: "Ready" },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "ready", header: "Ready", align: "end" },
   {
-    key: "phase", header: "Status", sortable: true, filterable: true,
+    key: "phase", header: "Status", sortable: true,
     render: (p) => <StatusPill status={p.phase} kind={phaseKind(p.phase)} />,
   },
-  { key: "restarts", header: "Restarts", sortable: true },
-  { key: "cpu", header: "CPU", sortable: true, render: (p) => metric(p.cpu, "m"), getSortValue: (p) => metricSort(p.cpu) },
-  { key: "memory", header: "Memory", sortable: true, render: (p) => metric(p.memory, "Mi"), getSortValue: (p) => metricSort(p.memory) },
-  { key: "node", header: "Node", sortable: true, filterable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "restarts", header: "Restarts", sortable: true, align: "end" },
+  { key: "cpu", header: "CPU", sortable: true, align: "end", render: (p) => metric(p.cpu, formatCpu), getSortValue: (p) => metricSort(p.cpu) },
+  { key: "memory", header: "Memory", sortable: true, align: "end", render: (p) => metric(p.memory, formatMemory), getSortValue: (p) => metricSort(p.memory) },
+  { key: "node", header: "Node", sortable: true },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
+
+/** "N/M" is short of desired when N < M — how Deployment and StatefulSet
+ *  both report readiness. */
+function readyShort(ready: string): boolean {
+  const [have, want] = ready.split("/").map(Number);
+  return Number.isFinite(have) && Number.isFinite(want) && have < want;
+}
+
+/** The design's unhealthy dot for a Deployment: fewer ready than desired. */
+export const deploymentFlagged = (row: DeploymentSummary): boolean => readyShort(row.ready);
 
 export const deploymentColumns: Column<DeploymentSummary>[] = [
-  { key: "name", header: "Deployment", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "ready", header: "Ready" },
-  { key: "upToDate", header: "Up-to-date", sortable: true },
-  { key: "available", header: "Available", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "ready", header: "Ready", align: "end" },
+  { key: "upToDate", header: "Up-to-date", sortable: true, align: "end" },
+  { key: "available", header: "Available", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
+
+/** The design's unhealthy dot for a StatefulSet: fewer ready than desired. */
+export const statefulSetFlagged = (row: StatefulSetSummary): boolean => readyShort(row.ready);
 
 export const statefulSetColumns: Column<StatefulSetSummary>[] = [
-  { key: "name", header: "StatefulSet", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "ready", header: "Ready" },
-  { key: "updated", header: "Updated", sortable: true },
-  { key: "service", header: "Service", sortable: true, filterable: true, render: (s) => s.service || "—" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "ready", header: "Ready", align: "end" },
+  { key: "updated", header: "Updated", sortable: true, align: "end" },
+  { key: "service", header: "Service", sortable: true, render: (s) => s.service || "—" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
+/** The design's unhealthy dot for a DaemonSet: fewer ready than desired —
+ *  numeric fields here, unlike Deployment/StatefulSet's "N/M" string. */
+export const daemonSetFlagged = (row: DaemonSetSummary): boolean => row.ready < row.desired;
+
 export const daemonSetColumns: Column<DaemonSetSummary>[] = [
-  { key: "name", header: "DaemonSet", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "desired", header: "Desired", sortable: true },
-  { key: "current", header: "Current", sortable: true },
-  { key: "ready", header: "Ready", sortable: true },
-  { key: "upToDate", header: "Up-to-date", sortable: true },
-  { key: "available", header: "Available", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "desired", header: "Desired", sortable: true, align: "end" },
+  { key: "current", header: "Current", sortable: true, align: "end" },
+  { key: "ready", header: "Ready", sortable: true, align: "end" },
+  { key: "upToDate", header: "Up-to-date", sortable: true, align: "end" },
+  { key: "available", header: "Available", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const jobColumns: Column<JobSummary>[] = [
-  { key: "name", header: "Job", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "completions", header: "Completions" },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "completions", header: "Completions", align: "end" },
   {
     key: "status",
     header: "Status",
@@ -114,14 +164,14 @@ export const jobColumns: Column<JobSummary>[] = [
       return <StatusPill status={status} kind={kind} />;
     },
   },
-  { key: "duration", header: "Duration", render: (j) => j.duration || "—" },
+  { key: "duration", header: "Duration", align: "end", render: (j) => j.duration || "—" },
   { key: "owner", header: "Owner", render: (j) => j.owner || "—" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const cronJobColumns: Column<CronJobSummary>[] = [
-  { key: "name", header: "CronJob", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
   { key: "schedule", header: "Schedule" },
   {
     key: "suspended",
@@ -129,21 +179,20 @@ export const cronJobColumns: Column<CronJobSummary>[] = [
     render: (c) =>
       c.suspended ? <StatusPill status="Suspended" kind="neutral" /> : <StatusPill status="Active" kind="success" />,
   },
-  { key: "active", header: "Active" },
+  { key: "active", header: "Active", align: "end" },
   { key: "lastSchedule", header: "Last run", render: (c) => c.lastSchedule || "—" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 /** "warning" / "neutral" classic badge variants, remapped onto the kit's `Tone`. */
 const BADGE_TONE: Record<string, Tone> = { warning: "warn", neutral: "muted" };
 
 export const nodeColumns: Column<NodeRow>[] = [
-  { key: "name", header: "Node", sortable: true, filterable: true },
+  { key: "name", header: "Name", sortable: true },
   {
     key: "status",
     header: "Status",
     sortable: true,
-    filterable: true,
     render: (n) => (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
         <StatusPill status={n.status} kind={phaseKind(n.status)} />
@@ -155,151 +204,151 @@ export const nodeColumns: Column<NodeRow>[] = [
     ),
   },
   { key: "roles", header: "Roles" },
-  { key: "cpu", header: "CPU", sortable: true, render: (n) => metric(n.cpu, "m"), getSortValue: (n) => metricSort(n.cpu) },
-  { key: "memory", header: "Memory", sortable: true, render: (n) => metric(n.memory, "Mi"), getSortValue: (n) => metricSort(n.memory) },
+  { key: "cpu", header: "CPU", sortable: true, align: "end", render: (n) => metric(n.cpu, formatCpu), getSortValue: (n) => metricSort(n.cpu) },
+  { key: "memory", header: "Memory", sortable: true, align: "end", render: (n) => metric(n.memory, formatMemory), getSortValue: (n) => metricSort(n.memory) },
   { key: "version", header: "Version" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const configMapColumns: Column<ConfigMapSummary>[] = [
-  { key: "name", header: "ConfigMap", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "keys", header: "Keys", sortable: true, render: (c) => String(c.keys) },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "keys", header: "Keys", sortable: true, align: "end", render: (c) => String(c.keys) },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const secretColumns: Column<SecretSummary>[] = [
-  { key: "name", header: "Secret", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "type", header: "Type", filterable: true },
-  { key: "keys", header: "Keys", sortable: true, render: (s) => String(s.keys) },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "type", header: "Type" },
+  { key: "keys", header: "Keys", sortable: true, align: "end", render: (s) => String(s.keys) },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const resourceQuotaColumns: Column<ResourceQuotaSummary>[] = [
-  { key: "name", header: "Resource Quota", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "resources", header: "Resources", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "resources", header: "Resources", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const limitRangeColumns: Column<LimitRangeSummary>[] = [
-  { key: "name", header: "Limit Range", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "limits", header: "Limits", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "limits", header: "Limits", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const serviceColumns: Column<ServiceSummary>[] = [
-  { key: "name", header: "Service", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "type", header: "Type", filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "type", header: "Type" },
   { key: "clusterIP", header: "Cluster IP" },
   { key: "externalIP", header: "External IP", render: (s) => s.externalIP || "—" },
   { key: "ports", header: "Ports" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const ingressColumns: Column<IngressSummary>[] = [
-  { key: "name", header: "Ingress", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "class", header: "Class", filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "class", header: "Class" },
   { key: "hosts", header: "Hosts", render: (i) => i.hosts || "*" },
   { key: "address", header: "Address", render: (i) => i.address || "—" },
   { key: "ports", header: "Ports" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const endpointSliceColumns: Column<EndpointSliceSummary>[] = [
-  { key: "name", header: "Endpoint Slice", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
   { key: "addressType", header: "Address Type" },
-  { key: "endpoints", header: "Endpoints" },
+  { key: "endpoints", header: "Endpoints", align: "end" },
   { key: "ports", header: "Ports", render: (e) => e.ports || "—" },
   { key: "service", header: "Service", render: (e) => e.service || "—" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const networkPolicyColumns: Column<NetworkPolicySummary>[] = [
-  { key: "name", header: "Network Policy", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
   { key: "podSelector", header: "Pod Selector" },
-  { key: "ingress", header: "Ingress", sortable: true },
-  { key: "egress", header: "Egress", sortable: true },
+  { key: "ingress", header: "Ingress", sortable: true, align: "end" },
+  { key: "egress", header: "Egress", sortable: true, align: "end" },
   { key: "policyTypes", header: "Policy Types", render: (n) => n.policyTypes || "—" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const pvcColumns: Column<PvcSummary>[] = [
-  { key: "name", header: "Claim", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
   {
-    key: "status", header: "Status", sortable: true, filterable: true,
+    key: "status", header: "Status", sortable: true,
     render: (p) => <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" ? "Ready" : p.status)} />,
   },
-  { key: "capacity", header: "Capacity", render: (p) => formatStorageSize(p.capacity) },
+  { key: "capacity", header: "Capacity", align: "end", render: (p) => formatStorageSize(p.capacity) },
   { key: "accessModes", header: "Access Modes", render: (p) => p.accessModes || "—" },
-  { key: "storageClass", header: "Storage Class", filterable: true, render: (p) => p.storageClass || "—" },
+  { key: "storageClass", header: "Storage Class", render: (p) => p.storageClass || "—" },
   { key: "volume", header: "Volume", render: (p) => p.volume || "—" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const pvColumns: Column<PvSummary>[] = [
-  { key: "name", header: "Volume", sortable: true, filterable: true },
-  { key: "capacity", header: "Capacity", render: (p) => formatStorageSize(p.capacity) },
+  { key: "name", header: "Name", sortable: true },
+  { key: "capacity", header: "Capacity", align: "end", render: (p) => formatStorageSize(p.capacity) },
   { key: "accessModes", header: "Access Modes", render: (p) => p.accessModes || "—" },
   { key: "reclaimPolicy", header: "Reclaim", render: (p) => p.reclaimPolicy || "—" },
   {
-    key: "status", header: "Status", sortable: true, filterable: true,
+    key: "status", header: "Status", sortable: true,
     render: (p) => (
       <StatusPill status={p.status} kind={phaseKind(p.status === "Bound" || p.status === "Available" ? "Ready" : p.status)} />
     ),
   },
   { key: "claim", header: "Claim", render: (p) => p.claim || "—" },
-  { key: "storageClass", header: "Storage Class", filterable: true, render: (p) => p.storageClass || "—" },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "storageClass", header: "Storage Class", render: (p) => p.storageClass || "—" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const storageClassColumns: Column<StorageClassSummary>[] = [
-  { key: "name", header: "Storage Class", sortable: true, filterable: true },
-  { key: "provisioner", header: "Provisioner", filterable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "provisioner", header: "Provisioner" },
   { key: "reclaimPolicy", header: "Reclaim", render: (s) => s.reclaimPolicy || "—" },
   { key: "volumeBindingMode", header: "Binding Mode", render: (s) => s.volumeBindingMode || "—" },
   { key: "default", header: "Default", render: (s) => (s.default ? <StatusPill status="Default" kind="success" /> : "—") },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const serviceAccountColumns: Column<ServiceAccountSummary>[] = [
-  { key: "name", header: "Service Account", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "secrets", header: "Secrets", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "secrets", header: "Secrets", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const roleColumns: Column<RoleSummary>[] = [
-  { key: "name", header: "Role", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "rules", header: "Rules", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "rules", header: "Rules", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const clusterRoleColumns: Column<ClusterRoleSummary>[] = [
-  { key: "name", header: "Cluster Role", sortable: true, filterable: true },
-  { key: "rules", header: "Rules", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "rules", header: "Rules", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const roleBindingColumns: Column<RoleBindingSummary>[] = [
-  { key: "name", header: "Role Binding", sortable: true, filterable: true },
-  { key: "namespace", header: "Namespace", sortable: true, filterable: true },
-  { key: "role", header: "Role", filterable: true },
-  { key: "subjects", header: "Subjects", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "namespace", header: "Namespace", sortable: true },
+  { key: "role", header: "Role" },
+  { key: "subjects", header: "Subjects", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
 export const clusterRoleBindingColumns: Column<ClusterRoleBindingSummary>[] = [
-  { key: "name", header: "Cluster Role Binding", sortable: true, filterable: true },
-  { key: "role", header: "Role", filterable: true },
-  { key: "subjects", header: "Subjects", sortable: true },
-  { key: "age", header: "Age", sortable: true, getSortValue: ageSortValue },
+  { key: "name", header: "Name", sortable: true },
+  { key: "role", header: "Role" },
+  { key: "subjects", header: "Subjects", sortable: true, align: "end" },
+  { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];

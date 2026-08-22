@@ -41,4 +41,15 @@ export interface KindDescriptor<Row extends ListRow = ListRow> {
   enrich?: (context: string, namespace: string) => Promise<Map<string, Partial<Row>>>;
   enrichMs?: number;
   actions: KindActions;
+  /**
+   * Which rows need a second look — a pod not Running, a workload whose ready
+   * count is short of desired. Per-kind, like `actions`: absent for a kind
+   * with no sensible notion of "unhealthy" (a Secret, a Service), which shows
+   * no dot at all rather than a dot that is always off.
+   *
+   * A boolean, not a reason string — the screen supplies the words. Same
+   * "never colour alone" contract the cluster rail's `unavailable` follows:
+   * whatever renders this must say why beside the dot, not just tint it.
+   */
+  flagged?: (row: Row) => boolean;
 }

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -59,6 +60,7 @@ proto.releasePointerCapture ??= () => {};
 
 import type { ClusterContext, CrdRef } from "@srelens/core";
 import { Resources } from "./Resources";
+import { ConsoleProvider, useConsole } from "../console";
 import * as store from "../lib/tabsStore";
 import { defaultState } from "../lib/tabs";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
@@ -100,6 +102,7 @@ let stop: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   vi.clearAllMocks();
   stop = vi.fn();
+  asked = [];
   watchResource.mockImplementation(
     async (
       _context: string,
@@ -154,14 +157,32 @@ const headers = () =>
 /** The tab a route is open in — the one the screen under test is bound to. */
 const tabFor = (route: string) => store.currentWorkspace().tabs.find((t) => t.route === route)!;
 
+/** Every question a row's ask chip has sent to the console, in order asked. */
+let asked: string[];
+
+/** Stands in for the dock: registers as the console's listener, the way
+ *  `ConsoleDock` does, and records what arrives instead of rendering it. */
+function AskPeek() {
+  const { registerSubmit } = useConsole();
+  useEffect(() => registerSubmit((question) => asked.push(question)), [registerSubmit]);
+  return null;
+}
+
 /**
  * Open the route in a tab, then render its screen — the way `Window` does it.
  * The screen reads its sort and filter off its own tab, so a screen rendered
- * against a route no tab holds would have nowhere to put them.
+ * against a route no tab holds would have nowhere to put them. Wrapped in the
+ * same `ConsoleProvider` the real shell mounts at the root, since a row's ask
+ * chip now reaches `useConsole()`.
  */
 function open(route: string) {
   store.openTab(route);
-  return render(<Resources route={route} />);
+  return render(
+    <ConsoleProvider>
+      <Resources route={route} />
+      <AskPeek />
+    </ConsoleProvider>,
+  );
 }
 
 /** Open the column picker and hand back its panel. */
@@ -179,6 +200,64 @@ describe("Resources", () => {
     // The screen names no kind: the watch is opened on the route's slug.
     expect(watchResource.mock.calls[0][0]).toBe("prod-eu");
     expect(watchResource.mock.calls[0][2]).toBe("pods");
+  });
+
+  // Correction 1: the design mock titles every kind's identifier column
+  // "Name" — never "Pod", "Deployment", "Secret". Classic named it by kind.
+  it("titles the identifier column Name, not the kind", async () => {
+    open("/k/pods");
+
+    await waitFor(() => expect(headers()).toContain("Name"));
+    expect(headers()).not.toContain("Pod");
+  });
+
+  // Correction 3: an unhealthy row gets a dot before its name, and the dot is
+  // never colour alone — a reason rides beside it for anyone who cannot see
+  // the colour, the same contract the cluster rail's `unavailable` follows.
+  it("marks an unhealthy pod's row with a dot that also says so in words", async () => {
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
+        onRows([
+          { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "2d" },
+          { name: "bad-1", namespace: "default", ready: "0/1", phase: "CrashLoopBackOff", restarts: 9, node: "n1", age: "2d" },
+        ]);
+        return { stop };
+      },
+    );
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toHaveLength(2));
+
+    const badRow = within(screen.getByText("bad-1").closest("tr")!);
+    expect(badRow.getByText(/needs attention/i)).toBeTruthy();
+
+    const goodRow = within(screen.getByText("web-1").closest("tr")!);
+    expect(goodRow.queryByText(/needs attention/i)).toBeNull();
+  });
+
+  // Correction 3: every row gets a trailing ask chip that hands the row to
+  // the console dock, naming the actual resource and its state — "Why is X
+  // unhealthy?" for a bad row, a resource-use question otherwise.
+  it("offers an ask chip on each row that names the resource and its state", async () => {
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
+        onRows([
+          { name: "web-1", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "2d" },
+          { name: "bad-1", namespace: "default", ready: "0/1", phase: "CrashLoopBackOff", restarts: 9, node: "n1", age: "2d" },
+        ]);
+        return { stop };
+      },
+    );
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toHaveLength(2));
+
+    const badRow = within(screen.getByText("bad-1").closest("tr")!);
+    await userEvent.click(badRow.getByRole("button", { name: /Why is bad-1 unhealthy\?/ }));
+    expect(asked).toEqual(["Why is bad-1 unhealthy?"]);
+
+    const goodRow = within(screen.getByText("web-1").closest("tr")!);
+    await userEvent.click(goodRow.getByRole("button", { name: /web-1/ }));
+    expect(asked[1]).toMatch(/web-1/);
+    expect(asked[1]).not.toMatch(/unhealthy/i);
   });
 
   it("lists a custom resource this cluster has, from its own printer columns", async () => {
@@ -248,7 +327,11 @@ describe("Resources", () => {
     open("/k/pods");
     await waitFor(() => expect(headers()).toContain("Restarts"));
 
-    await userEvent.click(screen.getByRole("button", { name: "Filter search by Restarts" }));
+    // Set through the store rather than the column header's own funnel: the
+    // design mock has one search box and no per-column funnels, so the
+    // columns this screen hands `Table` no longer ask for one (#324) — the
+    // key can still arrive here the way a restored tab would carry it in.
+    act(() => store.setTabView(tabFor("/k/pods").id, { filterKey: "restarts" }));
     await waitFor(() => expect(tabFor("/k/pods").view?.filterKey).toBe("restarts"));
 
     await openColumns();
@@ -287,10 +370,10 @@ describe("Resources", () => {
     store.openTab("/k/pods");
     store.openTab("/k/nodes"); // the active one
     render(
-      <>
+      <ConsoleProvider>
         <Resources route="/k/pods" />
         <Resources route="/k/nodes" />
-      </>,
+      </ConsoleProvider>,
     );
     await screen.findByRole("searchbox", { name: "Filter pods" });
 

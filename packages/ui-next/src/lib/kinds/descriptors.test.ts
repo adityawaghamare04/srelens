@@ -83,4 +83,30 @@ describe("descriptors", () => {
     });
     expect(untyped).toEqual([]);
   });
+
+  describe("flagged rows — the design's unhealthy dot", () => {
+    it("flags a Pod that is not Running", () => {
+      const flagged = descriptorFor("pods")!.flagged!;
+      const running = { name: "p", namespace: "d", phase: "Running", ready: "1/1", restarts: 0, node: "n", age: "1d" };
+      const crashing = { ...running, phase: "CrashLoopBackOff" };
+      expect(flagged(running)).toBe(false);
+      expect(flagged(crashing)).toBe(true);
+    });
+
+    it("flags a Deployment, StatefulSet or DaemonSet short of its desired ready count", () => {
+      const shortDeployment = { name: "d", namespace: "ns", ready: "2/3", upToDate: 3, available: 2, age: "1d" };
+      const shortStatefulSet = { name: "s", namespace: "ns", ready: "0/1", updated: 1, service: "", age: "1d" };
+      const shortDaemonSet = {
+        name: "n", namespace: "ns", desired: 3, current: 3, ready: 2, upToDate: 3, available: 3, age: "1d",
+      };
+      expect(descriptorFor("deployments")!.flagged!(shortDeployment)).toBe(true);
+      expect(descriptorFor("statefulsets")!.flagged!(shortStatefulSet)).toBe(true);
+      expect(descriptorFor("daemonsets")!.flagged!(shortDaemonSet)).toBe(true);
+    });
+
+    it("leaves a kind with no sensible notion of unhealthy — a Secret — with no flagged rule", () => {
+      expect(descriptorFor("secrets")!.flagged).toBeUndefined();
+      expect(descriptorFor("services")!.flagged).toBeUndefined();
+    });
+  });
 });
