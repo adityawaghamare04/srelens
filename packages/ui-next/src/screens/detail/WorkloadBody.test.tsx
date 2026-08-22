@@ -23,6 +23,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   listReplicaSets,
 }));
 
+import { GenericBody } from "./GenericBody";
 import { WorkloadDetailsBody } from "./WorkloadBody";
 
 function workload(
@@ -192,7 +193,7 @@ describe("WorkloadDetailsBody", () => {
       expect(screen.queryByText("Annotations")).toBeNull();
     });
 
-    it("shows Managed By as inert Kind/name text for each owner reference", () => {
+    it("shows Managed by as inert Kind/name text for each owner reference", () => {
       render(
         <WorkloadDetailsBody
           object={workload(
@@ -208,18 +209,35 @@ describe("WorkloadDetailsBody", () => {
           context="ctx"
         />,
       );
+      expect(screen.getByText("Managed by")).toBeDefined();
+      expect(screen.queryByText("Managed By")).toBeNull();
       expect(screen.getByText("Deployment/web")).toBeDefined();
       expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
-    it("omits Managed By when the workload has no owner", () => {
+    it("omits Managed by when the workload has no owner", () => {
       render(
         <WorkloadDetailsBody
           object={workload("Deployment", { replicas: 1, selector: { matchLabels: {} } })}
           context="ctx"
         />,
       );
-      expect(screen.queryByText("Managed By")).toBeNull();
+      expect(screen.queryByText("Managed by")).toBeNull();
+    });
+
+    it("shows the strategy label as sentence case", () => {
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", {
+            replicas: 1,
+            selector: { matchLabels: {} },
+            strategy: { type: "Recreate" },
+          })}
+          context="ctx"
+        />,
+      );
+      expect(screen.getByText("Strategy type")).toBeDefined();
+      expect(screen.queryByText("Strategy Type")).toBeNull();
     });
 
     it("shows conditions as a row of status pills", () => {
@@ -387,10 +405,10 @@ describe("WorkloadDetailsBody", () => {
       await waitFor(() => expect(screen.getByText("No revisions")).toBeDefined());
     });
 
-    it("does not fetch revisions for a StatefulSet, DaemonSet or ReplicaSet", async () => {
+    it.each(["StatefulSet", "DaemonSet", "ReplicaSet"])("does not fetch revisions for a %s", async (kind) => {
       render(
         <WorkloadDetailsBody
-          object={workload("StatefulSet", { replicas: 1, selector: { matchLabels: {} } })}
+          object={workload(kind, { replicas: 1, selector: { matchLabels: {} } })}
           context="ctx"
         />,
       );
@@ -496,8 +514,12 @@ describe("WorkloadDetailsBody", () => {
       expect(podsForSelector).not.toHaveBeenCalled();
     });
 
-    it("fetches and shows the related pods matched by the DaemonSet's selector", async () => {
-      podsForSelector.mockResolvedValue({ pods: [POD_A] });
+    it("does not fetch or render related pods for a DaemonSet on its own — GenericBody supplies them", async () => {
+      // DaemonSet is not in `SELF_DESCRIBING_KINDS`: classic's `DaemonSetBody`
+      // renders only Scheduling, and it is `GenericDetail` (this package's
+      // `GenericBody`) that supplies a DaemonSet's related pods. Without this
+      // gate, a DaemonSet reached through `GenericBody` would get the panel
+      // twice — see the "exactly one" integration test below.
       render(
         <WorkloadDetailsBody
           object={workload(
@@ -509,7 +531,30 @@ describe("WorkloadDetailsBody", () => {
           context="ctx"
         />,
       );
+      await Promise.resolve();
+      expect(podsForSelector).not.toHaveBeenCalled();
+      expect(screen.queryByText("Pods")).toBeNull();
+    });
+
+    it("renders exactly one related-pods section for a DaemonSet reached through GenericBody", async () => {
+      podsForSelector.mockResolvedValue({ pods: [POD_A] });
+      const daemonSet = workload(
+        "DaemonSet",
+        { selector: { matchLabels: { app: "logging" } } },
+        {},
+        { name: "logger", namespace: "kube-system" },
+      );
+      render(
+        <GenericBody kind="DaemonSet" object={daemonSet} context="ctx">
+          <WorkloadDetailsBody object={daemonSet} context="ctx" />
+        </GenericBody>,
+      );
       await waitFor(() => expect(screen.getByText("web-abc-1")).toBeDefined());
+      // Asserting the COUNT, not merely presence — two "Pods" panels (one
+      // from WorkloadDetailsBody, one from GenericBody) would also satisfy
+      // a bare `getByText`.
+      expect(screen.getAllByRole("heading", { name: "Pods" })).toHaveLength(1);
+      expect(podsForSelector).toHaveBeenCalledTimes(1);
       expect(podsForSelector).toHaveBeenCalledWith("ctx", "kube-system", { app: "logging" });
     });
   });

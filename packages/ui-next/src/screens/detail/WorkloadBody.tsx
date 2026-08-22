@@ -17,6 +17,7 @@ import {
   type ReplicaSetSummary,
 } from "@srelens/core";
 import { EmptyState, KV, LoadingState, PairList, Panel, StatusPill, Table, type Column } from "@srelens/ui-kit";
+import { SELF_DESCRIBING_KINDS } from "./GenericBody";
 import { phaseKind } from "../../lib/kinds/columns";
 
 /** A formatted list, one item per line — matches `PodBody`'s own helper of
@@ -200,11 +201,11 @@ function RelatedPodsSection({
 
 /**
  * A Deployment/StatefulSet/ReplicaSet's Properties section — classic's
- * `WorkloadDetailView`, ported fact-for-fact. Namespace and Managed By are
+ * `WorkloadDetailView`, ported fact-for-fact. Namespace and Managed by are
  * `ResourceLink`/`LinkedResources` in classic that navigate; they render
  * here as plain text (see the task report for the full inert-value list).
  *
- * Labels, Annotations, Selector, Managed By and Conditions are OMITTED when
+ * Labels, Annotations, Selector, Managed by and Conditions are OMITTED when
  * empty rather than shown as classic's chip widgets do ("None") — the same
  * convention `PodBody`'s Properties section settled on for the same reason:
  * the kit has no expandable chip component, and `PairList` (used here for
@@ -258,9 +259,9 @@ function WorkloadPropertiesSection({ kind, object }: { kind: string; object: K8s
       <KV k="Replicas" v={replicaText} />
       {Object.keys(selector).length > 0 && <KV k="Selector" v={<PairList pairs={Object.entries(selector)} />} />}
       {owners.length > 0 && (
-        <KV k="Managed By" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
+        <KV k="Managed by" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
       )}
-      {strategyType && <KV k="Strategy Type" v={strategyType} />}
+      {strategyType && <KV k="Strategy type" v={strategyType} />}
       {serviceName && <KV k="Service" v={serviceName} mono />}
       {volumeClaimTemplateNames.length > 0 && (
         <KV k="Volume claim templates" v={volumeClaimTemplateNames.join(", ")} />
@@ -302,10 +303,19 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
  * `DaemonSetBody` (DaemonSet), which classic renders as genuinely different
  * shapes (replica counts vs. per-node counts), not variations on one KV
  * list. A Deployment then shows its rolled-out revisions (classic's
- * `DeployRevisions`), and every kind with a selector shows its related pods
- * (classic's `ManagedPods`) — in that order, matching classic's own
- * `WorkloadDetailView`, which renders `DeployRevisions` before
- * `ManagedPods`.
+ * `DeployRevisions`).
+ *
+ * Related pods (classic's `ManagedPods`) render here ONLY for the
+ * `SELF_DESCRIBING_KINDS` this body covers (Deployment/StatefulSet/
+ * ReplicaSet) — matching classic's own `WorkloadDetailView`, which renders
+ * `ManagedPods` itself for exactly those three. DaemonSet is deliberately
+ * excluded: classic's `DaemonSetBody` renders ONLY its Scheduling section —
+ * it is the generic `GenericDetail` wrapper that supplies DaemonSet's
+ * related pods, and `GenericBody` (this package's port of that wrapper)
+ * already adds one via `relatedPodSelector` for every kind that isn't
+ * self-describing. Without this gate, a DaemonSet would get two "Pods"
+ * panels — one from here, one from `GenericBody` — since DaemonSet has a
+ * selector but is not self-describing.
  */
 export function WorkloadDetailsBody({ object, context }: { object: K8sObject; context: string }) {
   const kind = str(object.kind);
@@ -327,7 +337,7 @@ export function WorkloadDetailsBody({ object, context }: { object: K8sObject; co
       {kind === "Deployment" && namespace && name && (
         <DeployRevisionsSection context={context} namespace={namespace} ownerName={name} />
       )}
-      {hasSelector && namespace && (
+      {hasSelector && namespace && SELF_DESCRIBING_KINDS.has(kind) && (
         <RelatedPodsSection context={context} namespace={namespace} selector={selector} />
       )}
     </>
