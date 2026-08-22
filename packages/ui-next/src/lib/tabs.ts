@@ -1,4 +1,5 @@
 import type { ClusterContext } from "@srelens/core";
+import type { TableSort } from "@srelens/ui-kit";
 import { describe, type TabKind } from "./routes";
 
 export interface Tab {
@@ -11,6 +12,12 @@ export interface Tab {
   preview?: boolean;
   /** Cannot be closed. */
   pinned?: boolean;
+  /**
+   * A resource list's sort, filter string and active filter column. Belongs
+   * to the tab, not the screen, so it survives a restart the way the rest of
+   * the tab does. Absent until the user sorts or filters — see `setTabView`.
+   */
+  view?: { sort?: TableSort | null; filter?: string; filterKey?: string | null };
 }
 
 export interface Workspace {

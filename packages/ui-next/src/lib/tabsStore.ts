@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { TableSort } from "@srelens/ui-kit";
 import { CLOSED_CAP, defaultState, makeTab, newId, type Tab, type TabsState, type Workspace } from "./tabs";
 
 /**
@@ -254,6 +255,39 @@ export function setWorkspaceClusters(id: string, clusters: string[]): void {
     else delete next.activeCluster;
     return next;
   });
+}
+
+const EMPTY_VIEW: NonNullable<Tab["view"]> = {};
+
+function sortEqual(a: TableSort | null | undefined, b: TableSort | null | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.key === b.key && a.direction === b.direction;
+}
+
+/**
+ * A resource list's sort, filter string and active filter column, merged
+ * into whatever the tab already has. Guarded like every other action here:
+ * one subscriber writes a file, so patching a view with values it already
+ * holds must not emit.
+ */
+export function setTabView(tabId: string, patch: Partial<NonNullable<Tab["view"]>>): void {
+  patchCurrent((w) => {
+    const at = w.tabs.findIndex((t) => t.id === tabId);
+    if (at < 0) return w;
+    const current = w.tabs[at].view ?? EMPTY_VIEW;
+    const next: NonNullable<Tab["view"]> = { ...current, ...patch };
+    if (sortEqual(current.sort, next.sort) && current.filter === next.filter && current.filterKey === next.filterKey) {
+      return w;
+    }
+    const tabs = w.tabs.map((t, i) => (i === at ? { ...t, view: next } : t));
+    return { ...w, tabs };
+  });
+}
+
+export function useTabView(tabId: string): NonNullable<Tab["view"]> {
+  const getView = () => currentWorkspace().tabs.find((t) => t.id === tabId)?.view ?? EMPTY_VIEW;
+  return useSyncExternalStore(subscribe, getView, getView);
 }
 
 /**

@@ -1,4 +1,5 @@
 import { loadRestoreSession, settingsStorage } from "@srelens/core";
+import type { TableSort } from "@srelens/ui-kit";
 import type { Tab, TabsState, Workspace } from "./tabs";
 
 /**
@@ -22,12 +23,36 @@ export interface Storage {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isString = (v: unknown): v is string => typeof v === "string";
 
+const isTableSort = (v: unknown): v is TableSort =>
+  isRecord(v) && isString(v.key) && (v.direction === "asc" || v.direction === "desc");
+
+/**
+ * A resource list's sort, filter string and active filter column. Follows
+ * the tab's own rule: a field this build cannot read is dropped on its own
+ * rather than taking the rest of the object with it — a `sort` in a shape
+ * this build does not recognise costs `sort`, not the `view` around it, and
+ * a `view` that is not an object at all (a stray string, say) costs the
+ * `view`, not the tab.
+ */
+function parseView(v: unknown): Tab["view"] | undefined {
+  if (!isRecord(v)) return undefined;
+  const view: NonNullable<Tab["view"]> = {};
+  if (v.sort === null) view.sort = null;
+  else if (isTableSort(v.sort)) view.sort = v.sort;
+  if (isString(v.filter)) view.filter = v.filter;
+  if (v.filterKey === null) view.filterKey = null;
+  else if (isString(v.filterKey)) view.filterKey = v.filterKey;
+  return view;
+}
+
 function parseTab(v: unknown): Tab | null {
   if (!isRecord(v) || !isString(v.id) || !isString(v.route) || !isString(v.title) || !isString(v.kind)) return null;
   const tab: Tab = { id: v.id, route: v.route, title: v.title, kind: v.kind as Tab["kind"] };
   if (isString(v.sub)) tab.sub = v.sub;
   if (v.preview === true) tab.preview = true;
   if (v.pinned === true) tab.pinned = true;
+  const view = parseView(v.view);
+  if (view !== undefined) tab.view = view;
   return tab;
 }
 

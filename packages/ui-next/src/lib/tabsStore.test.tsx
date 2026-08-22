@@ -300,6 +300,36 @@ describe("activeCluster", () => {
   });
 });
 
+describe("setTabView / useTabView", () => {
+  it("defaults to an empty view for a tab with none set", () => {
+    const { result } = renderHook(() => store.useTabView(active().id));
+    expect(result.current).toEqual({});
+  });
+
+  it("merges a patch into what the tab already holds", () => {
+    const id = active().id;
+    store.setTabView(id, { filter: "abc" });
+    store.setTabView(id, { sort: { key: "name", direction: "asc" } });
+    expect(store.currentWorkspace().tabs.find((t) => t.id === id)?.view).toEqual({
+      filter: "abc",
+      sort: { key: "name", direction: "asc" },
+    });
+  });
+
+  it("tells the hook when the view changes", () => {
+    const id = active().id;
+    const { result } = renderHook(() => store.useTabView(id));
+    act(() => store.setTabView(id, { filter: "x" }));
+    expect(result.current.filter).toBe("x");
+  });
+
+  it("ignores an id that is not there", () => {
+    const before = store.getState();
+    store.setTabView("nope", { filter: "x" });
+    expect(store.getState()).toBe(before);
+  });
+});
+
 describe("activeRoute", () => {
   it("is the active tab's route", () => {
     store.openTab("/k/pods");
@@ -379,6 +409,12 @@ describe("no-op actions do not notify", () => {
 
   silent("renameWorkspace to the name it already has", () => {}, () =>
     store.renameWorkspace(store.getState().currentId, "Default"),
+  );
+
+  silent(
+    "setTabView with values it already holds",
+    () => store.setTabView(activeId(), { filter: "abc", sort: { key: "name", direction: "asc" } }),
+    () => store.setTabView(activeId(), { filter: "abc", sort: { key: "name", direction: "asc" } }),
   );
 
   it("but a real change still notifies exactly once", () => {
