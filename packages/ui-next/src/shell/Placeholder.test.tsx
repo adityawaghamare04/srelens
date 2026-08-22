@@ -20,7 +20,9 @@ describe("Placeholder", () => {
     const onOpenInClassic = vi.fn();
     render(<Placeholder route="/helm" ported={[]} onOpenInClassic={onOpenInClassic} />);
     fireEvent.click(screen.getByRole("button", { name: /open in classic/i }));
-    expect(onOpenInClassic).toHaveBeenCalledWith("/helm");
+    // The tab's cluster rides along when the tab has one, so classic can
+    // reopen at that cluster; a cluster-less placeholder passes nothing.
+    expect(onOpenInClassic).toHaveBeenCalledWith("/helm", undefined);
   });
 
   it("lists which screens are ported, when any are", () => {

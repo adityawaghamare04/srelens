@@ -44,6 +44,19 @@ export function currentWorkspace(): Workspace {
   return state.workspaces.find((w) => w.id === state.currentId) ?? state.workspaces[0];
 }
 
+/**
+ * The cluster the sidebar and status bar are about, per workspace and
+ * persisted with it: which cluster you were looking at is worth surviving a
+ * restart, the way the open tabs are.
+ */
+export function activeCluster(): string | null {
+  return currentWorkspace().activeCluster ?? null;
+}
+
+export function useActiveCluster(): string | null {
+  return useSyncExternalStore(subscribe, activeCluster, activeCluster);
+}
+
 export function activeRoute(): string {
   const w = currentWorkspace();
   return w.tabs.find((t) => t.id === w.activeId)?.route ?? "/";
@@ -209,6 +222,7 @@ export function switchWorkspace(id: string): void {
 export function createWorkspace(name: string, clusters: string[]): string {
   const home = makeTab("/");
   const w: Workspace = { id: newId(), name, clusters, tabs: [home], activeId: home.id, closed: [] };
+  if (clusters[0]) w.activeCluster = clusters[0];
   emit({ workspaces: [...state.workspaces, w], currentId: w.id });
   return w.id;
 }
@@ -228,9 +242,31 @@ export function removeWorkspace(id: string): void {
 }
 
 export function setWorkspaceClusters(id: string, clusters: string[]): void {
-  patchWorkspace(id, (w) =>
-    w.clusters.length === clusters.length && w.clusters.every((c, i) => c === clusters[i])
-      ? w
-      : { ...w, clusters: [...clusters] },
-  );
+  patchWorkspace(id, (w) => {
+    const same = w.clusters.length === clusters.length && w.clusters.every((c, i) => c === clusters[i]);
+    // The active cluster is an index into this list, so taking a cluster away
+    // has to move it — `reconcile` only knows about clusters that vanished
+    // from the machine, not ones dropped from a workspace.
+    const active = w.activeCluster && clusters.includes(w.activeCluster) ? w.activeCluster : clusters[0];
+    if (same && active === w.activeCluster) return w;
+    const next: Workspace = { ...w, clusters: [...clusters] };
+    if (active) next.activeCluster = active;
+    else delete next.activeCluster;
+    return next;
+  });
+}
+
+/**
+ * `null` for "no cluster in focus"; anything the workspace does not have is
+ * refused rather than stored, so the field is always an id in `clusters`.
+ */
+export function setActiveCluster(id: string | null): void {
+  patchCurrent((w) => {
+    if (id !== null && !w.clusters.includes(id)) return w;
+    if ((w.activeCluster ?? null) === id) return w;
+    const next: Workspace = { ...w };
+    if (id === null) delete next.activeCluster;
+    else next.activeCluster = id;
+    return next;
+  });
 }

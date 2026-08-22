@@ -70,6 +70,11 @@ describe("defaultState", () => {
     expect(w.activeId).toBe(w.tabs[0].id);
   });
 
+  it("points at the first cluster", () => {
+    const s = defaultState([ctx("b"), ctx("a")]);
+    expect(s.workspaces[0].activeCluster).toBe("b");
+  });
+
   it("still makes a workspace when there are no clusters at all", () => {
     const state = defaultState([]);
     expect(state.workspaces).toHaveLength(1);
@@ -125,9 +130,24 @@ describe("reconcile", () => {
     expect(out.workspaces[0].closed[0].route).toBe("/resources/r0");
   });
 
+  it("clears an active cluster that vanished and picks the first that remains", () => {
+    const s = defaultState([ctx("a"), ctx("b")]);
+    s.workspaces[0].activeCluster = "a";
+    expect(reconcile(s, [ctx("b")]).workspaces[0].activeCluster).toBe("b");
+    expect(reconcile(s, []).workspaces[0].activeCluster).toBeUndefined();
+  });
+
+  it("adopts the first cluster for a workspace stored before there was an active one", () => {
+    // Storage version 1 predates the field, so the documents on disk have no
+    // `activeCluster`: boot has to fill it in or the rail comes up with
+    // clusters and nothing selected.
+    const state: TabsState = { workspaces: [ws({ clusters: ["a", "b"] })], currentId: "w1" };
+    expect(reconcile(state, [ctx("a"), ctx("b")]).workspaces[0].activeCluster).toBe("a");
+  });
+
   it("returns the same object when nothing needed changing", () => {
     // So a store can compare by identity and skip a save.
-    const w = ws({ clusters: ["a"] });
+    const w = ws({ clusters: ["a"], activeCluster: "a" });
     w.activeId = w.tabs[0].id;
     const state: TabsState = { workspaces: [w], currentId: "w1" };
     expect(reconcile(state, [ctx("a")])).toBe(state);

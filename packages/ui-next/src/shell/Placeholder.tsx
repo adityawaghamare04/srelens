@@ -6,7 +6,7 @@ export interface PlaceholderProps {
   clusterName?: string;
   /** Display names of the screens that do exist in the new design. */
   ported: string[];
-  onOpenInClassic: (route: string) => void;
+  onOpenInClassic: (route: string, clusterName?: string) => void;
   /** Where the component gallery is, when this tree has one to offer. */
   onOpenGallery?: () => void;
 }
@@ -59,7 +59,7 @@ export function Placeholder({
         }
         action={
           <span className="flex gap-2">
-            <Button type="button" variant="secondary" size="sm" onClick={() => onOpenInClassic(route)}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => onOpenInClassic(route, clusterName)}>
               Open in classic
             </Button>
             {onOpenGallery && (

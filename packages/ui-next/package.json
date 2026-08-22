@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@srelens/core": "workspace:*",
-    "@srelens/ui-kit": "workspace:*"
+    "@srelens/ui-kit": "workspace:*",
+    "lucide-react": "^1.22.0"
   },
   "peerDependencies": {
     "react": "^19.0.0",

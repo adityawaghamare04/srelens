@@ -1,7 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import type { ClusterContext } from "@srelens/core";
 import { defaultState, type TabsState } from "./tabs";
 import * as store from "./tabsStore";
+
+const ctx = (id: string): ClusterContext => ({
+  name: id, stableId: id, cluster: id, server: `https://${id}`, isCurrent: false,
+});
 
 function seed(over: Partial<TabsState> = {}) {
   const base = defaultState([]);
@@ -242,6 +247,56 @@ describe("workspaces", () => {
     const id = store.getState().currentId;
     store.setWorkspaceClusters(id, ["x", "y"]);
     expect(store.currentWorkspace().clusters).toEqual(["x", "y"]);
+  });
+});
+
+describe("activeCluster", () => {
+  it("setActiveCluster accepts a cluster of the workspace and nothing else", () => {
+    store.setState(defaultState([ctx("a"), ctx("b")]));
+    store.setActiveCluster("b");
+    expect(store.activeCluster()).toBe("b");
+    store.setActiveCluster("zzz");
+    expect(store.activeCluster()).toBe("b");
+    store.setActiveCluster(null);
+    expect(store.activeCluster()).toBeNull();
+  });
+
+  it("setActiveCluster does not notify for a no-op", () => {
+    store.setState(defaultState([ctx("a")]));
+    const spy = vi.fn();
+    const off = store.subscribe(spy);
+    store.setActiveCluster("a"); // already "a" from defaultState
+    expect(spy).not.toHaveBeenCalled();
+    off();
+  });
+
+  it("tells the hook", () => {
+    store.setState(defaultState([ctx("a"), ctx("b")]));
+    const { result } = renderHook(() => store.useActiveCluster());
+    expect(result.current).toBe("a");
+    act(() => store.setActiveCluster("b"));
+    expect(result.current).toBe("b");
+  });
+
+  it("is the first cluster of a workspace just created", () => {
+    // Otherwise a new workspace comes up with a full rail and nothing
+    // selected until the next `reconcile`, which only runs when the machine's
+    // contexts change.
+    store.createWorkspace("Prod", ["c1", "c2"]);
+    expect(store.activeCluster()).toBe("c1");
+    store.createWorkspace("Empty", []);
+    expect(store.activeCluster()).toBeNull();
+  });
+
+  it("stays valid when the workspace's clusters are replaced", () => {
+    store.setState(defaultState([ctx("a"), ctx("b")]));
+    const id = store.getState().currentId;
+    store.setWorkspaceClusters(id, ["b", "c"]);
+    expect(store.activeCluster()).toBe("b");
+    store.setWorkspaceClusters(id, ["c", "d"]);
+    expect(store.activeCluster()).toBe("c");
+    store.setWorkspaceClusters(id, []);
+    expect(store.activeCluster()).toBeNull();
   });
 });
 

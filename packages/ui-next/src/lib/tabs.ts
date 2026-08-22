@@ -18,6 +18,8 @@ export interface Workspace {
   name: string;
   /** `ClusterContext.stableId`s. Never display names — see #265. */
   clusters: string[];
+  /** The cluster the sidebar and status bar are about. A `stableId` in `clusters`. */
+  activeCluster?: string;
   tabs: Tab[];
   activeId: string;
   /** Recently closed, most recent first, for reopen-closed. */
@@ -72,14 +74,16 @@ function homeTab(): Tab {
  */
 export function defaultState(contexts: ClusterContext[]): TabsState {
   const home = homeTab();
+  const ids = contexts.map((c) => c.stableId);
   const w: Workspace = {
     id: newId(),
     name: "Default",
-    clusters: contexts.map((c) => c.stableId),
+    clusters: ids,
     tabs: [home],
     activeId: home.id,
     closed: [],
   };
+  if (ids[0]) w.activeCluster = ids[0];
   return { workspaces: [w], currentId: w.id };
 }
 
@@ -97,6 +101,16 @@ export function reconcile(state: TabsState, contexts: ClusterContext[]): TabsSta
     let next = w;
     const clusters = w.clusters.filter((id) => known.has(id));
     if (clusters.length !== w.clusters.length) next = { ...next, clusters };
+
+    // The active cluster follows its list: it survives if it is still there,
+    // and otherwise the first that remains takes over — including for a
+    // workspace stored before the field existed, which has none at all.
+    const active = w.activeCluster && clusters.includes(w.activeCluster) ? w.activeCluster : clusters[0];
+    if (active !== w.activeCluster) {
+      next = { ...next };
+      if (active) next.activeCluster = active;
+      else delete next.activeCluster;
+    }
 
     let tabs = next.tabs;
     if (tabs.length === 0) tabs = [homeTab()];

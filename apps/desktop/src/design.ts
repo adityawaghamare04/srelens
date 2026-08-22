@@ -1,7 +1,7 @@
-import { isTauri } from "@srelens/core";
+import { isApplePlatform, isTauri, K8S_KIND, type ResourceKind } from "@srelens/core";
 // theme.ts imports only settingsStorage, so this does not drag the classic
 // stylesheet into the new design's chunk.
-import { getInitialTheme, resolvedThemeMode } from "./ui/theme";
+import { applyTheme, getInitialTheme, resolvedThemeMode } from "./ui/theme";
 
 /**
  * Which design the app renders.
@@ -57,16 +57,42 @@ export function saveDesign(design: Design): boolean {
 export type SwitchResult = { ok: true } | { ok: false; reason: string };
 
 /**
- * Whether the new design draws its own titlebar yet.
+ * Whether the new design draws its own titlebar here.
  *
- * It does not: `NextApp` is the tab strip over the tab bodies, and nothing
- * above it. Dropping the system decorations now would leave a frameless window
- * with no drag region and no window controls — unmovable, unminimisable, and
- * closable only by quitting the app. The design's own titlebar lands with the
- * rest of the chrome; this flips then, and needs an answer for Windows and
- * Linux at the same time, since the mock's traffic lights are macOS-shaped.
+ * The mock's traffic lights are macOS-shaped, so only Apple gets the overlay
+ * for now; Windows and Linux keep the system decorations until the design has
+ * an answer for their controls. Optional argument for the callers that already
+ * hold a platform string; the runtime answers for itself when they do not.
  */
-const NEXT_DESIGN_DRAWS_ITS_OWN_CHROME = false;
+export function drawsOwnChrome(platform?: string): boolean {
+  return isApplePlatform(platform);
+}
+
+/**
+ * Dress the window for the new design, once per boot of it.
+ *
+ * The titlebar goes overlay so the design's own Titlebar sits flush under the
+ * traffic lights without doubling the chrome. Cosmetic, and explicitly not
+ * allowed to block boot: on a build where
+ * `core:window:allow-set-title-bar-style` is not granted this throws, and a
+ * rejecting promise escaping would have left bootstrap awaiting forever — a
+ * blank window instead of an undressed one.
+ */
+export async function applyNextDesignChrome(): Promise<void> {
+  if (!isTauri() || !drawsOwnChrome()) return;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    // An overlay style keeps macOS painting the native title over the
+    // webview — "srelens" from tauri.conf.json landed square on the workspace
+    // switcher — so the name is cleared and the design's own Titlebar speaks
+    // for the window. switchDesign("classic") gives it back.
+    await win.setTitle("");
+    await win.setTitleBarStyle("overlay");
+  } catch {
+    // Wrong chrome is a blemish; a failed boot is a broken app.
+  }
+}
 
 export async function switchDesign(design: Design): Promise<SwitchResult> {
   if (!saveDesign(design)) {
@@ -79,15 +105,18 @@ export async function switchDesign(design: Design): Promise<SwitchResult> {
     // would have been invisible, and the button would have looked inert.
     return { ok: false, reason: "This device would not let srelens save the preference." };
   }
-  if (isTauri() && NEXT_DESIGN_DRAWS_ITS_OWN_CHROME) {
+  if (design === "classic" && isTauri() && drawsOwnChrome()) {
     try {
-      // Cosmetic, and explicitly not allowed to block the switch:
-      // `core:window:allow-set-decorations` has to be granted in the app's
-      // capabilities, and on a build where it is not, this throws. Letting
-      // that reject left the preference written and the window unchanged, so
-      // the design only appeared after a manual restart.
+      // Leaving the new design means handing the system titlebar back: classic
+      // renders under the real decorations, and an overlay left behind would
+      // double the chrome. The native title comes back with it — it was
+      // cleared for the overlay, and classic draws no name of its own. Going
+      // the other way dresses nothing here — the next boot's
+      // applyNextDesignChrome owns that direction.
       const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().setDecorations(design === "classic");
+      const win = getCurrentWindow();
+      await win.setTitle("srelens");
+      await win.setTitleBarStyle("visible");
     } catch {
       // Wrong chrome is a blemish; not switching at all is a broken setting.
     }
@@ -108,24 +137,49 @@ export async function switchDesign(design: Design): Promise<SwitchResult> {
  *
  * Light is the absence of the attribute, matching ui-next's `:root` tokens.
  */
+/**
+ * The new design's reading of the stored preference, as an attribute on the
+ * root. Shared by boot, the system-appearance listener and the toggle — three
+ * writers of one convention is two too many.
+ *
+ * Light is the absence of the attribute, matching ui-next's `:root` tokens.
+ */
+function applyNextThemeAttribute(): void {
+  const root = document.documentElement;
+  if (resolvedThemeMode(getInitialTheme().mode) === "dark") {
+    root.dataset.theme = "dark";
+  } else {
+    delete root.dataset.theme;
+  }
+}
+
 export function applyNextDesignTheme(): () => void {
-  const apply = () => {
-    const root = document.documentElement;
-    if (resolvedThemeMode(getInitialTheme().mode) === "dark") {
-      root.dataset.theme = "dark";
-    } else {
-      delete root.dataset.theme;
-    }
-  };
-  apply();
+  applyNextThemeAttribute();
 
   // Someone on "system" changes appearance while the app is open, and the new
   // tree has no equivalent of the classic App's matchMedia effect, so it would
   // sit on a stale palette until the next reload. (#314 review)
   if (getInitialTheme().mode !== "system") return () => {};
   const query = window.matchMedia("(prefers-color-scheme: dark)");
+  const apply = () => applyNextThemeAttribute();
   query.addEventListener("change", apply);
   return () => query.removeEventListener("change", apply);
+}
+
+/**
+ * Flip light/dark for both designs at once.
+ *
+ * The write goes through classic's `applyTheme`, so one stored preference
+ * drives both designs; but that write leaves classic's conventions on the root
+ * (`data-theme` = palette name), which ui-next reads as a mode. Re-asserting
+ * our own attribute afterwards keeps the two designs' readings from fighting
+ * over the same element.
+ */
+export function toggleNextDesignTheme(): void {
+  const current = getInitialTheme();
+  const mode = resolvedThemeMode(current.mode);
+  applyTheme({ ...current, mode: mode === "dark" ? "light" : "dark" });
+  applyNextThemeAttribute();
 }
 
 /**
@@ -134,4 +188,78 @@ export function applyNextDesignTheme(): () => void {
  * Placeholder shows it so the user knows what is there. One list, read by both,
  * so they cannot drift. A screen is added here in the PR that ports it.
  */
-export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [];
+export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [
+  { route: "/applog", name: "Application log" },
+  { route: "/notes", name: "Release notes" },
+];
+
+/**
+ * Where classic should land after leaving the new design.
+ *
+ * The switch reloads the document, so the note rides `sessionStorage`: a
+ * handoff is for the one reload that follows, never for a later launch, and
+ * session scope makes the difference structural rather than remembered.
+ */
+export const HANDOFF_KEY = "srelens.design.handoff";
+
+export interface Handoff {
+  context: string;
+  kind: ResourceKind;
+}
+
+/**
+ * The classic view a route in the new design stands for.
+ *
+ * Pure per R-F: it carries `{ context, kind }` and nothing else. A route whose
+ * kind classic does not have — or cannot parse — still lands on the cluster's
+ * overview, because standing somewhere near where you were beats being dumped
+ * at home with no trace of the cluster you were looking at.
+ */
+export function handoffFor(route: string, context?: string): Handoff | null {
+  if (!context) return null;
+  const slug = /^\/k\/([^/]+)$/.exec(route)?.[1];
+  if (slug && slug !== "overview" && Object.prototype.hasOwnProperty.call(K8S_KIND, slug)) {
+    return { context, kind: slug as ResourceKind };
+  }
+  switch (route) {
+    case "/events":
+      return { context, kind: "events" };
+    case "/forwards":
+      return { context, kind: "portforwards" };
+    case "/helm":
+      return { context, kind: "helmreleases" };
+    default:
+      // `/`, `/overview`, and every route classic has no answer for.
+      return { context, kind: "overview" };
+  }
+}
+
+/** Note where the new design was, for classic to pick up after the reload. */
+export function saveHandoff(route: string, context?: string): void {
+  try {
+    const handoff = handoffFor(route, context);
+    if (handoff) sessionStorage.setItem(HANDOFF_KEY, JSON.stringify(handoff));
+  } catch {
+    // Session storage throws in some privacy modes; losing the handoff is
+    // landing on classic's overview, which is where it lands anyway.
+  }
+}
+
+/**
+ * Consume the handoff. Reading and removing are one action: a caller that
+ * reads without clearing would reopen the same view on every launch.
+ */
+export function takeHandoff(): Handoff | null {
+  try {
+    const raw = sessionStorage.getItem(HANDOFF_KEY);
+    sessionStorage.removeItem(HANDOFF_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<Handoff> | null;
+    if (parsed && typeof parsed.context === "string" && typeof parsed.kind === "string") {
+      return { context: parsed.context, kind: parsed.kind };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

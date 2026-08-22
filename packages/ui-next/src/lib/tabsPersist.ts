@@ -36,14 +36,19 @@ function parseWorkspace(v: unknown): Workspace | null {
   if (!Array.isArray(v.clusters) || !Array.isArray(v.tabs)) return null;
   const tabs = v.tabs.map(parseTab).filter((t): t is Tab => t !== null);
   const closed = Array.isArray(v.closed) ? v.closed.map(parseTab).filter((t): t is Tab => t !== null) : [];
-  return {
+  const clusters = v.clusters.filter(isString);
+  const ws: Workspace = {
     id: v.id,
     name: v.name,
-    clusters: v.clusters.filter(isString),
+    clusters,
     tabs,
     activeId: v.activeId,
     closed,
   };
+  // Only a cluster the workspace actually has: the field is an index into
+  // `clusters`, and `reconcile` would drop a dangling one anyway.
+  if (isString(v.activeCluster) && clusters.includes(v.activeCluster)) ws.activeCluster = v.activeCluster;
+  return ws;
 }
 
 /**
