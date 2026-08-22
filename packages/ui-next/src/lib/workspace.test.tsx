@@ -95,4 +95,18 @@ describe("workspace view", () => {
     off();
     expect(seen).not.toHaveBeenCalled();
   });
+
+  it("drops the key entirely when narrowed and then set back to all namespaces", () => {
+    ws.setNamespaces("prod", ["default"]);
+    ws.setNamespaces("prod", []);
+    expect("prod" in ws.getView().namespaces).toBe(false);
+  });
+
+  it("does not notify when an already-unset cluster is set to all namespaces", () => {
+    const seen = vi.fn();
+    const off = ws.subscribe(seen);
+    ws.setNamespaces("never-set", []);
+    off();
+    expect(seen).not.toHaveBeenCalled();
+  });
 });

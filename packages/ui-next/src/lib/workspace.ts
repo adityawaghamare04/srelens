@@ -109,6 +109,12 @@ export function setExpanded(ids: string[]): void {
  */
 export function setNamespaces(clusterId: string, namespaces: string[]): void {
   const current = view.namespaces[clusterId];
+  if (namespaces.length === 0) {
+    if (!current) return;
+    const { [clusterId]: _dropped, ...rest } = view.namespaces;
+    emit({ ...view, namespaces: rest });
+    return;
+  }
   if (current && sameArray(current, namespaces)) return;
   emit({ ...view, namespaces: { ...view.namespaces, [clusterId]: [...namespaces] } });
 }
