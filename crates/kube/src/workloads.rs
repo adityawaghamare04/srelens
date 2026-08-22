@@ -38,6 +38,10 @@ pub struct PodSummary {
     pub restarts: i32,
     pub node: String,
     pub age: String,
+    /// Container image(s) the pod runs, e.g. `acme/checkout-api:118a7e`.
+    /// A pod with several containers joins them as `"img-a, img-b"`; a pod
+    /// with no containers (or no status yet) is `""`.
+    pub image: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -105,6 +109,19 @@ pub(crate) fn summarise_pod(pod: Pod) -> PodSummary {
         None => (0, 0),
     };
     let total = statuses.map(|cs| cs.len()).unwrap_or(0);
+    // One row shows one pod, so several containers are joined into a single
+    // string — same shape as the multi-value `ports` summaries elsewhere in
+    // this crate (e.g. ingresses' "80, 443"). Init containers are excluded:
+    // they run to completion before the pod is "running" the images that
+    // matter for this column.
+    let image = statuses
+        .map(|cs| {
+            cs.iter()
+                .map(|c| c.image.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
 
     PodSummary {
         name,
@@ -114,6 +131,7 @@ pub(crate) fn summarise_pod(pod: Pod) -> PodSummary {
         restarts,
         node,
         age: crate::humanize_age(pod.metadata.creation_timestamp.as_ref()),
+        image,
     }
 }
 
@@ -265,5 +283,84 @@ mod tests {
         assert_eq!(s.phase, "Unknown");
         assert_eq!(s.ready, "0/0");
         assert_eq!(s.restarts, 0);
+        assert_eq!(s.image, "");
+    }
+
+    #[test]
+    fn summarises_single_container_image() {
+        let pod = Pod {
+            metadata: kube::core::ObjectMeta {
+                name: Some("web-1".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Running".into()),
+                container_statuses: Some(vec![ContainerStatus {
+                    name: "web".into(),
+                    image: "redis:7.4-alpine".into(),
+                    ready: true,
+                    restart_count: 0,
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = summarise_pod(pod);
+        assert_eq!(s.image, "redis:7.4-alpine");
+    }
+
+    #[test]
+    fn summarises_multi_container_image_as_joined_list() {
+        let pod = Pod {
+            metadata: kube::core::ObjectMeta {
+                name: Some("web-1".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Running".into()),
+                container_statuses: Some(vec![
+                    ContainerStatus {
+                        name: "app".into(),
+                        image: "acme/checkout-api:118a7e".into(),
+                        ready: true,
+                        restart_count: 0,
+                        ..Default::default()
+                    },
+                    ContainerStatus {
+                        name: "sidecar".into(),
+                        image: "envoyproxy/envoy:v1.30".into(),
+                        ready: true,
+                        restart_count: 0,
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = summarise_pod(pod);
+        assert_eq!(s.image, "acme/checkout-api:118a7e, envoyproxy/envoy:v1.30");
+    }
+
+    #[test]
+    fn summarises_pod_with_no_containers_has_empty_image() {
+        let pod = Pod {
+            metadata: kube::core::ObjectMeta {
+                name: Some("empty".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Pending".into()),
+                container_statuses: Some(vec![]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = summarise_pod(pod);
+        assert_eq!(s.image, "");
     }
 }

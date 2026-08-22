@@ -878,6 +878,7 @@ mod tests {
             restarts: 0,
             node: "n".into(),
             age: "1m".into(),
+            image: "nginx:1.27".into(),
         }
     }
 
