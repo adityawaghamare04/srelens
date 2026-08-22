@@ -10,6 +10,7 @@ import { updateConfigData } from "@srelens/core";
 import { ageFromTimestamp, durationBetween, absoluteTimestamp, timestampWithAge } from "@srelens/core";
 import { type Condition, conditionKind, containerStateText, orderPodConditions } from "@srelens/core";
 import { asRecord, asArray, str, plural } from "@srelens/core";
+import { decodeBase64, dockerRegistries, type DockerRegistryRow } from "@srelens/core";
 import {
   containerLastRestartTime,
   latestRestartTime,
@@ -1224,16 +1225,6 @@ function CronJobBody({
   );
 }
 
-function decodeBase64(v: string): string {
-  try {
-    const binary = atob(v);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
-  } catch {
-    return v;
-  }
-}
-
 /** One ConfigMap/Secret entry: key + value. Secret values are base64-decoded
  *  and masked behind a reveal toggle. */
 function ConfigDataEntry({ name, value, secret }: { name: string; value: string; secret: boolean }) {
@@ -1431,32 +1422,6 @@ function TlsSecretBody({ data }: { data: Record<string, string> }) {
       <SecretData data={data} />
     </>
   );
-}
-
-interface DockerRegistryRow {
-  registry: string;
-  username: string;
-  credential: string;
-}
-
-function dockerRegistries(data: Record<string, string>, type: string): DockerRegistryRow[] {
-  const key = type === "kubernetes.io/dockercfg" ? ".dockercfg" : ".dockerconfigjson";
-  try {
-    const parsed = JSON.parse(decodeBase64(str(data[key]))) as Record<string, unknown>;
-    const auths = type === "kubernetes.io/dockercfg" ? parsed : asRecord(parsed.auths);
-    return Object.entries(auths).map(([registry, raw]) => {
-      const auth = asRecord(raw);
-      const decodedAuth = auth.auth ? decodeBase64(str(auth.auth)) : "";
-      const username = str(auth.username) || decodedAuth.split(":", 1)[0];
-      return {
-        registry,
-        username: username || "—",
-        credential: auth.identitytoken ? "Identity token" : auth.auth || auth.password ? "Stored" : "Missing",
-      };
-    });
-  } catch {
-    return [];
-  }
 }
 
 function DockerSecretBody({ data, type }: { data: Record<string, string>; type: string }) {

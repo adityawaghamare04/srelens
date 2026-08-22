@@ -35,6 +35,7 @@ export * from "./lib/k8sContainer";
 export * from "./lib/k8sHealth";
 export * from "./lib/k8sQuantity";
 export * from "./lib/k8sRaw";
+export * from "./lib/k8sSecret";
 export * from "./lib/k8sTime";
 export * from "./lib/k8sWorkload";
 export * from "./lib/kinds";
