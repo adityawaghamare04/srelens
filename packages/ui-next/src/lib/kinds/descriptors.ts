@@ -137,7 +137,9 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     columns: cronJobColumns as Column<ListRow>[],
     source: "watch",
     scope: "namespaced",
-    actions: {},
+    // The two actions classic offers that no other kind has (Task 4's review
+    // ruling): suspend/resume and run-now. No other descriptor sets these.
+    actions: { suspend: true, trigger: true },
   },
   nodes: {
     k8sKind: "Node",

@@ -31,6 +31,7 @@ import { describe, isBuiltInKind } from "../lib/routes";
 import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
+import { useRowMenu } from "./ResourceMenu";
 
 /** The row identifier: always shown, never offered to the column picker. */
 const NAME_KEY = "name";
@@ -181,6 +182,17 @@ function KindList({
     [rows, columns, filter, filterKey],
   );
 
+  // Called unconditionally — same reason every hook above it is: the guard
+  // for "no descriptor yet" is a `return` below, not a skip, and a hook
+  // cannot follow one. `descriptorFor`'s own kind and actions feed it when
+  // there is a descriptor; an absent one leaves the row menu with nothing to
+  // gate on, which is moot since no row ever renders without one.
+  const { items: rowMenuItems, dialog: rowMenuDialog } = useRowMenu({
+    context: name,
+    kind: descriptor?.k8sKind ?? "",
+    actions: descriptor?.actions ?? {},
+  });
+
   const lower = title.toLocaleLowerCase();
 
   function onToggleColumn(key: string) {
@@ -289,6 +301,8 @@ function KindList({
               activeFilterKey={filterKey}
               onActiveFilterKeyChange={(key) => setTabView(tabId, { filterKey: key })}
               onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
+              rowMenu={rowMenuItems}
+              rowMenuLabel={`${title} actions`}
               // "This kind has none" and "the filter matched none" are
               // different facts, and the second one is the reader's own doing.
               emptyText={rows.length === 0 ? `No ${lower}` : `No ${lower} match this filter`}
@@ -301,6 +315,9 @@ function KindList({
           </>
         )}
       </div>
+      {/* Outside the scrolling table body: a `ConfirmDialog` is a portal
+          anyway, but a clipped ancestor is one fewer thing to reason about. */}
+      {rowMenuDialog}
     </Screen>
   );
 }

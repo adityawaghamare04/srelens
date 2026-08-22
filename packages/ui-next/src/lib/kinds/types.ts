@@ -14,6 +14,10 @@ export interface KindActions {
   scale?: boolean;
   restart?: boolean;
   evict?: boolean;
+  /** CronJob only: offers Suspend/Resume, labelled from the row's own state. */
+  suspend?: boolean;
+  /** CronJob only: offers Run now — not destructive, takes no confirm. */
+  trigger?: boolean;
 }
 
 /**
