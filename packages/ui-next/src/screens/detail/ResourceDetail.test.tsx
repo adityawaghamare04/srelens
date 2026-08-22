@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { EventSummary, K8sObject } from "@srelens/core";
 import type { KindDescriptor, ListRow } from "../../lib/kinds/types";
@@ -228,6 +229,61 @@ describe("ResourceDetail", () => {
     await waitFor(() => expect(getByRole("heading").textContent).toBe("cm-1"));
     expect(queryByRole("tab", { name: "Containers" })).toBeNull();
     expect(getByRole("tab", { name: "Details" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("never commits a frame that pairs the new subject's heading with the previous subject's content", async () => {
+    // Settled-state assertions (as in the test above) cannot see this: RTL's
+    // act() flushes passive effects synchronously, so by the time `await
+    // waitFor(...)` resolves, any transient bad frame already happened and
+    // was overwritten. A real browser has no such luxury — it paints
+    // whatever was committed. This test records every committed frame with
+    // a `useLayoutEffect` probe (which, like a browser's paint, runs
+    // synchronously after each commit, before the next one) and asserts
+    // none of them pairs one subject's heading with the other's content.
+    getObject.mockResolvedValueOnce({ object: POD });
+    getManifest.mockResolvedValueOnce({ yaml: "kind: Pod\nmetadata:\n  name: web-1\n" });
+
+    const frames: Array<{ heading: string | null; content: string | null }> = [];
+
+    function FrameProbe() {
+      useLayoutEffect(() => {
+        frames.push({
+          heading: document.querySelector("h2")?.textContent ?? null,
+          content: document.querySelector(".cm-content")?.textContent ?? null,
+        });
+      });
+      return null;
+    }
+
+    function Harness(props: { namespace: string | null; name: string }) {
+      return (
+        <>
+          <ResourceDetail context="ctx" kind="Pod" {...props} />
+          <FrameProbe />
+        </>
+      );
+    }
+
+    const { rerender } = render(<Harness namespace="default" name="web-1" />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(screen.getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("web-1"));
+
+    // Only frames from the subject change itself are under test.
+    frames.length = 0;
+
+    getObject.mockResolvedValueOnce({ object: POD_2 });
+    getManifest.mockResolvedValueOnce({ yaml: "kind: Pod\nmetadata:\n  name: web-2\n" });
+    rerender(<Harness namespace="default" name="web-2" />);
+
+    await waitFor(() => expect(document.querySelector(".cm-content")?.textContent).toContain("web-2"));
+
+    const mismatched = frames.filter((f) => {
+      if (!f.heading || !f.content) return false;
+      const other = f.heading === "web-1" ? "web-2" : "web-1";
+      return f.content.includes(`name: ${other}`) && !f.content.includes(`name: ${f.heading}`);
+    });
+    expect(mismatched).toEqual([]);
   });
 
   it("behaves identically with and without onClose, apart from the close affordance", async () => {
