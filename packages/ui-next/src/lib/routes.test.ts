@@ -4,6 +4,7 @@ import { describe, isBuiltInKind, screenFor } from "./routes";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { Resources } from "../screens/Resources";
+import { Workloads } from "../screens/Workloads";
 
 suite("isBuiltInKind", () => {
   it("recognises a built-in list kind by its slug", () => {
@@ -93,6 +94,10 @@ suite("screenFor", () => {
   it("resolves the screens that have been ported", () => {
     expect(screenFor("/applog")).toBe(AppLog);
     expect(screenFor("/notes")).toBe(ReleaseNotes);
+  });
+
+  it("resolves the tab strip's default cluster route to the Workloads union", () => {
+    expect(screenFor("/resources")).toBe(Workloads);
   });
 
   it("gives a route with no screen a placeholder", () => {

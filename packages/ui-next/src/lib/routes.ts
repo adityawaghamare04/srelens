@@ -3,6 +3,7 @@ import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { Resources } from "../screens/Resources";
+import { Workloads } from "../screens/Workloads";
 
 /**
  * What a tab is about, for the strip's icon and for the context menu. The
@@ -110,6 +111,7 @@ export type ScreenComponent = ComponentType<{ route: string }>;
 const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(null), {
   "/applog": AppLog,
   "/notes": ReleaseNotes,
+  "/resources": Workloads,
 });
 
 /**
