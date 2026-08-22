@@ -93,6 +93,11 @@ export interface Column<T> {
    *  column. Off by default — a funnel on every column was the bug (design
    *  correction, #319 follow-up); most columns don't need one. */
   filterable?: boolean;
+  /** Header and cell alignment. Logical values, not "left"/"right": the table
+   *  renders in right-to-left locales eventually, where `end` does the right
+   *  thing and `right` would not. Defaults to `start` — set `end` for numeric
+   *  columns (READY, RESTARTS, CPU, MEMORY, AGE) so their digits line up. */
+  align?: "start" | "end";
   minWidth?: number;
 }
 
@@ -529,7 +534,7 @@ export function Table<T>({
             </th>
           )}
           {columns.map((c) => (
-            <th key={c.key} >
+            <th key={c.key} data-align={c.align === "end" ? "end" : undefined}>
               <div className="th-head">
                 <button
                   type="button"
@@ -623,7 +628,7 @@ export function Table<T>({
                 </td>
               )}
               {columns.map((c) => (
-                <td key={c.key} >
+                <td key={c.key} data-align={c.align === "end" ? "end" : undefined}>
                   {c.render ? c.render(row) : String((row as Record<string, unknown>)[c.key])}
                 </td>
               ))}

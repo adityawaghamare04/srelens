@@ -467,6 +467,52 @@ describe("Table", () => {
     fireEvent.doubleClick(handle);
     expect(header?.closest("table")?.style.width).toBe("240px");
   });
+
+  it("right-aligns an end-aligned column's header and cells (design correction)", () => {
+    // jsdom applies no stylesheet, so the driving attribute is asserted rather
+    // than a computed style: `data-align="end"` is what `kit.css` hangs both
+    // `text-align: end` and the header's `justify-content: flex-end` off of.
+    const rows = [{ name: "web-1", restarts: 3 }];
+    const alignedColumns: Column<(typeof rows)[number]>[] = [
+      { key: "name", header: "Name" },
+      { key: "restarts", header: "Restarts", align: "end" },
+    ];
+    render(<Table columns={alignedColumns} data={rows} getRowKey={(r) => r.name} />);
+
+    const th = screen.getByText("Restarts").closest("th");
+    expect(th?.getAttribute("data-align")).toBe("end");
+
+    const td = screen.getByText("3").closest("td");
+    expect(td?.getAttribute("data-align")).toBe("end");
+  });
+
+  it("leaves a column start-aligned when `align` is unset", () => {
+    render(<Table columns={columns} data={data} getRowKey={(r) => r.name} />);
+    const th = screen.getByText("Name").closest("th");
+    expect(th?.hasAttribute("data-align")).toBe(false);
+    const td = screen.getByText("web-1").closest("td");
+    expect(td?.hasAttribute("data-align")).toBe(false);
+  });
+
+  it("leaves the checkbox column's own centring alone even when a data column is end-aligned", () => {
+    const rows = [{ name: "web-1", restarts: 3 }];
+    const alignedColumns: Column<(typeof rows)[number]>[] = [
+      { key: "name", header: "Name" },
+      { key: "restarts", header: "Restarts", align: "end" },
+    ];
+    const onChange = vi.fn();
+    render(
+      <Table
+        columns={alignedColumns}
+        data={rows}
+        getRowKey={(r) => r.name}
+        selection={{ selected: new Set(), onChange }}
+      />,
+    );
+    const checkboxHeader = screen.getByLabelText("Select all").closest("th");
+    expect(checkboxHeader?.className).toContain("tbl-check");
+    expect(checkboxHeader?.hasAttribute("data-align")).toBe(false);
+  });
 });
 
 describe("Table multi-selection", () => {

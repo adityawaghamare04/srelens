@@ -610,13 +610,16 @@ export function Gallery() {
             caret — the design correction this table exists to show, #319
             follow-up), a column that opted into a filter funnel, bulk
             selection, and a row that is clickable. Virtualisation only
-            engages past a threshold, so a gallery-sized list renders whole. */}
+            engages past a threshold, so a gallery-sized list renders whole.
+            Restarts is end-aligned — the design correction that right-aligns
+            every numeric column (READY, RESTARTS, CPU, MEMORY, AGE) so their
+            digits line up down the column. */}
         <Table
           columns={
             [
               { key: "name", header: "Name", sortable: true, filterable: true },
               { key: "phase", header: "Phase", sortable: true },
-              { key: "restarts", header: "Restarts", sortable: true },
+              { key: "restarts", header: "Restarts", sortable: true, align: "end" },
             ] as Column<{ name: string; phase: string; restarts: number }>[]
           }
           data={[

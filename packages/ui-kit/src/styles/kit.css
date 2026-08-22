@@ -235,6 +235,10 @@
     text-align: left;
     white-space: nowrap;
   }
+  /* Numeric columns (READY, RESTARTS, CPU, MEMORY, AGE) right-align so their
+     digits line up down the column — set per-column via `Column.align`.
+     `end` rather than `right`: the table renders in RTL locales eventually. */
+  .tbl th[data-align="end"] { text-align: end; }
   .tbl tbody tr { border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent); }
   .tbl tbody tr:last-child { border-bottom: 0; }
   .tbl tbody tr:hover { background: var(--surface-sunk); }
@@ -247,6 +251,9 @@
     vertical-align: middle;
     white-space: nowrap;
   }
+  /* The 0.7rem padding above is symmetric, so an end-aligned cell keeps its
+     trailing breathing room instead of hugging the next column's rule. */
+  .tbl td[data-align="end"] { text-align: end; }
   /* The data table's own parts. `.tbl` above already carries the surface —
      sticky head, row rules, hover, the selected wash — so these are only what
      a sortable, resizable, selectable table adds on top of it. (#319) */
@@ -268,6 +275,12 @@
     font-size: 0.75rem;
   }
   .th-head { display: flex; align-items: center; gap: 0.25rem; }
+  /* `text-align: end` on the `th` above does nothing to `.th-head`'s own
+     children — it's a flex container, and flex items ignore the text-align
+     of their parent. Without this the sort button (and funnel, if any) stay
+     packed against the left edge of a right-aligned column, floating off to
+     the side of the digits it's supposed to sit over. */
+  .tbl th[data-align="end"] .th-head { justify-content: flex-end; }
   .th-filter {
     display: inline-flex;
     align-items: center;
