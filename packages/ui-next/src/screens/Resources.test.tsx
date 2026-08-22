@@ -654,14 +654,50 @@ describe("Resources", () => {
     expect(screen.queryByText("Stream lost")).toBeNull();
   });
 
-  it("opens the resource route when a row is activated", async () => {
+  it("opens the resource's /k/<kind>/<namespace>/<name> route when a row is activated", async () => {
     open("/k/pods");
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
 
     fireEvent.doubleClick(screen.getByText("web-1").closest("tr")!);
 
-    await waitFor(() => expect(tabFor("/resources/web-1")).toBeTruthy());
-    expect(store.currentWorkspace().activeId).toBe(tabFor("/resources/web-1").id);
+    // web-1's own namespace is "default" (PODS above) — the descriptor's
+    // k8sKind ("Pod"), not the /k/pods slug, is what mints the route.
+    await waitFor(() => expect(tabFor("/k/Pod/default/web-1")).toBeTruthy());
+    expect(store.currentWorkspace().activeId).toBe(tabFor("/k/Pod/default/web-1").id);
+  });
+
+  it("gives two same-named resources of different kinds their own tabs", async () => {
+    // The bug this route model exists to fix: openTab dedupes by route, so
+    // /resources/web opened from a Pod row and from a ConfigMap row was one
+    // tab. The two kinds now mint different routes for the same name.
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
+        onRows([{ name: "web", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "1d", image: "acme/checkout-api:118a7e" }]);
+        return { stop };
+      },
+    );
+    const podView = open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web"]));
+    fireEvent.doubleClick(screen.getByText("web").closest("tr")!);
+    await waitFor(() => expect(tabFor("/k/Pod/default/web")).toBeTruthy());
+    podView.unmount();
+
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
+        onRows([{ name: "web", namespace: "default", keys: 2, age: "1d" }]);
+        return { stop };
+      },
+    );
+    open("/k/configmaps");
+    await waitFor(() => expect(rowNames()).toEqual(["web"]));
+    fireEvent.doubleClick(screen.getByText("web").closest("tr")!);
+    await waitFor(() => expect(tabFor("/k/ConfigMap/default/web")).toBeTruthy());
+
+    const tabs = store.currentWorkspace().tabs;
+    expect(tabs.some((t) => t.route === "/k/Pod/default/web")).toBe(true);
+    expect(tabs.some((t) => t.route === "/k/ConfigMap/default/web")).toBe(true);
+    // Two distinct tabs, not one that the second activation merely reused.
+    expect(tabFor("/k/Pod/default/web").id).not.toBe(tabFor("/k/ConfigMap/default/web").id);
   });
 
   it("deletes only the checked row when two selected candidates share a name across namespaces", async () => {

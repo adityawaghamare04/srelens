@@ -56,6 +56,17 @@ suite("describe", () => {
     expect(describe("/resources/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
   });
 
+  it("names a /k/ resource detail after the resource, not its kind or slug", () => {
+    // /k/Pod/default/web-1 shares a prefix with the /k/pods list route — the
+    // detail branch must win, or this would title itself "Pod/default/web-1"
+    // and carry kind "workloads" via the list-route fallback below.
+    expect(describe("/k/Pod/default/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
+  });
+
+  it("names a cluster-scoped /k/ resource detail the same way", () => {
+    expect(describe("/k/Node/-/worker-1", "c")).toMatchObject({ title: "worker-1", kind: "resource", sub: "c" });
+  });
+
   it("titles the row menu's logs/shell/forward tabs distinctly from the bare resource tab and from each other", () => {
     // Same prefix as the bare resource route, so without a distinct title and
     // kind for each suffix, opening a pod three ways (Open in new tab, Follow
@@ -114,6 +125,17 @@ suite("screenFor", () => {
     // One screen answers every `/k/` route, so a slug nobody enumerated —
     // a CRD this cluster happens to have — reaches the same one.
     expect(screenFor("/k/widgets.example.com")).toBe(Resources);
+  });
+
+  it("does not resolve a detail route to the list screen, even though they share a prefix", () => {
+    // /k/pods (a list) and /k/Pod/default/web-1 (a detail) share the "/k/"
+    // prefix. Get this wrong and every detail route in the app renders the
+    // list screen as if the resource's name were just another kind slug. No
+    // detail screen is registered yet (Task 15 adds it here), so this must
+    // resolve to no screen at all rather than to Resources.
+    expect(screenFor("/k/pods")).toBe(Resources);
+    expect(screenFor("/k/Pod/default/web-1")).toBeNull();
+    expect(screenFor("/k/Node/-/worker-1")).toBeNull();
   });
 
   it("still refuses a route with no screen", () => {

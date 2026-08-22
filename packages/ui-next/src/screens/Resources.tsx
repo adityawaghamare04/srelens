@@ -22,12 +22,14 @@ import {
 import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
+import { detailRoute } from "../lib/detailRoute";
 import { customDescriptorFor } from "../lib/kinds/custom";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { KindDescriptor, ListRow } from "../lib/kinds/types";
 import { useResourceList } from "../lib/resourceList";
 import { describe, isBuiltInKind } from "../lib/routes";
+import { openTab } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
 import { ResourceBulk } from "./ResourceBulk";
@@ -38,7 +40,6 @@ import {
   NoClusterScreen,
   columnOptionsFor,
   emptyTableCopy,
-  openResourceTab,
   toggleColumnVisibility,
   useResourceTabView,
 } from "./resourceShell";
@@ -327,7 +328,9 @@ function KindList({
             onSortChange={setSort}
             activeFilterKey={filterKey}
             onActiveFilterKeyChange={setFilterKey}
-            onRowActivate={(row) => openResourceTab(row.name, name)}
+            onRowActivate={(row) =>
+              openTab(detailRoute(descriptor.k8sKind, row.namespace ?? null, row.name), { clusterName: name })
+            }
             rowMenu={rowMenuItems}
             rowMenuLabel={`${title} actions`}
             {...emptyTableCopy(rows.length, lower, name, clusterScoped ? "" : " in the namespaces you are looking at")}

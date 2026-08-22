@@ -78,6 +78,7 @@ const POD_ROW: ListRow = { name: "web-0", namespace: "kube-system" };
 const CM_ROW: ListRow = { name: "app-config", namespace: "default" };
 const DEPLOY_ROW: ListRow = { name: "web", namespace: "default" };
 const CRON_ROW: ListRow & { suspended: boolean } = { name: "nightly", namespace: "ops", suspended: false };
+const NODE_ROW: ListRow = { name: "worker-1" };
 
 const POD_ARGS: UseRowMenuArgs = {
   context: "prod",
@@ -87,6 +88,7 @@ const POD_ARGS: UseRowMenuArgs = {
 const CM_ARGS: UseRowMenuArgs = { context: "prod", kind: "ConfigMap", actions: {} };
 const DEPLOY_ARGS: UseRowMenuArgs = { context: "prod", kind: "Deployment", actions: { scale: true, restart: true } };
 const CRON_ARGS: UseRowMenuArgs = { context: "prod", kind: "CronJob", actions: { suspend: true, trigger: true } };
+const NODE_ARGS: UseRowMenuArgs = { context: "prod", kind: "Node", actions: {} };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -129,10 +131,16 @@ describe("useRowMenu", () => {
     expect(labels).toEqual(expect.arrayContaining(["Open in new tab", "Edit", "Copy as kubectl"]));
   });
 
-  it("opens the resource in a tab", async () => {
+  it("opens the resource in a tab, at its /k/<kind>/<namespace>/<name> route", async () => {
     render(<Harness args={POD_ARGS} row={POD_ROW} />);
     await userEvent.click(screen.getByRole("button", { name: "Open in new tab" }));
-    expect(store.currentWorkspace().tabs.some((t) => t.route === "/resources/web-0")).toBe(true);
+    expect(store.currentWorkspace().tabs.some((t) => t.route === "/k/Pod/kube-system/web-0")).toBe(true);
+  });
+
+  it("opens a cluster-scoped resource with the placeholder namespace segment", async () => {
+    render(<Harness args={NODE_ARGS} row={NODE_ROW} />);
+    await userEvent.click(screen.getByRole("button", { name: "Open in new tab" }));
+    expect(store.currentWorkspace().tabs.some((t) => t.route === "/k/Node/-/worker-1")).toBe(true);
   });
 
   it("asks before deleting, and calls nothing until the confirm is taken", async () => {

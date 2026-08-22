@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
+import { parseDetailRoute } from "./detailRoute";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { Resources } from "../screens/Resources";
@@ -90,6 +91,12 @@ export function describe(route: string, clusterName?: string): RouteInfo {
   if (route.startsWith("/edit/")) {
     return { route, title: `Edit ${decodeURIComponent(route.split("/")[2] ?? "")}`, sub, kind: "edit" };
   }
+  // A detail route (`/k/<kind>/<namespace>/<name>`) shares the `/k/` prefix
+  // with a LIST route (`/k/<slug>`) — this must run before the list branch
+  // below, or a detail route would fall into it and title itself after the
+  // raw "<kind>/<namespace>/<name>" slug instead of the resource's own name.
+  const detail = parseDetailRoute(route);
+  if (detail) return { route, title: detail.name, sub, kind: "resource" };
   if (route.startsWith("/k/")) {
     const slug = route.slice(3);
     const title = isBuiltInKind(slug) ? RESOURCE_LABELS[slug] : slug;
@@ -129,6 +136,14 @@ export function screenFor(route: string): ScreenComponent | null {
   // thing standing between an arbitrary route string and something rendered as
   // a component, and it costs nothing to say so twice.
   if (Object.prototype.hasOwnProperty.call(SCREENS, route)) return SCREENS[route];
+  // A detail route (`/k/<kind>/<namespace>/<name>`, five segments) shares its
+  // `/k/` prefix with a LIST route (`/k/<slug>`, three) — the more specific
+  // match must win here, ahead of the prefix loop below, or a detail route
+  // would render the LIST screen (`Resources`) as if the resource's own name
+  // were just another kind slug. No detail screen is registered yet — Task 15
+  // adds it here, once one exists — so this resolves to no screen at all in
+  // the meantime, same as any other route nothing has claimed.
+  if (parseDetailRoute(route)) return null;
   for (const [prefix, screen] of PREFIXED) {
     // A bare prefix names no resource; `/k/` is not a route.
     if (route.startsWith(prefix) && route.length > prefix.length) return screen;

@@ -29,12 +29,14 @@ import {
 import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
+import { detailRoute } from "../lib/detailRoute";
 import { formatCpu, formatMemory, phaseKind, type PodRow } from "../lib/kinds/columns";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { ListRow } from "../lib/kinds/types";
 import { useResourceList, type ResourceList } from "../lib/resourceList";
 import { describe } from "../lib/routes";
+import { openTab } from "../lib/tabsStore";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
 import { useRowMenu } from "./ResourceMenu";
 import {
@@ -43,7 +45,6 @@ import {
   NoClusterScreen,
   columnOptionsFor,
   emptyTableCopy,
-  openResourceTab,
   toggleColumnVisibility,
   useResourceTabView,
 } from "./resourceShell";
@@ -525,7 +526,9 @@ function WorkloadList({
               onSortChange={setSort}
               activeFilterKey={filterKey}
               onActiveFilterKeyChange={setFilterKey}
-              onRowActivate={(row) => openResourceTab(row.name, name)}
+              onRowActivate={(row) =>
+                openTab(detailRoute(row.kind, row.namespace ?? null, row.name), { clusterName: name })
+              }
               rowMenu={rowMenuItems}
               rowMenuLabel={`${title} actions`}
               {...emptyTableCopy(segmented.length, segmentLower, name, " in the namespaces you are looking at")}

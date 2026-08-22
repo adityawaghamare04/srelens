@@ -111,6 +111,9 @@ const rowNames = () =>
     (row) => row.querySelector("td:not(.tbl-check)")?.textContent ?? null,
   );
 
+/** The tab a route is open in — the one the screen under test is bound to. */
+const tabFor = (route: string) => store.currentWorkspace().tabs.find((t) => t.route === route)!;
+
 function open() {
   store.openTab("/resources");
   return render(
@@ -164,6 +167,18 @@ describe("Workloads", () => {
     await waitFor(() =>
       expect(rowNames()).toEqual(["node-exporter", "web-1", "checkout", "db", "nightly-backup"]),
     );
+  });
+
+  it("opens the resource's /k/<kind>/<namespace>/<name> route, keyed by the row's own kind", async () => {
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+
+    // web-1 is a Pod in this union — its route must carry "Pod", not the
+    // "/resources" route this list is itself opened at.
+    fireEvent.doubleClick(screen.getByText("web-1").closest("tr")!);
+
+    await waitFor(() => expect(tabFor("/k/Pod/default/web-1")).toBeTruthy());
+    expect(store.currentWorkspace().activeId).toBe(tabFor("/k/Pod/default/web-1").id);
   });
 
   it("keeps listing the kinds that answered when one of the five fails", async () => {
