@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Everything the screen reaches into core for. `watchResource` is held open by
@@ -14,6 +14,7 @@ const {
   nodeMetrics,
   podMetrics,
   useNamespaceOptions,
+  deleteResource,
 } = vi.hoisted(() => ({
   watchResource: vi.fn(),
   listCrds: vi.fn(),
@@ -22,6 +23,7 @@ const {
   nodeMetrics: vi.fn(),
   podMetrics: vi.fn(),
   useNamespaceOptions: vi.fn(),
+  deleteResource: vi.fn(async (): Promise<{ ok?: boolean; error?: string }> => ({ ok: true })),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => ({
@@ -32,6 +34,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   listNodes: (...a: unknown[]) => listNodes(...a),
   nodeMetrics: (...a: unknown[]) => nodeMetrics(...a),
   podMetrics: (...a: unknown[]) => podMetrics(...a),
+  deleteResource,
 }));
 
 vi.mock("@srelens/core/react", async (importOriginal) => ({
@@ -129,9 +132,21 @@ beforeEach(() => {
   loadColumnPrefs();
 });
 
-/** The first cell of every rendered row, in the order they are on screen. */
+/**
+ * The name cell of every rendered row, in the order they are on screen.
+ *
+ * Not `td:first-child`: `Table`'s optional bulk-selection checkbox (wired in
+ * this screen since the bulk action bar landed) is a real leading `<td
+ * class="tbl-check">`, so the first *child* is the checkbox whenever a
+ * selection is active and the name only holds `:nth-child(2)` by accident of
+ * today's column order. Skipping `.tbl-check` instead reads the first *data*
+ * cell whether or not the checkbox column is there, and keeps reading the
+ * name correctly if a future column is ever added or removed ahead of it.
+ */
 const rowNames = () =>
-  Array.from(document.querySelectorAll("tbody tr.tbl-row td:first-child")).map((td) => td.textContent);
+  Array.from(document.querySelectorAll("tbody tr.tbl-row")).map(
+    (row) => row.querySelector("td:not(.tbl-check)")?.textContent ?? null,
+  );
 
 const headers = () =>
   Array.from(document.querySelectorAll("thead th .th-sort span")).map((el) => el.textContent);
@@ -423,5 +438,38 @@ describe("Resources", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain("web-1");
+  });
+
+  // The property that matters most for the bulk action bar: an all-namespaces
+  // view can hold two same-named resources, and only the one actually checked
+  // may be written to. This goes through the real rendered `Table` — its own
+  // checkbox, named from its own namespace-qualified row key — rather than a
+  // hand-built selection, so it proves the wiring in this screen, not just
+  // `ResourceBulk`'s own contract (which `ResourceBulk.test.tsx` covers with
+  // constructed keys).
+  it("deletes only the checked row when two selected candidates share a name across namespaces", async () => {
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, _k: string, onRows: (rows: unknown[]) => void) => {
+        onRows([
+          { name: "web-0", namespace: "default", ready: "1/1", phase: "Running", restarts: 0, node: "n1", age: "1d" },
+          { name: "web-0", namespace: "billing", ready: "1/1", phase: "Running", restarts: 0, node: "n2", age: "1d" },
+        ]);
+        return { stop };
+      },
+    );
+
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-0", "web-0"]));
+
+    // Check only the billing one. The two rows render identical name text —
+    // the checkbox is the only thing on screen that disambiguates them.
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select billing/web-0" }));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
+    const dialog = within(await screen.findByRole("dialog"));
+    await userEvent.click(dialog.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(deleteResource).toHaveBeenCalledTimes(1));
+    expect(deleteResource).toHaveBeenCalledWith("prod-eu", "Pod", "billing", "web-0");
   });
 });
