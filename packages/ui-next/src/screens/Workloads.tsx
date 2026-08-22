@@ -13,11 +13,9 @@ import { useNamespaceOptions } from "@srelens/core/react";
 import {
   Alert,
   ColumnPicker,
-  EmptyState,
   FilterBar,
   LiveSignal,
   LoadingState,
-  MultiSelect,
   Screen,
   StatusPill,
   Table,
@@ -30,16 +28,25 @@ import {
 } from "@srelens/ui-kit";
 import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
-import { toggleColumn, useHiddenColumns } from "../lib/columnPrefs";
+import { useHiddenColumns } from "../lib/columnPrefs";
 import { formatCpu, formatMemory, phaseKind, type PodRow } from "../lib/kinds/columns";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { ListRow } from "../lib/kinds/types";
 import { useResourceList, type ResourceList } from "../lib/resourceList";
 import { describe } from "../lib/routes";
-import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
 import { useRowMenu } from "./ResourceMenu";
+import {
+  NamespaceErrorAlert,
+  NamespacePicker,
+  NoClusterScreen,
+  columnOptionsFor,
+  emptyTableCopy,
+  openResourceTab,
+  toggleColumnVisibility,
+  useResourceTabView,
+} from "./resourceShell";
 
 /** The row identifier: always shown, never offered to the column picker. */
 const NAME_KEY = "name";
@@ -241,15 +248,7 @@ export function Workloads({ route }: { route: string }) {
   const title = describe(route, context?.name).title;
 
   if (!context) {
-    return (
-      <Screen title={title} fill>
-        <EmptyState
-          title="No cluster in focus"
-          hint="Pick a cluster in the rail to list its workloads."
-          className="flex-1"
-        />
-      </Screen>
-    );
+    return <NoClusterScreen title={title} noun="workloads" />;
   }
 
   return <WorkloadList route={route} title={title} context={context} />;
@@ -278,7 +277,7 @@ function WorkloadList({
   const { ask } = useConsole();
 
   const selection = useNamespaces(context.stableId);
-  const { namespaces, scope } = useNamespaceOptions(name, files);
+  const { namespaces, scope, error: namespaceError } = useNamespaceOptions(name, files);
   // A namespace-restricted credential watches its one namespace directly;
   // every workload kind here is namespaced, so there is no cluster-scoped
   // branch to take (unlike `KindList`, which serves cluster-scoped kinds
@@ -427,13 +426,7 @@ function WorkloadList({
     [columns, ask],
   );
 
-  const { tabs } = useTabs();
-  const tabId = tabs.find((tab) => tab.route === route)?.id ?? "";
-  const view = useTabView(tabId);
-  const sort = view.sort ?? null;
-  const filter = view.filter ?? "";
-  const filterKey =
-    view.filterKey && columns.some((column) => column.key === view.filterKey) ? view.filterKey : null;
+  const { tabId, sort, filter, filterKey, setFilter, setSort, setFilterKey } = useResourceTabView(route, columns);
 
   const filtered = useMemo(
     () => filterTableData(segmented, columns, filter, filterKey),
@@ -441,14 +434,10 @@ function WorkloadList({
   );
 
   function onToggleColumn(key: string) {
-    if (!hidden.has(key) && filterKey === key) setTabView(tabId, { filterKey: null });
-    toggleColumn("workloads", key);
+    toggleColumnVisibility({ key, storageKey: "workloads", hidden, filterKey, tabId });
   }
 
-  const columnOptions = UNION_COLUMNS.map((column) => ({
-    key: column.key,
-    label: typeof column.header === "string" ? column.header : column.key,
-  }));
+  const columnOptions = columnOptionsFor(UNION_COLUMNS);
 
   const allLoading = kinds.every((k) => k.list.status === "loading");
   // Five watches means five ways to fail — a kind whose watch errored with
@@ -483,66 +472,67 @@ function WorkloadList({
     >
       <FilterBar
         value={filter}
-        onValueChange={(value) => setTabView(tabId, { filter: value })}
+        onValueChange={setFilter}
         label={`Filter ${lower}`}
         placeholder={`Filter ${lower}…`}
       >
         <Tabs tabs={SEGMENTS} active={segment} onChange={setSegment} label="Workload kind" />
-        <MultiSelect
-          options={(namespaces ?? []).map((ns) => ({ value: ns }))}
+        <NamespacePicker
+          namespaces={namespaces}
           selection={selection}
           onChange={(next) => setNamespaces(context.stableId, next)}
-          allLabel="All namespaces"
-          ariaLabel="Namespaces"
         />
       </FilterBar>
 
-      <div className="scroll min-h-0 flex-1">
-        {allLoading ? (
+      <NamespaceErrorAlert error={namespaceError} />
+
+      {allLoading ? (
+        <div className="scroll min-h-0 flex-1">
           <LoadingState label={`Loading ${lower}`} />
-        ) : (
-          <>
-            {failed.map((k) => (
-              <Alert
-                key={k.key}
-                tone="warn"
-                title={`Could not list ${k.label.toLocaleLowerCase()}s`}
-                className="mx-3 mt-3 mb-3"
-              >
-                {k.list.error}
-              </Alert>
-            ))}
-            {stale.map((k) => (
-              <Alert
-                key={k.key}
-                tone="warn"
-                title={`These ${k.label.toLocaleLowerCase()}s are stale`}
-                className="mx-3 mt-3 mb-3"
-              >
-                {k.list.error}
-              </Alert>
-            ))}
+        </div>
+      ) : (
+        <>
+          {/* Pinned above the scrolling table body, not inside it (whole-branch
+              review) — a reader who scrolls the table must still see a kind
+              that failed or went stale; a banner that scrolls away with the
+              rows no longer warns anyone. */}
+          {failed.map((k) => (
+            <Alert
+              key={k.key}
+              tone="warn"
+              title={`Could not list ${k.label.toLocaleLowerCase()}s`}
+              className="mx-3 mt-3 mb-3"
+            >
+              {k.list.error}
+            </Alert>
+          ))}
+          {stale.map((k) => (
+            <Alert
+              key={k.key}
+              tone="warn"
+              title={`These ${k.label.toLocaleLowerCase()}s are stale`}
+              className="mx-3 mt-3 mb-3"
+            >
+              {k.list.error}
+            </Alert>
+          ))}
+          <div className="scroll min-h-0 flex-1">
             <Table
               columns={renderedColumns}
               data={filtered}
               getRowKey={(row) => `${row.kind}/${row.namespace ?? ""}/${row.name}`}
               sort={sort}
-              onSortChange={(next) => setTabView(tabId, { sort: next })}
+              onSortChange={setSort}
               activeFilterKey={filterKey}
-              onActiveFilterKeyChange={(key) => setTabView(tabId, { filterKey: key })}
-              onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
+              onActiveFilterKeyChange={setFilterKey}
+              onRowActivate={(row) => openResourceTab(row.name, name)}
               rowMenu={rowMenuItems}
               rowMenuLabel={`${title} actions`}
-              emptyText={segmented.length === 0 ? `No ${segmentLower}` : `No ${segmentLower} match this filter`}
-              emptyHint={
-                segmented.length === 0
-                  ? `${name} has no ${segmentLower} in the namespaces you are looking at.`
-                  : `Clear the filter to see all ${segmented.length}.`
-              }
+              {...emptyTableCopy(segmented.length, segmentLower, name, " in the namespaces you are looking at")}
             />
-          </>
-        )}
-      </div>
+          </div>
+        </>
+      )}
       {/* Outside the scrolling table body, same reason `KindList` keeps its
           one dialog there: a `ConfirmDialog` is a portal anyway, but a
           clipped ancestor is one fewer thing to reason about. Five, not one

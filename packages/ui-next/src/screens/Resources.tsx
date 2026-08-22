@@ -9,34 +9,39 @@ import {
 import { useNamespaceOptions } from "@srelens/core/react";
 import {
   Alert,
-  Button,
   ColumnPicker,
-  EmptyState,
   ErrorState,
   FilterBar,
   LiveSignal,
   LoadingState,
-  MultiSelect,
   Screen,
-  Spinner,
   Table,
   filterTableData,
   type Column,
 } from "@srelens/ui-kit";
 import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
-import { toggleColumn, useHiddenColumns } from "../lib/columnPrefs";
+import { useHiddenColumns } from "../lib/columnPrefs";
 import { customDescriptorFor } from "../lib/kinds/custom";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { KindDescriptor, ListRow } from "../lib/kinds/types";
 import { useResourceList } from "../lib/resourceList";
 import { describe, isBuiltInKind } from "../lib/routes";
-import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
 import { ResourceBulk } from "./ResourceBulk";
 import { useRowMenu } from "./ResourceMenu";
+import {
+  NamespaceErrorAlert,
+  NamespacePicker,
+  NoClusterScreen,
+  columnOptionsFor,
+  emptyTableCopy,
+  openResourceTab,
+  toggleColumnVisibility,
+  useResourceTabView,
+} from "./resourceShell";
 
 /** The row identifier: always shown, never offered to the column picker. */
 const NAME_KEY = "name";
@@ -66,15 +71,7 @@ export function Resources({ route }: { route: string }) {
   const title = describe(route, context?.name).title;
 
   if (!context) {
-    return (
-      <Screen title={title} fill>
-        <EmptyState
-          title="No cluster in focus"
-          hint="Pick a cluster in the rail to list its resources."
-          className="flex-1"
-        />
-      </Screen>
-    );
+    return <NoClusterScreen title={title} noun="resources" />;
   }
 
   return <KindList route={route} slug={slug} title={title} context={context} />;
@@ -164,29 +161,10 @@ function KindList({
     [columns, descriptor, ask],
   );
 
-  // Sort, filter text and filter column live on the tab, so they survive a
-  // restart with it (#254). Component state would pass every render assertion
-  // and lose all three on the next launch.
-  //
-  // This screen's *own* tab, not whichever one is active: `Window` mounts every
-  // tab's body and merely hides the inactive ones, so reading the active tab's
-  // view would have a background list re-sorting and re-filtering itself on
-  // every keystroke typed in an unrelated tab. A workspace holds one tab per
-  // route, which is what makes the route an exact handle on it.
-  const { tabs } = useTabs();
-  const tabId = tabs.find((tab) => tab.route === route)?.id ?? "";
-  const view = useTabView(tabId);
-  const sort = view.sort ?? null;
-  const filter = view.filter ?? "";
-  // Derived rather than merely cleared when this screen hides a column. Hidden
-  // columns belong to the kind and are shared by every tab looking at it; the
-  // filter key belongs to one tab. So the column this tab's key names can be
-  // hidden from another tab — in another workspace, while this one is not even
-  // mounted — and both halves persist, which is how the classic design ended
-  // up with search boxes pointed at columns that were no longer there,
-  // matching nothing and saying nothing, for the rest of the session.
-  const filterKey =
-    view.filterKey && columns.some((column) => column.key === view.filterKey) ? view.filterKey : null;
+  // Sort, filter text and filter column live on the tab — see
+  // `useResourceTabView`'s own comment for why, and why `filterKey` is
+  // derived rather than merely cleared when this screen hides a column.
+  const { tabId, sort, filter, filterKey, setFilter, setSort, setFilterKey } = useResourceTabView(route, columns);
 
   const rows = useMemo(
     () =>
@@ -220,10 +198,7 @@ function KindList({
   const lower = title.toLocaleLowerCase();
 
   function onToggleColumn(key: string) {
-    // Hiding the column the search is pointed at leaves a filter nobody can
-    // see and nothing can match — the classic design shipped exactly that.
-    if (!hidden.has(key) && filterKey === key) setTabView(tabId, { filterKey: null });
-    toggleColumn(slug, key);
+    toggleColumnVisibility({ key, storageKey: slug, hidden, filterKey, tabId });
   }
 
   if (!descriptor) {
@@ -252,10 +227,7 @@ function KindList({
     );
   }
 
-  const columnOptions = allColumns.map((column) => ({
-    key: column.key,
-    label: typeof column.header === "string" ? column.header : column.key,
-  }));
+  const columnOptions = columnOptionsFor(allColumns);
 
   // Loading and error each replace the table with their own state below; the
   // stale-rows alert and the bulk bar only ever mean something once there is
@@ -287,38 +259,20 @@ function KindList({
     >
       <FilterBar
         value={filter}
-        onValueChange={(value) => setTabView(tabId, { filter: value })}
+        onValueChange={setFilter}
         label={`Filter ${lower}`}
         placeholder={`Filter ${lower}…`}
       >
-        {!clusterScoped &&
-          (namespaces === null ? (
-            // Zero options while `namespaces` is still null reads as "this
-            // cluster has no namespaces" — a disabled, spinning stand-in
-            // says "not yet" instead.
-            <Button variant="secondary" className="justify-between gap-1.5" disabled aria-label="Namespaces">
-              <Spinner label="Loading namespaces" />
-              Loading namespaces…
-            </Button>
-          ) : (
-            <MultiSelect
-              options={namespaces.map((ns) => ({ value: ns }))}
-              selection={selection}
-              onChange={(next) => setNamespaces(context.stableId, next)}
-              allLabel="All namespaces"
-              ariaLabel="Namespaces"
-            />
-          ))}
+        {!clusterScoped && (
+          <NamespacePicker
+            namespaces={namespaces}
+            selection={selection}
+            onChange={(next) => setNamespaces(context.stableId, next)}
+          />
+        )}
       </FilterBar>
 
-      {!clusterScoped && namespaceError && (
-        // Non-fatal: `useNamespaceOptions` keeps whatever namespaces it had
-        // before the failure, so the picker still works — this only says the
-        // list behind it may be incomplete.
-        <Alert tone="warn" title="Namespaces could not be listed" className="mx-3 mt-3 mb-3">
-          {namespaceError}
-        </Alert>
-      )}
+      {!clusterScoped && <NamespaceErrorAlert error={namespaceError} />}
 
       {showRows && list.error && (
         // Rows and an error together: the last good list is still on screen
@@ -361,20 +315,13 @@ function KindList({
             getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
             selection={{ selected, onChange: setSelected }}
             sort={sort}
-            onSortChange={(next) => setTabView(tabId, { sort: next })}
+            onSortChange={setSort}
             activeFilterKey={filterKey}
-            onActiveFilterKeyChange={(key) => setTabView(tabId, { filterKey: key })}
-            onRowActivate={(row) => openTab(`/resources/${encodeURIComponent(row.name)}`, { clusterName: name })}
+            onActiveFilterKeyChange={setFilterKey}
+            onRowActivate={(row) => openResourceTab(row.name, name)}
             rowMenu={rowMenuItems}
             rowMenuLabel={`${title} actions`}
-            // "This kind has none" and "the filter matched none" are
-            // different facts, and the second one is the reader's own doing.
-            emptyText={rows.length === 0 ? `No ${lower}` : `No ${lower} match this filter`}
-            emptyHint={
-              rows.length === 0
-                ? `${name} has no ${lower}${clusterScoped ? "" : " in the namespaces you are looking at"}.`
-                : `Clear the filter to see all ${rows.length}.`
-            }
+            {...emptyTableCopy(rows.length, lower, name, clusterScoped ? "" : " in the namespaces you are looking at")}
           />
         )}
       </div>

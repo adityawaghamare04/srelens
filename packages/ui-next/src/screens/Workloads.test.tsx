@@ -197,6 +197,73 @@ describe("Workloads", () => {
     expect(screen.getByText(/forbidden: cannot list deployments/i)).toBeTruthy();
   });
 
+  // Whole-branch review, Correction (a): zero options while `namespaces` is
+  // still null reads as "this cluster has no namespaces" — a bare
+  // `MultiSelect options={(namespaces ?? []).map(...)}` says exactly that.
+  // `Resources.tsx` already shows a disabled, spinning stand-in instead; this
+  // screen dropped the same treatment.
+  it("shows the namespace picker as loading rather than empty before namespaces arrive", async () => {
+    useNamespaceOptions.mockReturnValue({ namespaces: null, scope: "", error: "" });
+
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+
+    expect(screen.queryByRole("combobox", { name: "Namespaces" })).toBeNull();
+    const placeholder = screen.getByRole("button", { name: "Namespaces" }) as HTMLButtonElement;
+    expect(placeholder.disabled).toBe(true);
+    expect(within(placeholder).getByRole("status", { name: "Loading namespaces" })).toBeTruthy();
+  });
+
+  // Whole-branch review, Correction (b): this screen destructured `{
+  // namespaces, scope }` off `useNamespaceOptions` and dropped `error`
+  // entirely, so a namespace-listing failure was silent. `Resources.tsx`
+  // surfaces it in a warn Alert above the table without replacing the picker.
+  it("warns above the table when namespace listing fails, without hiding the picker or the rows", async () => {
+    useNamespaceOptions.mockReturnValue({
+      namespaces: ["default", "kube-system"],
+      scope: "",
+      error: "namespaces: etcd timeout",
+    });
+
+    open();
+
+    expect(await screen.findByText("Namespaces could not be listed")).toBeTruthy();
+    expect(screen.getByText("namespaces: etcd timeout")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Namespaces" })).toBeTruthy();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+  });
+
+  // Whole-branch review, Correction (c): this screen rendered both its
+  // failed-kind and stale Alerts inside `.scroll`, so they scrolled away with
+  // the table. `Resources.tsx` hoists its banners out so they stay pinned.
+  it("keeps a failed kind's alert outside the scrolling table body", async () => {
+    watchResource.mockImplementation(
+      async (
+        _context: string,
+        _namespace: string,
+        kind: string,
+        onRows: (rows: unknown[]) => void,
+        _onStatus: (status: "live" | "reconnecting") => void,
+        onError: (message: string) => void,
+      ) => {
+        if (kind === "deployments") {
+          onError("forbidden: cannot list deployments");
+          return { stop };
+        }
+        onRows(FIXTURES[kind] ?? []);
+        return { stop };
+      },
+    );
+
+    open();
+    await waitFor(() => expect(screen.getByText(/could not list deployments/i)).toBeTruthy());
+
+    const scrollBody = document.querySelector<HTMLElement>(".scroll")!;
+    expect(within(scrollBody).queryByText(/could not list deployments/i)).toBeNull();
+    // Still rendered — pinned above the scrolling body, not gone.
+    expect(screen.getByText(/could not list deployments/i)).toBeTruthy();
+  });
+
   // A union row's actions differ by kind — this is the per-row correctness
   // that matters: the menu is dispatched by `row.kind`, not by whichever
   // kind the segment control happens to be on, so it must never leak one
