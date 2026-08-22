@@ -2,14 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-const { watchResource, useNamespaceOptions } = vi.hoisted(() => ({
+const { watchResource, useNamespaceOptions, cronjobSetSuspend } = vi.hoisted(() => ({
   watchResource: vi.fn(),
   useNamespaceOptions: vi.fn(),
+  cronjobSetSuspend: vi.fn(),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@srelens/core")>()),
   watchResource: (...a: unknown[]) => watchResource(...a),
+  cronjobSetSuspend: (...a: unknown[]) => cronjobSetSuspend(...a),
 }));
 
 vi.mock("@srelens/core/react", async (importOriginal) => ({
@@ -92,6 +94,7 @@ beforeEach(() => {
     },
   );
   useNamespaceOptions.mockReturnValue({ namespaces: ["default", "kube-system"], scope: "", error: "" });
+  cronjobSetSuspend.mockResolvedValue({ ok: true });
 
   resetContexts();
   setContexts([CTX]);
@@ -242,5 +245,51 @@ describe("Workloads", () => {
     await userEvent.click(screen.getByText("Scale"));
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain("checkout");
+  });
+
+  // Proves `WorkloadRow.suspended` is actually wired, not merely declared:
+  // an unsuspended and a suspended CronJob side by side, so the label has to
+  // follow each row's own state rather than reading the same either way.
+  // (`isSuspended` treats a missing field exactly like `false`, which is why
+  // a single always-unsuspended fixture couldn't catch this dropping.)
+  it("labels the CronJob row menu by each row's own suspended state, and calls cronjobSetSuspend with the inverse", async () => {
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, kind: string, onRows: (rows: unknown[]) => void) => {
+        if (kind === "cronjobs") {
+          onRows([
+            { name: "nightly-backup", namespace: "default", schedule: "0 2 * * *", suspended: false, active: 0, lastSchedule: "2h ago", age: "120d" },
+            { name: "paused-cleanup", namespace: "default", schedule: "0 3 * * *", suspended: true, active: 0, lastSchedule: "—", age: "60d" },
+          ]);
+          return { stop };
+        }
+        onRows(FIXTURES[kind] ?? []);
+        return { stop };
+      },
+    );
+
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(6));
+
+    // Not suspended: the menu offers Suspend, not Resume.
+    fireEvent.contextMenu(screen.getByText("nightly-backup").closest("tr")!);
+    expect(await screen.findByText("Suspend")).toBeTruthy();
+    expect(screen.queryByText("Resume")).toBeNull();
+    await userEvent.click(screen.getByText("Suspend"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Suspend" }));
+    await waitFor(() =>
+      expect(cronjobSetSuspend).toHaveBeenCalledWith("prod-eu", "default", "nightly-backup", true),
+    );
+
+    // Already suspended: the menu offers Resume, not Suspend — and Resume
+    // must call through with `suspend: false`, the inverse of the row's
+    // current (suspended) state.
+    fireEvent.contextMenu(screen.getByText("paused-cleanup").closest("tr")!);
+    expect(await screen.findByText("Resume")).toBeTruthy();
+    expect(screen.queryByText("Suspend")).toBeNull();
+    await userEvent.click(screen.getByText("Resume"));
+    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Resume" }));
+    await waitFor(() =>
+      expect(cronjobSetSuspend).toHaveBeenCalledWith("prod-eu", "default", "paused-cleanup", false),
+    );
   });
 });
