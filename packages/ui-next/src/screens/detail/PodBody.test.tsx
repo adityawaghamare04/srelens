@@ -32,11 +32,15 @@ const SIDECAR_STATUS = {
   state: { running: { startedAt: "2026-08-20T00:00:00Z" } },
 };
 
-function pod(spec: Record<string, unknown>, status: Record<string, unknown> = {}): K8sObject {
+function pod(
+  spec: Record<string, unknown>,
+  status: Record<string, unknown> = {},
+  metadata: NonNullable<K8sObject["metadata"]> = { name: "web-1", namespace: "default" },
+): K8sObject {
   return {
     kind: "Pod",
     apiVersion: "v1",
-    metadata: { name: "web-1", namespace: "default" },
+    metadata,
     spec,
     status,
   } as K8sObject;
@@ -130,8 +134,139 @@ describe("PodDetailsBody", () => {
     expect(items[3]).toContain("Ready");
   });
 
-  it("shows No conditions when the pod reports none", () => {
+  it("omits the Conditions panel when the pod reports none, but still shows Properties", () => {
     render(<PodDetailsBody object={pod({}, {})} />);
-    expect(screen.getByText("No conditions")).toBeDefined();
+    expect(screen.queryByText("Conditions")).toBeNull();
+    expect(screen.getByText("Properties")).toBeDefined();
+  });
+
+  describe("Properties", () => {
+    const FULL_POD = pod(
+      {
+        nodeName: "node-a",
+        serviceAccountName: "web-sa",
+        priorityClassName: "high",
+        runtimeClassName: "gvisor",
+        imagePullSecrets: [{ name: "registry-creds" }],
+      },
+      {
+        phase: "Running",
+        podIP: "10.0.0.5",
+        podIPs: [{ ip: "10.0.0.5" }, { ip: "fd00::5" }],
+        qosClass: "Burstable",
+        containerStatuses: [APP_STATUS],
+      },
+      {
+        name: "web-1",
+        namespace: "default",
+        creationTimestamp: "2026-08-20T00:00:00Z",
+        labels: { app: "web", tier: "frontend" },
+        annotations: { "kubectl.kubernetes.io/note": "deployed via ci" },
+        ownerReferences: [{ kind: "ReplicaSet", name: "web-abc123" }],
+      },
+    );
+
+    it("shows every Properties fact, with cross-resource references rendered as plain text", () => {
+      render(<PodDetailsBody object={FULL_POD} />);
+      expect(screen.getByText("Properties")).toBeDefined();
+      expect(screen.getByText("web-1")).toBeDefined();
+      expect(screen.getByText("default")).toBeDefined();
+      expect(screen.getByTitle("app=web")).toBeDefined();
+      expect(screen.getByTitle("tier=frontend")).toBeDefined();
+      expect(screen.getByTitle("kubectl.kubernetes.io/note=deployed via ci")).toBeDefined();
+      expect(screen.getByText("ReplicaSet/web-abc123")).toBeDefined();
+      expect(screen.getByText("Running")).toBeDefined();
+      expect(screen.getByText("3")).toBeDefined(); // container restarts, summed from containerStatuses
+      expect(screen.getAllByText("node-a").length).toBeGreaterThan(0);
+      expect(screen.getByText("fd00::5")).toBeDefined(); // second Pod IP, from the list
+      expect(screen.getByText("web-sa")).toBeDefined();
+      expect(screen.getByText("high")).toBeDefined();
+      expect(screen.getByText("gvisor")).toBeDefined();
+      expect(screen.getByText("Secret/registry-creds")).toBeDefined();
+      expect(screen.getByText("Burstable")).toBeDefined();
+
+      // Namespace, Node, Service account, Priority class, Runtime class and
+      // Controlled by are `ResourceLink`s in classic; nothing here can
+      // navigate (see the task report), so none of it renders as a control.
+      expect(screen.queryByRole("button")).toBeNull();
+    });
+
+    it("omits absent Properties facts rather than showing them empty", () => {
+      const bare = pod({}, {}, { name: "bare-1", namespace: "default" });
+      render(<PodDetailsBody object={bare} />);
+      expect(screen.getByText("Properties")).toBeDefined();
+      expect(screen.getByText("bare-1")).toBeDefined();
+      expect(screen.queryByText("Labels")).toBeNull();
+      expect(screen.queryByText("Annotations")).toBeNull();
+      expect(screen.queryByText("Controlled by")).toBeNull();
+      expect(screen.queryByText("Node")).toBeNull();
+      expect(screen.queryByText("Pod IP")).toBeNull();
+      expect(screen.queryByText("Pod IPs")).toBeNull();
+      expect(screen.queryByText("Service account")).toBeNull();
+      expect(screen.queryByText("Priority class")).toBeNull();
+      expect(screen.queryByText("Runtime class")).toBeNull();
+      expect(screen.queryByText("Image pull secrets")).toBeNull();
+      expect(screen.queryByText("QoS class")).toBeNull();
+    });
+  });
+
+  describe("Scheduling", () => {
+    it("shows Scheduling facts when the pod has placement info", () => {
+      const scheduled = pod(
+        {
+          nodeName: "node-b",
+          nodeSelector: { disktype: "ssd" },
+          affinity: { podAntiAffinity: { requiredDuringSchedulingIgnoredDuringExecution: [{}] } },
+          tolerations: [{ key: "dedicated", operator: "Equal", value: "gpu", effect: "NoSchedule" }],
+        },
+        {},
+        { name: "web-2" },
+      );
+      render(<PodDetailsBody object={scheduled} />);
+      expect(screen.getByText("Scheduling")).toBeDefined();
+      // "node-b" is shown in both Properties and Scheduling, same as classic.
+      expect(screen.getAllByText("node-b")).toHaveLength(2);
+      expect(screen.getByTitle("disktype=ssd")).toBeDefined();
+      expect(screen.getByText("Pod anti-affinity: 1 required")).toBeDefined();
+      expect(screen.getByText("dedicated=gpu → NoSchedule")).toBeDefined();
+    });
+
+    it("omits the Scheduling panel when the pod has no placement info", () => {
+      const unscheduled = pod({}, {}, { name: "web-3" });
+      render(<PodDetailsBody object={unscheduled} />);
+      expect(screen.queryByText("Scheduling")).toBeNull();
+    });
+  });
+
+  describe("Pod Volumes", () => {
+    it("shows each volume's name, type and source", () => {
+      const withVolumes = pod(
+        {
+          volumes: [
+            { name: "data", persistentVolumeClaim: { claimName: "data-pvc" } },
+            { name: "cache", emptyDir: {} },
+            { name: "creds", secret: { secretName: "app-creds" } },
+          ],
+        },
+        {},
+        { name: "web-4" },
+      );
+      render(<PodDetailsBody object={withVolumes} />);
+      expect(screen.getByText("Pod Volumes")).toBeDefined();
+      expect(screen.getByText("data")).toBeDefined();
+      expect(screen.getByText("Persistent Volume Claim")).toBeDefined();
+      expect(screen.getByText("PersistentVolumeClaim/data-pvc")).toBeDefined();
+      expect(screen.getByText("cache")).toBeDefined();
+      expect(screen.getByText("Empty Dir")).toBeDefined();
+      expect(screen.getByText("Node temporary storage")).toBeDefined();
+      expect(screen.getByText("creds")).toBeDefined();
+      expect(screen.getByText("Secret/app-creds")).toBeDefined();
+    });
+
+    it("omits the Pod Volumes panel when the pod has no volumes", () => {
+      const noVolumes = pod({}, {}, { name: "web-5" });
+      render(<PodDetailsBody object={noVolumes} />);
+      expect(screen.queryByText("Pod Volumes")).toBeNull();
+    });
   });
 });

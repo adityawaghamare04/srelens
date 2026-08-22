@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   absoluteTimestamp,
   ageFromTimestamp,
@@ -7,34 +8,195 @@ import {
   containerLastRestartTime,
   containerStateText,
   envText,
+  latestRestartTime,
   mountText,
   orderPodConditions,
   portText,
   probeChips,
   resourceText,
   str,
+  summarizeAffinity,
   timestampWithAge,
+  tolerationText,
   type Condition,
   type K8sObject,
 } from "@srelens/core";
-import { EmptyState, KV, Panel, StatusPill, SubHead } from "@srelens/ui-kit";
+import {
+  EmptyState,
+  KV,
+  PairList,
+  Panel,
+  StatusPill,
+  SubHead,
+  Table,
+  type Column,
+  type StatusKind,
+} from "@srelens/ui-kit";
 
 /**
- * A pod's Details pane: the lifecycle conditions timeline, in the order
- * `orderPodConditions` gives (PodScheduled → Initialized → ContainersReady →
- * Ready, then anything else in its original order) — not the order the API
- * happened to return them. The container list lives on the Containers pane
- * instead (`PodContainersBody`, below), which is what `panes.containers`
- * exists for.
+ * Kubernetes' own labels for a pod volume's source kind, keyed on which field
+ * of the volume (besides `name`) is actually set — matches classic's own
+ * table (`VOLUME_TYPE_LABELS` in `ResourceOverview.tsx`).
  */
-export function PodDetailsBody({ object }: { object: K8sObject }) {
-  const status = asRecord(object.status);
-  const conditions = asArray(status.conditions) as unknown as Condition[];
+const VOLUME_TYPE_LABELS: Record<string, string> = {
+  persistentVolumeClaim: "Persistent Volume Claim",
+  emptyDir: "Empty Dir",
+  secret: "Secret",
+  configMap: "Config Map",
+  projected: "Projected",
+  hostPath: "Host Path",
+  downwardAPI: "Downward API",
+  nfs: "NFS",
+  csi: "CSI",
+};
 
-  if (conditions.length === 0) {
-    return <EmptyState title="No conditions" />;
+/**
+ * A pod's phase, coloured. Not sourced from core: core has no notion of a UI
+ * severity for a bare phase string, and this mapping is specific to the small
+ * set of values `status.phase` actually takes — unlike `conditionKind` (which
+ * core does own, because it is shared across every condition-bearing kind).
+ */
+function phaseKind(phase: string): StatusKind {
+  if (phase === "Running" || phase === "Succeeded") return "success";
+  if (phase === "Pending") return "warning";
+  if (phase === "Failed" || phase === "Unknown") return "danger";
+  return "neutral";
+}
+
+/** A formatted list, one item per line — env vars, mounts, ports, probe chips. */
+function StringList({ items }: { items: string[] }) {
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {items.map((item, i) => (
+        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * What a pod volume points at, as plain text — "PersistentVolumeClaim/data",
+ * a host path, an NFS export, the CSI driver, or the config maps/secrets a
+ * projected volume merges. Classic renders these through `ResourceLink`,
+ * which navigates; nothing here can, since `PaneBody` has no navigation
+ * contract yet (see the task report), so the same facts are shown inert —
+ * still named, just not clickable.
+ */
+function volumeSourceText(volume: Record<string, unknown>): string {
+  const pvc = asRecord(volume.persistentVolumeClaim);
+  if (pvc.claimName) return `PersistentVolumeClaim/${str(pvc.claimName)}`;
+  const configMap = asRecord(volume.configMap);
+  if (configMap.name) return `ConfigMap/${str(configMap.name)}`;
+  const secret = asRecord(volume.secret);
+  if (secret.secretName) return `Secret/${str(secret.secretName)}`;
+  if (volume.hostPath) return str(asRecord(volume.hostPath).path);
+  if (volume.nfs) {
+    const nfs = asRecord(volume.nfs);
+    return `${str(nfs.server)}:${str(nfs.path)}`;
   }
+  if (volume.csi) return str(asRecord(volume.csi).driver);
+  if (volume.projected) {
+    const sources = asArray(asRecord(volume.projected).sources).map(asRecord);
+    const names = sources.flatMap((source) => {
+      const projectedConfigMap = asRecord(source.configMap);
+      if (projectedConfigMap.name) return [`ConfigMap/${str(projectedConfigMap.name)}`];
+      const projectedSecret = asRecord(source.secret);
+      if (projectedSecret.name) return [`Secret/${str(projectedSecret.name)}`];
+      return [];
+    });
+    return names.length > 0 ? names.join(", ") : `${sources.length} projected sources`;
+  }
+  if (volume.emptyDir) return str(asRecord(volume.emptyDir).medium) || "Node temporary storage";
+  return "—";
+}
 
+function volumeTypeLabel(volume: Record<string, unknown>): string {
+  const type = Object.keys(volume).find((key) => key !== "name") ?? "unknown";
+  return VOLUME_TYPE_LABELS[type] ?? type;
+}
+
+/**
+ * A pod's identity, ownership and placement — classic's "Properties" section,
+ * ported fact-for-fact. Several of these (Namespace, Node, Service Account,
+ * Priority Class, Runtime Class, Controlled By, Image pull secrets) are
+ * `ResourceLink`s in classic that navigate to another object; they render
+ * here as plain text instead (see the task report for the full list and what
+ * each would link to).
+ */
+function PropertiesSection({ object }: { object: K8sObject }) {
+  const meta = object.metadata ?? {};
+  const spec = asRecord(object.spec);
+  const status = asRecord(object.status);
+  const labels = meta.labels ?? {};
+  const annotations = meta.annotations ?? {};
+  const owners = meta.ownerReferences ?? [];
+  const podIPs = asArray(status.podIPs)
+    .map((p) => str(asRecord(p).ip))
+    .filter(Boolean);
+  const imagePullSecrets = asArray(spec.imagePullSecrets)
+    .map((secret) => str(asRecord(secret).name))
+    .filter(Boolean);
+  const allContainerStatuses = [
+    ...asArray(status.initContainerStatuses),
+    ...asArray(status.containerStatuses),
+    ...asArray(status.ephemeralContainerStatuses),
+  ].map(asRecord);
+  const podRestartCount = allContainerStatuses.reduce(
+    (total, containerStatus) => total + Number(containerStatus.restartCount ?? 0),
+    0,
+  );
+  const podLastRestart = latestRestartTime(allContainerStatuses);
+  const phase = str(status.phase);
+  const created = str(meta.creationTimestamp);
+  const nodeName = str(spec.nodeName);
+  const podIP = str(status.podIP);
+  const serviceAccountName = str(spec.serviceAccountName);
+  const priorityClassName = str(spec.priorityClassName);
+  const runtimeClassName = str(spec.runtimeClassName);
+  const qosClass = str(status.qosClass);
+
+  return (
+    <Panel title="Properties">
+      {created && <KV k="Created" v={timestampWithAge(created, Date.now())} />}
+      <KV k="Name" v={str(meta.name)} mono />
+      {meta.namespace && <KV k="Namespace" v={str(meta.namespace)} mono />}
+      {Object.keys(labels).length > 0 && <KV k="Labels" v={<PairList pairs={Object.entries(labels)} />} />}
+      {Object.keys(annotations).length > 0 && (
+        <KV k="Annotations" v={<PairList pairs={Object.entries(annotations)} />} />
+      )}
+      {owners.length > 0 && (
+        <KV k="Controlled by" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
+      )}
+      <KV k="Status" v={<StatusPill status={phase || "—"} kind={phaseKind(phase)} />} />
+      <KV k="Container restarts" v={str(podRestartCount)} />
+      {podLastRestart && <KV k="Last restart" v={timestampWithAge(podLastRestart, Date.now())} />}
+      {nodeName && <KV k="Node" v={nodeName} mono />}
+      {podIP && <KV k="Pod IP" v={podIP} mono />}
+      {podIPs.length > 0 && <KV k="Pod IPs" v={<StringList items={podIPs} />} />}
+      {serviceAccountName && <KV k="Service account" v={serviceAccountName} mono />}
+      {priorityClassName && <KV k="Priority class" v={priorityClassName} mono />}
+      {runtimeClassName && <KV k="Runtime class" v={runtimeClassName} mono />}
+      {imagePullSecrets.length > 0 && (
+        <KV
+          k="Image pull secrets"
+          v={<StringList items={imagePullSecrets.map((name) => `Secret/${name}`)} />}
+        />
+      )}
+      {qosClass && <KV k="QoS class" v={qosClass} />}
+    </Panel>
+  );
+}
+
+/**
+ * The pod lifecycle conditions timeline, in the order `orderPodConditions`
+ * gives (PodScheduled → Initialized → ContainersReady → Ready, then anything
+ * else in its original order) — not the order the API happened to return
+ * them.
+ */
+function ConditionsSection({ conditions }: { conditions: Condition[] }) {
+  if (conditions.length === 0) return null;
   return (
     <Panel title="Conditions">
       <ol className="flex flex-col gap-2">
@@ -60,17 +222,76 @@ export function PodDetailsBody({ object }: { object: K8sObject }) {
   );
 }
 
-/** A formatted list, one item per line — env vars, mounts, ports, probe chips. */
-function StringList({ items }: { items: string[] }) {
+/**
+ * Where and how the pod is placed — classic's "Scheduling" section, shown
+ * only when there is something to say (a node, a selector, an affinity rule
+ * or a toleration), same as classic's `hasScheduling` gate.
+ */
+function SchedulingSection({ object }: { object: K8sObject }) {
+  const spec = asRecord(object.spec);
+  const nodeSelector = (spec.nodeSelector ?? {}) as Record<string, string>;
+  const affinityLines = summarizeAffinity(asRecord(spec.affinity));
+  const tolerations = asArray(spec.tolerations);
+  const hasScheduling =
+    !!spec.nodeName || Object.keys(nodeSelector).length > 0 || affinityLines.length > 0 || tolerations.length > 0;
+
+  if (!hasScheduling) return null;
+
   return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item, i) => (
-        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
-          {item}
-        </li>
-      ))}
-    </ul>
+    <Panel title="Scheduling">
+      <KV k="Node" v={spec.nodeName ? str(spec.nodeName) : "Not scheduled"} mono={!!spec.nodeName} />
+      {Object.keys(nodeSelector).length > 0 && (
+        <KV k="Node selector" v={<PairList pairs={Object.entries(nodeSelector)} />} />
+      )}
+      {affinityLines.length > 0 && <KV k="Affinity" v={<StringList items={affinityLines} />} />}
+      {tolerations.length > 0 && (
+        <KV k="Tolerations" v={<StringList items={tolerations.map(tolerationText)} />} />
+      )}
+    </Panel>
   );
+}
+
+const VOLUME_COLUMNS: Column<Record<string, unknown>>[] = [
+  { key: "name", header: "Name", render: (v) => <span className="font-mono">{str(v.name)}</span> },
+  { key: "type", header: "Type", render: volumeTypeLabel },
+  { key: "source", header: "Source", render: volumeSourceText },
+];
+
+/**
+ * The pod's own volumes — classic's "Pod Volumes" table. The "Source" column
+ * is one of the plain-text substitutions for a `ResourceLink`: it names the
+ * PersistentVolumeClaim/ConfigMap/Secret a volume points at without being
+ * able to open it (see the task report).
+ */
+function PodVolumesSection({ object }: { object: K8sObject }) {
+  const spec = asRecord(object.spec);
+  const volumes = asArray(spec.volumes).map(asRecord);
+  if (volumes.length === 0) return null;
+  return (
+    <Panel title="Pod Volumes">
+      <Table columns={VOLUME_COLUMNS} data={volumes} getRowKey={(v) => str(v.name)} />
+    </Panel>
+  );
+}
+
+/**
+ * A pod's Details pane: Properties, the conditions timeline, Scheduling and
+ * Pod Volumes, in classic's own order. The container list lives on the
+ * Containers pane instead (`PodContainersBody`, below), which is what
+ * `panes.containers` exists for.
+ */
+export function PodDetailsBody({ object }: { object: K8sObject }) {
+  const status = asRecord(object.status);
+  const conditions = asArray(status.conditions) as unknown as Condition[];
+
+  const sections: ReactNode[] = [
+    <PropertiesSection key="properties" object={object} />,
+    <ConditionsSection key="conditions" conditions={conditions} />,
+    <SchedulingSection key="scheduling" object={object} />,
+    <PodVolumesSection key="volumes" object={object} />,
+  ];
+
+  return <>{sections}</>;
 }
 
 /**

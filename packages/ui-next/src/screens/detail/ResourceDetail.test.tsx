@@ -294,13 +294,17 @@ describe("ResourceDetail", () => {
     await waitFor(() => expect(withClose.getByRole("tab", { name: "YAML" })).toBeDefined());
     expect(withClose.getByRole("button", { name: "Close inspector" })).toBeDefined();
     const tabsWithClose = withClose.getAllByRole("tab").map((t) => t.textContent);
-    const headingWithClose = withClose.getByRole("heading").textContent;
+    // Scoped to the subject's own heading by name, not `getByRole("heading")`
+    // bare: the Details pane's per-kind body (Task 10 on) can render its own
+    // titled panels (`Panel`'s own `h2`, e.g. "Properties"), so more than one
+    // heading is on screen once real content lands there.
+    const headingWithClose = withClose.getByRole("heading", { name: "web-1" }).textContent;
     withClose.unmount();
 
     const withoutClose = render(<ResourceDetail {...props} />);
     await waitFor(() => expect(withoutClose.getByRole("tab", { name: "YAML" })).toBeDefined());
     expect(withoutClose.queryByRole("button", { name: "Close inspector" })).toBeNull();
     expect(withoutClose.getAllByRole("tab").map((t) => t.textContent)).toEqual(tabsWithClose);
-    expect(withoutClose.getByRole("heading").textContent).toEqual(headingWithClose);
+    expect(withoutClose.getByRole("heading", { name: "web-1" }).textContent).toEqual(headingWithClose);
   });
 });
