@@ -8,6 +8,7 @@ import { podsForPvc, formatStorageSize } from "@srelens/core";
 import { bindingsForServiceAccount, podsForServiceAccount, type SaBinding } from "@srelens/core";
 import { updateConfigData } from "@srelens/core";
 import { ageFromTimestamp, durationBetween, absoluteTimestamp, timestampWithAge } from "@srelens/core";
+import { type Condition, conditionKind, containerStateText, orderPodConditions } from "@srelens/core";
 import { useAccess, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
 import { describeError } from "@srelens/core";
 import {
@@ -221,46 +222,12 @@ function CollapsibleText({
 /* conditions                                                          */
 /* ------------------------------------------------------------------ */
 
-interface Condition {
-  type: string;
-  status: string;
-  reason?: string;
-  message?: string;
-  lastTransitionTime?: string;
-}
-
-function conditionKind(c: Condition): StatusKind {
-  const negative = /Pressure|Unavailable|Failed|Dangling|NetworkUnavailable/i.test(c.type);
-  if (c.status === "Unknown") return "warning";
-  const good = c.status === "True" ? !negative : negative;
-  return good ? "success" : "danger";
-}
-
 function conditionBadgeVariant(c: Condition): BadgeVariant {
   if (c.status === "Unknown") return "warning";
   const negative = /Pressure|Unavailable|Failed|Failure|Dangling/i.test(c.type);
   if (c.status !== "True") return negative ? "success" : "neutral";
   if (/Progressing/i.test(c.type)) return "info";
   return negative ? "danger" : "success";
-}
-
-// The pod lifecycle, in the order kubelet reports it.
-const POD_CONDITION_ORDER = ["PodScheduled", "Initialized", "ContainersReady", "Ready"];
-
-/**
- * Sort pod conditions into lifecycle order (PodScheduled → Initialized →
- * ContainersReady → Ready); any other condition types keep their relative order
- * after the known lifecycle ones.
- */
-export function orderPodConditions(conditions: Condition[]): Condition[] {
-  const rank = (type: string) => {
-    const index = POD_CONDITION_ORDER.indexOf(type);
-    return index === -1 ? POD_CONDITION_ORDER.length : index;
-  };
-  return conditions
-    .map((condition, index) => ({ condition, index }))
-    .sort((a, b) => rank(a.condition.type) - rank(b.condition.type) || a.index - b.index)
-    .map(({ condition }) => condition);
 }
 
 /**
@@ -376,27 +343,6 @@ const PERSISTENT_VOLUME_SOURCE_TYPES = new Set([
   "storageos",
   "vsphereVolume",
 ]);
-
-/** Describe a container's runtime state, e.g. "running, ready". */
-function containerStateText(st: Record<string, unknown>): { text: string; kind: StatusKind } {
-  const state = asRecord(st.state);
-  const ready = st.ready === true ? ", ready" : "";
-  if ("running" in state) return { text: `running${ready}`, kind: "success" };
-  if ("waiting" in state) {
-    const reason = str(asRecord(state.waiting).reason) || "waiting";
-    return { text: `waiting - ${reason}`, kind: reason.includes("BackOff") ? "danger" : "warning" };
-  }
-  if ("terminated" in state) {
-    const t = asRecord(state.terminated);
-    const reason = str(t.reason) || "terminated";
-    const code = t.exitCode != null ? ` (exit code: ${str(t.exitCode)})` : "";
-    return {
-      text: `terminated${ready} - ${reason}${code}`,
-      kind: reason === "Completed" ? "neutral" : "danger",
-    };
-  }
-  return { text: "—", kind: "neutral" };
-}
 
 /** The previous termination marks when Kubernetes last restarted a container. */
 export function containerLastRestartTime(status: unknown): string {

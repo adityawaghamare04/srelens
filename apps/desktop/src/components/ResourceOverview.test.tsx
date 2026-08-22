@@ -46,7 +46,6 @@ import {
   ObjectDetail,
   containerLastRestartTime,
   parseQuantity,
-  orderPodConditions,
   summarizeAffinity,
 } from "./ResourceOverview";
 import type { K8sObject } from "@srelens/core";
@@ -79,36 +78,6 @@ describe("parseQuantity", () => {
   it("returns null for unparseable input", () => {
     expect(parseQuantity("")).toBeNull();
     expect(parseQuantity("abc")).toBeNull();
-  });
-});
-
-describe("orderPodConditions", () => {
-  it("orders lifecycle conditions PodScheduled → Initialized → ContainersReady → Ready", () => {
-    const shuffled = [
-      { type: "Ready", status: "True" },
-      { type: "PodScheduled", status: "True" },
-      { type: "ContainersReady", status: "False" },
-      { type: "Initialized", status: "True" },
-    ];
-    expect(orderPodConditions(shuffled).map((c) => c.type)).toEqual([
-      "PodScheduled",
-      "Initialized",
-      "ContainersReady",
-      "Ready",
-    ]);
-  });
-
-  it("appends unknown condition types after the known lifecycle ones", () => {
-    const conds = [
-      { type: "DisruptionTarget", status: "True" },
-      { type: "Ready", status: "True" },
-      { type: "PodScheduled", status: "True" },
-    ];
-    expect(orderPodConditions(conds).map((c) => c.type)).toEqual([
-      "PodScheduled",
-      "Ready",
-      "DisruptionTarget",
-    ]);
   });
 });
 
