@@ -637,7 +637,7 @@ function YamlPane({
   );
 }
 
-export const EVENT_COLUMNS: Column<EventSummary>[] = [
+const EVENT_COLUMNS: Column<EventSummary>[] = [
   {
     key: "type",
     header: "Type",

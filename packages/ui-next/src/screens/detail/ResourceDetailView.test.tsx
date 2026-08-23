@@ -333,8 +333,8 @@ describe("ResourceDetailView", () => {
     getObject.mockResolvedValue({ object: POD });
     listEvents.mockResolvedValue({
       events: [
-        { name: "web-1.abc", type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "container crashed", age: "5m", count: 1 },
-        { name: "web-1.def", type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned to node-3", age: "10m", count: 1 },
+        { name: "web-1.abc", namespace: "default", type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "container crashed", age: "5m", count: 1 },
+        { name: "web-1.def", namespace: "default", type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned to node-3", age: "10m", count: 1 },
       ],
     });
     const { getByRole, getByText } = render(
@@ -346,6 +346,11 @@ describe("ResourceDetailView", () => {
     expect(getByText("container crashed")).toBeDefined();
     expect(getByText("Scheduled")).toBeDefined();
     expect(getByText("assigned to node-3")).toBeDefined();
+    // The Type cell's tone comes from `eventVerdict`, not a hand-paired
+    // literal — Warning reads danger (sev), which moved from the old table's
+    // "warn" (amber); Normal stays muted.
+    expect(getByText("Warning").getAttribute("data-tone")).toBe("sev");
+    expect(getByText("Normal").getAttribute("data-tone")).toBe("muted");
   });
 
   it("does not query the cluster's CRDs to fetch a built-in kind's manifest", async () => {

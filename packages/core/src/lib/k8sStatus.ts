@@ -276,6 +276,17 @@ function nodeStatusLine(object: K8sObject): ResourceStatusLine {
 }
 
 /**
+ * `eventVerdict`'s own two-member union, deliberately narrower than the
+ * general `{ health: HealthKind; bad: boolean }` shape it used to return:
+ * that wider shape does not stop `{ health: "success", bad: true }` from
+ * typechecking — the exact "green pill, red dot" pairing this file's
+ * `Verdict` union exists to make unrepresentable. Declaring the two legal
+ * pairs by name closes the same hole here: constructing the illegal pair
+ * against this type is a compile error (see the test that proves it).
+ */
+type EventVerdict = { health: "danger"; bad: true } | { health: "neutral"; bad: false };
+
+/**
  * An event's tone — the ONE rule for it, replacing two hand-paired ones: the
  * classic list's danger/info and the detail pane's warning/neutral. Per the
  * design (mock-full-design §B.2): `Warning` is danger and bold; everything
@@ -289,13 +300,20 @@ function nodeStatusLine(object: K8sObject): ResourceStatusLine {
  * is worth colouring, which is what the kit's `StatusPill` calls `tinted`.
  *
  * An unrecognised type is deliberately read the SAME as `Normal`, not as
- * {@link UNREADABLE} — a resource's "I don't know this word" verdict, which
- * still earns a dot. A cluster that invents an event type is not thereby in
- * trouble, and colouring it would train the reader to ignore red.
+ * {@link UNREADABLE} — and this is a principled asymmetry, not a special
+ * case. `UNREADABLE` exists because a resource's status WORD is a vocabulary
+ * this file claims to know (a phase, a condition reason); failing to
+ * recognise one means the reader is looking at a state nobody has assessed,
+ * and a dot is the honest answer. An event's `type` is not a status at all —
+ * the API defines exactly two values, and the event carries its own
+ * separately-toned `reason` and `message` to say what actually happened; the
+ * field itself asserts no health about anything. "Not Warning" is therefore
+ * not "an unknown state" the way an unrecognised phase is — it is "not the
+ * alarm channel". Colouring it would train the reader to ignore red.
  */
-export function eventVerdict(type: string): { health: HealthKind; bad: boolean } {
-  const v = type === "Warning" ? BROKEN : AT_REST;
-  return { health: v.health, bad: v.flagged };
+export function eventVerdict(type: string): EventVerdict {
+  if (type === "Warning") return { health: BROKEN.health, bad: BROKEN.flagged };
+  return { health: AT_REST.health, bad: AT_REST.flagged };
 }
 
 /**
