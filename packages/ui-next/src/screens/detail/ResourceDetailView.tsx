@@ -142,7 +142,12 @@ function OpenTabButton({ onClick }: { onClick: () => void }) {
 function PeekFacts({ facts }: { facts: DetailFact[] }) {
   if (facts.length === 0) return null;
   return (
-    <Section>
+    // Named, so a test can hold this screen to drawing the WHOLE derived list
+    // rather than a fact or two off it — a screen that quietly dropped three
+    // of them would otherwise look exactly right. A class rather than a
+    // wrapper: the block has to stay a direct sibling of what follows it, or
+    // `.section + .section` draws no hairline against it.
+    <Section className="fact-list">
       {facts.map((fact) => (
         <KV key={fact.label} k={fact.label} v={fact.value} mono={fact.mono} />
       ))}

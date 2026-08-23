@@ -417,12 +417,6 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
   }
 
   const containerStatuses = statusesByName(status.containerStatuses);
-  // The pane's only block, for the pod most pods are: no init containers and
-  // none attached for debugging. A titled block that is all its pane holds
-  // opens open, or the reader clicks a tab named Containers and is shown one
-  // word and a caret. With an init or ephemeral group beside it the pane says
-  // something either way, so the shut-everything rule stands.
-  const soleGroup = initContainers.length === 0 && ephemeralContainers.length === 0;
 
   return (
     <>
@@ -431,7 +425,17 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
         containers={initContainers}
         statuses={statusesByName(status.initContainerStatuses)}
       />
-      <Section title="Containers" defaultOpen={soleGroup}>
+      {/* Always open, never conditional on this pod having init or ephemeral
+          containers beside it. It is the pane's subject — a reader who clicks
+          a tab named Containers and is shown one word and a caret has been
+          answered with nothing — and the fold memory is keyed per KIND, so a
+          default that varied with the subject would make the stored document
+          mean different things depending on which pod was on screen when the
+          reader clicked: open on a pod with an init group, shut it, and the
+          entry is dropped as "back to default" — leaving the next pod without
+          one open. The init and ephemeral groups keep the shut rule; they are
+          extras, and the pane says something either way. */}
+      <Section title="Containers" defaultOpen>
         {containers.length === 0 ? (
           <EmptyState title="No containers" />
         ) : (

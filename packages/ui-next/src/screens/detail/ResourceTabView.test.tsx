@@ -36,6 +36,7 @@ vi.mock("../../lib/kinds/descriptors", () => ({ descriptorFor }));
 
 import { ConsoleProvider } from "../../console";
 import { loadSectionFolds, setSectionOpen } from "../../lib/sectionFolds";
+import { detailFacts } from "./detailData";
 import { ResourceTabView } from "./ResourceTabView";
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -291,6 +292,22 @@ describe("ResourceTabView — the full tab the design draws", () => {
       expect(within(grid).getByText("Burstable")).toBeDefined();
     });
 
+    it("draws every fact it was handed, not a selection of them", async () => {
+      await openPod();
+      // EQUALS the derived list, in its order. A screen that filtered three
+      // facts out of the list it shares with the peek would pass every other
+      // assertion in this file, and the two screens would silently disagree
+      // about what a pod is — the drift the retired both-hosts comparison
+      // used to catch, caught here without either screen's markup standing in
+      // for the other's.
+      const derived = detailFacts({ kind: "Pod", object: POD }).map((f) => f.label);
+      expect(derived.length).toBeGreaterThan(3);
+      const drawn = [...document.querySelectorAll("[data-slot='fact-grid'] .kv-k")].map(
+        (el) => el.textContent ?? "",
+      );
+      expect(drawn).toEqual(derived);
+    });
+
     it("draws no fact of the peek's own form, so nothing here is the peek's markup", async () => {
       await openPod();
       const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']")!;
@@ -327,6 +344,27 @@ describe("ResourceTabView — the full tab the design draws", () => {
       // The state word and its tone are `containerStateText`'s, the one rule
       // every container state in srelens is read through.
       expect(cells[6]).toContain("running");
+    });
+
+    it("compensates by hand for the one hairline it breaks on purpose", async () => {
+      await openPod();
+      const body = document.querySelector<HTMLElement>(".pane-body")!;
+      // Every block of Overview is a `.section` sibling of every other, which
+      // is what `.section + .section` draws the hairlines between — with one
+      // exception, and the exception is the point: Labels and Annotations read
+      // side by side here, so neither can be the other's adjacent sibling and
+      // the rule between them would run down the middle of the row instead of
+      // across it.
+      const breaks = [...body.children].filter((el) => !el.matches("section.section"));
+      expect(breaks.map((el) => el.getAttribute("data-slot"))).toEqual(["metadata-pair"]);
+
+      // Which means this block owes the run the two rules it took away, drawn
+      // by hand: one above the row, where the sibling rule would have drawn
+      // against the block before it, and one down the middle, between the two
+      // columns. The peek needs neither and has neither — it stacks them.
+      const pair = breaks[0];
+      expect(pair.className).toContain("rule-t");
+      expect([...pair.children].map((column) => column.className)).toEqual(["", "rule-l"]);
     });
 
     it("reads Labels and Annotations side by side", async () => {

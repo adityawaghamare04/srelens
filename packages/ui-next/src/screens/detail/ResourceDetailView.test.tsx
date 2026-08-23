@@ -132,6 +132,12 @@ function documentContains(value: string): boolean {
 const factLabels = (): string[] =>
   Array.from(document.querySelectorAll(".kv-k")).map((el) => el.textContent ?? "");
 
+/** The labels of one block's rows, in the order they read — the peek's lead
+ *  fact list (`.fact-list`), or the full tab's grid. Scoped, because "equals
+ *  the derived list" is only a claim about the block that draws it. */
+const labelsIn = (selector: string): string[] =>
+  Array.from(document.querySelectorAll(`${selector} .kv-k`)).map((el) => el.textContent ?? "");
+
 // Obviously-fake fixture text — never anything that reads as a real
 // credential, per this screen's secrecy ruling.
 const FIXTURE_B64 = "ZmFrZS1maXh0dXJlLW5vdC1hLXJlYWwtc2VjcmV0";
@@ -623,9 +629,18 @@ describe("ResourceDetailView", () => {
       ]);
     });
 
-    it("draws that list in each screen, in that screen's own layout and no other's", async () => {
+    it("draws the WHOLE list in each screen, in that screen's own layout and no other's", async () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
+
+      // EQUALS, not contains. A screen that quietly dropped three of the
+      // facts it was handed would look right in every other assertion here,
+      // and the drift between the two screens would be exactly what the
+      // retired both-hosts comparison used to catch. Each screen is held to
+      // the derived list instead — which catches the same drift without
+      // either screen's markup standing in for the other's.
+      const derived = detailFacts({ kind: "Pod", object: RUNNING_POD }).map((f) => f.label);
+      expect(derived.length).toBeGreaterThan(3);
 
       const asPeek = render(<ResourceDetailView {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
       await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
@@ -633,7 +648,7 @@ describe("ResourceDetailView", () => {
       // grid — the mock's two-column list, in a 352px pane.
       expect(document.querySelectorAll(".kv[data-stacked]")).toHaveLength(0);
       expect(document.querySelector("[data-slot='fact-grid']")).toBeNull();
-      expect(factLabels()).toContain("Status");
+      expect(labelsIn(".fact-list")).toEqual(derived);
       asPeek.unmount();
 
       const asTab = render(<ResourceTabView {...props} />);
@@ -641,8 +656,8 @@ describe("ResourceDetailView", () => {
       // The tab's own: three columns of label-above-value, built by the tab.
       const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']");
       expect(grid).not.toBeNull();
-      expect(grid!.querySelectorAll(".kv[data-stacked='true']").length).toBeGreaterThan(0);
-      expect(factLabels()).toContain("Status");
+      expect(grid!.querySelectorAll(".kv[data-stacked='true']")).toHaveLength(derived.length);
+      expect(labelsIn("[data-slot='fact-grid']")).toEqual(derived);
     });
 
     it("neither refetches a pane it has already opened, and neither fetches one it has not", async () => {
@@ -840,6 +855,40 @@ describe("ResourceDetailView", () => {
         await userEvent.click(view.getByRole("tab", { name: "Containers" }));
         expect(screen.getByRole("button", { name: "Containers" }).getAttribute("aria-expanded")).toBe("true");
         expect(screen.getByText("redis:7.4-alpine")).toBeDefined();
+      });
+
+      it("opens it for a pod with init containers too, so one kind means one default", async () => {
+        // The default may NOT vary with the subject. The memory is keyed per
+        // KIND: a reader who opens Containers on a pod with init containers
+        // stores a marker, shuts it again and the marker is dropped — and the
+        // next pod without init containers would then show it open. What the
+        // document means would depend on which pod happened to be on screen
+        // when they clicked. The main group is the pane's subject either way,
+        // so it always leads open and the init group keeps the shut rule.
+        descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
+        getObject.mockResolvedValue({
+          object: {
+            kind: "Pod",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            spec: {
+              initContainers: [{ name: "migrate", image: "ghcr.io/example/migrate:2" }],
+              containers: [{ name: "app", image: "redis:7.4-alpine" }],
+            },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Containers" })).toBeDefined());
+        await userEvent.click(view.getByRole("tab", { name: "Containers" }));
+        expect(screen.getByRole("button", { name: "Containers" }).getAttribute("aria-expanded")).toBe("true");
+        expect(screen.getByText("redis:7.4-alpine")).toBeDefined();
+        // And nothing else opened with it.
+        expect(screen.getByRole("button", { name: "Init containers" }).getAttribute("aria-expanded")).toBe(
+          "false",
+        );
+        expect(screen.queryByText("ghcr.io/example/migrate:2")).toBeNull();
       });
 
       it("opens a ConfigMap's Data, the only titled block its pane offers", async () => {
