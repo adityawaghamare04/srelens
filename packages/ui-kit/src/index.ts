@@ -17,6 +17,7 @@ export { ConfirmDialog, type ConfirmDialogProps } from "./ConfirmDialog";
 export { ConsoleDock, type ConsoleDockProps } from "./ConsoleDock";
 export { ContextMenu, type ContextMenuItem, type ContextMenuProps } from "./ContextMenu";
 export { CustomizeMark, type CustomizeMarkProps, type MarkAppearance } from "./CustomizeMark";
+export { Dialog, type DialogProps } from "./Dialog";
 export { Drawer, type DrawerProps } from "./Drawer";
 export { DrillCard, type DrillCardProps, type DrillStep } from "./DrillCard";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";

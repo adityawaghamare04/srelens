@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, createEvent } from "@testing-library/react";
+import { render, screen, fireEvent, createEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ClusterRail, type ClusterRailItem } from "./ClusterRail";
 
@@ -157,23 +157,38 @@ describe("ClusterRail gestures", () => {
     expect(onOpen).toHaveBeenCalledWith("prod-us");
   });
 
-  it("emits the id on the context-menu gesture, and takes over the browser's menu", () => {
+  it("opens the caller's menu on the context-menu gesture, and takes over the browser's", async () => {
     // Shift+F10 and the Menu key both raise `contextmenu`, so a keyboard user
     // reaches the same menu without a pointer.
-    const onMenu = vi.fn();
-    setup({ onMenu });
+    const onPick = vi.fn();
+    const menuFor = vi.fn((item: ClusterRailItem) => [{ label: `Customise ${item.name}`, onPick }]);
+    setup({ menuFor });
     const event = createEvent.contextMenu(chip("prod-us"));
     fireEvent(chip("prod-us"), event);
-    expect(onMenu).toHaveBeenCalled();
-    expect(onMenu.mock.calls[0][0]).toBe("prod-us");
+
+    // Named after the cluster the gesture landed on, so a reader arriving in
+    // the menu is told which of a dozen marks it is about.
+    const menu = await screen.findByRole("menu", { name: "prod-us actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Customise prod-us" }));
+    expect(onPick).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
   });
 
-  it("leaves the browser's own menu alone when no handler was given", () => {
+  it("leaves the browser's own menu alone when no menu was given", () => {
     setup();
     const event = createEvent.contextMenu(chip("prod-us"));
     fireEvent(chip("prod-us"), event);
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves it alone for a cluster the caller offers nothing for", () => {
+    // An empty list is "no menu here", not "a menu with nothing in it": the
+    // second takes the browser's own menu away and gives back an empty box.
+    setup({ menuFor: (item) => (item.id === "prod-eu" ? [{ label: "Customise", onPick: () => {} }] : []) });
+    const event = createEvent.contextMenu(chip("prod-us"));
+    fireEvent(chip("prod-us"), event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 

@@ -200,7 +200,10 @@ export function CustomizeMark({
         </div>
         <div className="min-w-0">
           <div className="truncate text-[0.8125rem] font-semibold">{value.name}</div>
-          <Eyebrow className="mt-px">preview at all three sizes</Eyebrow>
+          {/* Which three: the sizes a rail draws a mark at. Unqualified, three
+              squares beside each other read as three marks rather than as one
+              mark at every size it is ever seen. */}
+          <Eyebrow className="mt-px">preview at all three rail sizes</Eyebrow>
         </div>
       </div>
 

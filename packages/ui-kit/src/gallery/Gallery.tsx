@@ -14,6 +14,7 @@ import { ColumnPicker } from "../ColumnPicker";
 import { Combobox } from "../Combobox";
 import { Checkbox } from "../Checkbox";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { Dialog } from "../Dialog";
 import { ConsoleDock } from "../ConsoleDock";
 import { ContextMenu } from "../ContextMenu";
 import { CustomizeMark, type MarkAppearance } from "../CustomizeMark";
@@ -161,6 +162,7 @@ export function Gallery() {
   const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(new Set(["age"]));
   const [manifest, setManifest] = useState("apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-1\n");
   const [dialog, setDialog] = useState<null | "plain" | "danger" | "busy">(null);
+  const [modal, setModal] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const [ask, setAsk] = useState("why is checkout-api restarting");
   const [drillStep, setDrillStep] = useState("diagnose");
@@ -384,6 +386,37 @@ export function Gallery() {
             onCancel={() => setDialog(null)}
           />
         ) : null}
+      </section>
+
+      <section>
+        <h2>Dialog</h2>
+        {/* The frame ConfirmDialog puts a question in, with the task left to
+            the caller: a title, a body, and one row of controls. */}
+        <div className="kit-gallery__row">
+          <Button size="xs" onClick={() => setModal(true)}>
+            customise
+          </Button>
+        </div>
+        {modal && (
+          <Dialog
+            title="Customise kind-local"
+            onClose={() => setModal(false)}
+            footer={
+              <>
+                <Button size="sm" variant="secondary" onClick={() => setModal(false)}>
+                  Reset
+                </Button>
+                <Button size="sm" onClick={() => setModal(false)}>
+                  Done
+                </Button>
+              </>
+            }
+          >
+            <div className="p-3 text-[0.8125rem] text-muted">
+              Whatever the task is. This one would hold a CustomizeMark.
+            </div>
+          </Dialog>
+        )}
       </section>
 
       <section>
@@ -1364,6 +1397,14 @@ export function Gallery() {
             activeId={railCluster}
             onSelect={setRailCluster}
             onAdd={() => {}}
+            /* Right-click a mark: the items are the app's vocabulary, the
+               anchoring, the arrow keys and the dismissal are ContextMenu's. */
+            menuFor={(item) => [
+              { label: `Open ${item.name}`, onPick: () => setRailCluster(item.id) },
+              { label: "Customise…", onPick: () => {} },
+              { kind: "sep" },
+              { label: "Remove from workspace", danger: true, onPick: () => {} },
+            ]}
             items={[
               {
                 id: "prod-eu",

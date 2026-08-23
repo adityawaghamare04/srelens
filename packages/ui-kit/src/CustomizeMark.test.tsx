@@ -94,6 +94,10 @@ describe("CustomizeMark", () => {
     // identical "prod-eu-west, image" announcements say nothing three times.
     expect(within(preview).queryAllByRole("img")).toHaveLength(0);
     expect(within(preview).getByText("prod-eu-west")).toBeDefined();
+    // Which three sizes: the rail's. Three unnamed squares beside each other
+    // otherwise read as three marks rather than as one at every size it is
+    // ever drawn at.
+    expect(within(preview).getByText("preview at all three rail sizes")).toBeDefined();
   });
 
   it("offers the palette as one radio group, named by colour rather than by hex", () => {
