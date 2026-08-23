@@ -140,8 +140,9 @@ describe("WorkloadDetailsBody", () => {
     it("shows a Deployment's whole strategy, surge and unavailable included", () => {
       render(<WorkloadDetailsBody object={CHECKOUT_API} context="ctx" />);
       // core's `updateStrategyText`, which this file used to call on the
-      // StatefulSet branch only — so a Deployment showed the bare type.
-      expect(screen.getByText("RollingUpdate (max unavailable 0, max surge 25%)")).toBeDefined();
+      // StatefulSet branch only — so a Deployment showed the bare type, with
+      // the two numbers that decide how a rollout behaves dropped.
+      expect(screen.getByText("RollingUpdate · surge 25% · unavailable 0")).toBeDefined();
       expect(screen.getByText("Strategy")).toBeDefined();
       expect(screen.queryByText("Strategy type")).toBeNull();
     });
@@ -157,7 +158,7 @@ describe("WorkloadDetailsBody", () => {
           context="ctx"
         />,
       );
-      expect(screen.getByText("RollingUpdate (partition 2)")).toBeDefined();
+      expect(screen.getByText("RollingUpdate · partition 2")).toBeDefined();
     });
 
     it("names the revision, aged by the ReplicaSet that carries it", async () => {
@@ -558,7 +559,7 @@ describe("WorkloadDetailsBody", () => {
           context="ctx"
         />,
       );
-      expect(screen.getByText("RollingUpdate (max unavailable 1)")).toBeDefined();
+      expect(screen.getByText("RollingUpdate · unavailable 1")).toBeDefined();
     });
 
     it("shows the selector", () => {

@@ -48,29 +48,44 @@ describe("ConditionsSection", () => {
   });
 
   it("colours the name of a bad condition and leaves a good one plain", () => {
-    // The design's asymmetric rule: red `Available`, plain `Progressing`
+    // The design's asymmetric rule: red `Available`, plain `ReplicaFailure`
     // beside its own ok dot. `StatusPill` owns which kinds count as bad and
     // paints the word with an inline tone; this asserts the flag reached it,
-    // not a colour computed here.
+    // not a colour computed here. `Progressing` is the third case and is
+    // pinned with the whole row below.
     const { container } = render(<ConditionsSection conditions={DEPLOYMENT_CONDITIONS} />);
     expect(tone(container, "Available")).toBe("var(--sev)");
-    expect(tone(container, "Progressing")).toBe("");
+    expect(tone(container, "ReplicaFailure")).toBe("");
   });
 
-  it("leaves a healthy ReplicaFailure plain, the way the design frame draws it", () => {
-    // `ReplicaFailure: False` is a Deployment's healthy state. core's
-    // `conditionKind` used to match /Failed/ but not /Failure/ and read the
-    // row as danger, so this section coloured a healthy condition red; the
-    // fix landed in `conditionKind`, where the list column and every other
-    // reader of a condition's tone gets it too, rather than in a second
-    // heuristic here. Kept as the regression guard for that.
+  it("draws the design frame's three-tone Conditions row entire: danger, warning, ok", () => {
+    // THE pin for frame A of the user's mock, asserted as one thing because
+    // it is one thing: three conditions of a mid-rollout Deployment, each
+    // with its own dot tone AND its own name colour, in the frame's order.
+    //
+    //   (danger)  Available       False · MinimumReplicasUnavailable   red name
+    //   (warn)    Progressing     True  · ReplicaSetUpdated            amber name
+    //   (ok)      ReplicaFailure  False · —                            plain name
+    //
+    // Every tone is core's `conditionKind`; this section keeps no second
+    // heuristic, which is why two core bugs the frame exposed could be fixed
+    // where the list column and every other reader of a condition's tone got
+    // them too. `Failed` did not match `ReplicaFailure`, so a Deployment's
+    // healthy state read as a failure; and a `Progressing` condition was
+    // toned on its status alone, so a rollout still in flight was drawn the
+    // same green as one that had landed — the mock's own two frames prove
+    // the difference, tone by reason, with the same type and status in both.
+    //
+    // The name colour is the asymmetric half of the rule: a bad state is
+    // worth the ink, a good one is not, so the ok row alone reads plain.
     const { container } = render(<ConditionsSection conditions={DEPLOYMENT_CONDITIONS} />);
-    expect(tone(container, "ReplicaFailure")).toBe("");
-    // Frame A's row entire, now that it is reachable: a red `Available` over
-    // a plain `Progressing` over a plain `ReplicaFailure`, each beside its
-    // own toned dot.
     const kinds = [...container.querySelectorAll(".status")].map((el) => el.getAttribute("data-kind"));
-    expect(kinds).toEqual(["danger", "success", "success"]);
+    expect(kinds).toEqual(["danger", "warning", "success"]);
+    expect([
+      tone(container, "Available"),
+      tone(container, "Progressing"),
+      tone(container, "ReplicaFailure"),
+    ]).toEqual(["var(--sev)", "var(--warn)", ""]);
   });
 
   it("says the state in words, never in colour alone", () => {
