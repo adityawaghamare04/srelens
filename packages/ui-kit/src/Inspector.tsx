@@ -1,6 +1,6 @@
 import { useId, type KeyboardEvent, type ReactNode } from "react";
 import { EmptyState } from "./EmptyState";
-import { StatusPill, type StatusKind } from "./StatusPill";
+import { StatusPill, statusTone, type StatusKind } from "./StatusPill";
 import { Tabs, type TabItem } from "./Tabs";
 import { cx } from "./cx";
 import { filled } from "./slot";
@@ -23,12 +23,26 @@ export interface InspectorProps {
   name: ReactNode;
   /** The line beneath it, saying what the subject is (e.g. "Deployment · checkout"). */
   subtitle?: ReactNode;
-  /** Marks the subject as one the caller has singled out. */
+  /**
+   * Marks the subject as one the caller has singled out — draws the dot before
+   * the name. Whether there is a dot, only; its colour comes from
+   * {@link InspectorProps.statusKind}.
+   */
   flagged?: boolean;
-  /** What being flagged means, for anyone who cannot see the dot. */
+  /**
+   * What being flagged means, for anyone who cannot see the dot. Keep it true
+   * at every severity: the dot is amber for a warning subject and red for a
+   * danger one, and this one string stands for both. The severity itself is
+   * announced by `status` beside it.
+   */
   flaggedLabel?: string;
   /** The subject's state, in words. */
   status?: ReactNode;
+  /**
+   * Tones the status word and the flag dot together. Defaults to `neutral` for
+   * the word; a flag with no kind at all keeps the severity tone, since there
+   * is no word for it to echo.
+   */
   statusKind?: StatusKind;
   /** The figures read across the header under the status. */
   facts?: InspectorFact[];
@@ -109,7 +123,10 @@ export function Inspector({
   flagged = false,
   flaggedLabel = "Needs attention",
   status,
-  statusKind = "neutral",
+  // No default here on purpose: StatusPill supplies its own "neutral", and
+  // the flag dot needs to tell "the caller said neutral" from "the caller
+  // said nothing", which a default would erase.
+  statusKind,
   facts = [],
   actions,
   onClose,
@@ -154,15 +171,37 @@ export function Inspector({
             <div className="flex items-center gap-1.5">
               {flagged && (
                 <>
+                  {/* THE RULE: `flagged` decides WHETHER there is a dot;
+                      `statusKind` decides WHAT COLOUR it is. Do not put the
+                      severity tone back as a constant.
+
+                      It was one, and the two channels of a single fact could
+                      then contradict each other — a red dot beside an amber
+                      word. That is not an exotic pairing: core's `k8sStatus`
+                      has `UNSETTLED = { health: "warning", flagged: true }`
+                      and returns it for every warning-health workload, so a
+                      mid-rollout Deployment is the ordinary path through it.
+
+                      With no `statusKind` at all there is no word to echo, and
+                      a flag falls back to the severity tone it has always
+                      meant — a muted "needs attention" dot would be a worse
+                      answer than the red it replaced. (#331) */}
                   <span
+                    data-slot="inspector-flag"
                     aria-hidden="true"
                     className="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style={{ background: toneColor("sev") }}
+                    style={{ background: toneColor(statusKind ? statusTone(statusKind) : "sev") }}
                   />
                   {/* The source pane's dot says "this one" in colour alone, which is
                       nothing to a screen reader and nothing to a colour-blind
                       reader either. The word is the marker; the dot is how it
-                      looks. */}
+                      looks.
+
+                      That holds now the dot carries a severity as well: this
+                      text says only that the subject was singled out, which is
+                      as true of an amber subject as of a red one, and the
+                      severity itself is announced by the status word beside
+                      it. So the label did not have to change with the rule. */}
                   <span className="sr-only">{flaggedLabel}</span>
                 </>
               )}

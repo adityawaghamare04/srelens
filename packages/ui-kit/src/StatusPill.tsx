@@ -18,6 +18,18 @@ const TONE: Record<StatusKind, Tone> = {
   neutral: "muted",
 };
 
+/**
+ * The tone a kind resolves to, for anything drawing a second channel of the
+ * same fact beside a pill — `Inspector`'s flag dot is the one call site.
+ *
+ * Exported rather than let the caller keep its own copy: two maps of the same
+ * five kinds drift, and the way they drift is exactly the bug this was added
+ * for — a red dot beside an amber word, each side certain it was right. (#331)
+ */
+export function statusTone(kind: StatusKind): Tone {
+  return TONE[kind];
+}
+
 /** Danger and warning are the states the design colours; the rest read plain. */
 const BAD: Partial<Record<StatusKind, true>> = { danger: true, warning: true };
 

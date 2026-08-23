@@ -184,6 +184,80 @@ describe("Inspector", () => {
     expect(screen.queryByText("Needs attention")).toBeNull();
   });
 
+/**
+ * The flag dot and the status word are two channels on one fact, and they used
+ * to be able to disagree: the dot was hard-coded to the severity tone whatever
+ * `statusKind` said, so an amber subject got a red dot beside an amber word.
+ *
+ * Not an exotic pairing. core's `k8sStatus.ts` defines
+ * `UNSETTLED = { health: "warning", flagged: true }` and returns it for any
+ * warning-health workload as well as for a cordoned-yet-Ready Node, so a
+ * mid-rollout Deployment — the very thing the user's frame A shows — is the
+ * ordinary path through it, not the edge.
+ */
+describe("Inspector's flag dot", () => {
+  function flagDot(container: HTMLElement) {
+    return container.querySelector<HTMLElement>('[data-slot="inspector-flag"]');
+  }
+
+  it("takes the tone the status carries, not always the severity one", () => {
+    const { container } = setup({ flagged: true, status: "Progressing", statusKind: "warning" });
+    expect(flagDot(container)?.style.background).toBe("var(--warn)");
+  });
+
+  it("is the severity tone when the status is a danger", () => {
+    const { container } = setup({ flagged: true, status: "Degraded", statusKind: "danger" });
+    expect(flagDot(container)?.style.background).toBe("var(--sev)");
+  });
+
+  it("never disagrees with the dot inside the status pill", () => {
+    // The whole point: one fact, two channels, one colour. Read off both
+    // rather than asserted twice, so the two cannot drift apart.
+    for (const kind of ["success", "warning", "danger", "info", "neutral"] as const) {
+      const { container, unmount } = setup({ flagged: true, status: "x", statusKind: kind });
+      const pillDot = container.querySelector<HTMLElement>(".status .dot");
+      expect(flagDot(container)?.style.background, `${kind} should match the pill`).toBe(
+        pillDot?.style.background,
+      );
+      unmount();
+    }
+  });
+
+  it("keeps meaning severity when there is no status to echo", () => {
+    // A flag with no `statusKind` has nothing to take its colour from, and a
+    // muted "needs attention" dot is a worse answer than the red it replaced.
+    const { container } = setup({ flagged: true });
+    expect(flagDot(container)?.style.background).toBe("var(--sev)");
+  });
+
+  it("names no colour of its own for the dot", () => {
+    const { container } = setup({ flagged: true, statusKind: "warning" });
+    expect(flagDot(container)?.style.background).toContain("var(--");
+  });
+
+  it("still says one thing that is true at every severity", () => {
+    // The dot is aria-hidden, so this text is the only channel a screen
+    // reader gets — and it now stands in for amber as well as red. The
+    // severity itself is announced by the status word beside it.
+    const { container } = setup({ flagged: true, status: "Progressing", statusKind: "warning" });
+    expect(screen.getByText("Needs attention")).toBeDefined();
+    expect(container.textContent).toContain("Progressing");
+    for (const word of ["critical", "failed", "error", "red", "danger"]) {
+      expect(
+        "Needs attention".toLowerCase(),
+        `the default label should not claim ${word} of an amber subject`,
+      ).not.toContain(word);
+    }
+  });
+
+  it("leaves the dot out entirely when the subject is not flagged, however bad", () => {
+    // `flagged` decides whether there is a dot; `statusKind` only decides its
+    // colour. A healthy-looking pane must not sprout one from a danger word.
+    const { container } = setup({ status: "Degraded", statusKind: "danger" });
+    expect(flagDot(container)).toBeNull();
+  });
+});
+
   it("renders the caller's header actions", () => {
     setup({ actions: <button type="button">Open tab</button> });
     expect(screen.getByRole("button", { name: "Open tab" })).toBeDefined();
