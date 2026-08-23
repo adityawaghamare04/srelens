@@ -1245,6 +1245,28 @@
   .logline:hover { background: var(--field); }
   .logline:hover .row-ask { opacity: 1; }
 
+  /* --- a command the reader can take away -----------------------
+
+     It WRAPS. `overflow-wrap: anywhere` and no `text-overflow`, deliberately:
+     the mock clips the line, but a command you cannot finish reading is not
+     one you can retype, and this lands in a 264px rail. The usual repair is a
+     `title` holding the whole string, which is the unredacted second copy
+     `PairList` and `KV` both had removed. */
+  .copy-command {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .copy-command-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: var(--ink-muted);
+  }
+  .copy-command-check { color: var(--ok); flex-shrink: 0; }
+
   .scroll { overflow: auto; scrollbar-gutter: stable; }
 }
 

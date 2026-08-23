@@ -17,6 +17,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Dialog } from "../Dialog";
 import { ConsoleDock } from "../ConsoleDock";
 import { ContextMenu } from "../ContextMenu";
+import { CopyCommand } from "../CopyCommand";
 import { CustomizeMark, type MarkAppearance } from "../CustomizeMark";
 import { Drawer } from "../Drawer";
 import { DrillCard } from "../DrillCard";
@@ -677,7 +678,21 @@ export function Gallery() {
       </section>
 
       <section>
+        <h2>CopyCommand</h2>
+        {/* The other half of the pair below, and the distinction is the whole
+            point of there being two: this hands the reader something to run
+            themselves, so the command is the content and carries no preamble.
+            Shown at a rail's width, because that is where it clips — and it
+            wraps instead. */}
+        <div style={{ width: 264 }}>
+          <CopyCommand command="kubectl --context prod-eu get servicemonitors.monitoring.coreos.com -A -o wide" />
+        </div>
+      </section>
+
+      <section>
         <h2>KubectlPreview</h2>
+        {/* Not `CopyCommand`: this sits inside a confirm dialog, beside an
+            action the app is about to perform, and says so. */}
         <KubectlPreview command="kubectl delete pod web-1 -n default" onCopy={() => {}} />
         {/* Not every action has a faithful one-liner; the note says so in the
             same place rather than leaving the dialog silent. */}
