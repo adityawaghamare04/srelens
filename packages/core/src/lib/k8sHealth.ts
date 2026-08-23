@@ -102,7 +102,11 @@ const COMPLETION_REASON: Record<string, string> = {
 /**
  * `conditionKind`, plus the new design's rollout rule: a `Progressing` that is
  * `True` for any reason other than the completion one softens from green to
- * amber.
+ * amber — including no reason at all. Green is the claim that the rollout has
+ * landed, and the only evidence for that claim is the reason matching the
+ * completion one exactly; an absent reason is not a different kind of
+ * evidence, it is the absence of the evidence green requires, so it reads the
+ * same as a reason nobody has seen before.
  *
  * OPT-IN, and a separate function rather than a flag, because it is a DESIGN
  * decision read off the new design's mock and not a correctness fix. Classic
@@ -119,7 +123,7 @@ export function conditionKindWithReason(c: Condition): HealthKind {
   const base = conditionKind(c);
   if (base !== "success") return base;
   const landed = COMPLETION_REASON[c.type];
-  if (landed && c.status === "True" && c.reason && c.reason !== landed) return "warning";
+  if (landed && c.status === "True" && c.reason !== landed) return "warning";
   return base;
 }
 

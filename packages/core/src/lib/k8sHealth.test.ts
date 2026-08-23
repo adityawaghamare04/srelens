@@ -159,11 +159,16 @@ describe("conditionKindWithReason", () => {
     }
   });
 
-  it("leaves a reasonless Progressing alone rather than calling it unsettled", () => {
-    // An absent reason is no information, not evidence of a rollout: the mock
-    // renders those as an em dash, and they must not all turn amber.
-    expect(conditionKindWithReason({ type: "Progressing", status: "True" })).toBe("success");
-    expect(conditionKindWithReason({ type: "Progressing", status: "True", reason: "" })).toBe("success");
+  it("reads a reasonless Progressing as unsettled, the same as an unrecognised one", () => {
+    // Green here is a claim that the rollout has landed, and the only
+    // evidence for that claim is the completion reason matching exactly. No
+    // reason is not a different kind of evidence than a reason nobody has
+    // seen before — it is the absence of the one piece of evidence that
+    // would justify green, so it reads amber for the same reason an unknown
+    // reason does. (The mock's "—" for an absent reason is about what the
+    // Reason column prints, not what tone the pill takes.)
+    expect(conditionKindWithReason({ type: "Progressing", status: "True" })).toBe("warning");
+    expect(conditionKindWithReason({ type: "Progressing", status: "True", reason: "" })).toBe("warning");
   });
 
   it("keeps the reason from ever rescuing a condition the status already condemns", () => {
