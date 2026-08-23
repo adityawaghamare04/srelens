@@ -1186,10 +1186,24 @@ describe("the room the peek leaves the list", () => {
     globalThis.ResizeObserver = original;
   });
 
-  /** Tell everything watching a box that the box is this wide. */
+  /** The box the list and the peek are siblings in — what the ceiling is measured against. */
+  const listRow = () => peekGrip().parentElement!.parentElement as HTMLElement;
+
+  /**
+   * Tell everything watching the ROW that the row is this wide.
+   *
+   * Filtered by target, and asserted to have found something, rather than
+   * fired at every callback the stub recorded: observing the body, or an
+   * ancestor, or nothing at all is a measurement of the wrong box, and no
+   * assertion downstream could tell the difference — a number arriving proves
+   * only that a number arrived.
+   */
   function measured(width: number) {
+    const row = listRow();
+    const watching = watches.filter((watch) => watch.target === row);
+    expect(watching.length, "nothing is observing the row the list and the peek share").toBeGreaterThan(0);
     act(() => {
-      for (const { target, cb } of watches) {
+      for (const { target, cb } of watching) {
         cb([{ target, contentRect: { width } }] as unknown as ResizeObserverEntry[], {} as ResizeObserver);
       }
     });
@@ -1218,6 +1232,27 @@ describe("the room the peek leaves the list", () => {
     // The property the floor constant was always for, stated as the reader
     // would see it: whatever is left of the row is still a usable table.
     expect(SHARED - parseInt(peekWidth(), 10)).toBeGreaterThanOrEqual(MIN_LIST_WIDTH);
+  });
+
+  it("measures its row even when the descriptor arrives late", async () => {
+    // A custom resource's descriptor waits on CRD discovery, so this screen's
+    // first render is a loading state with no row in it at all —
+    // `descriptorFor` is synchronous, `customDescriptorFor` is not. An effect
+    // keyed on a ref OBJECT never re-runs when the row finally mounts, since
+    // a ref's identity never changes, and the ceiling then falls back to the
+    // absolute maximum for every CRD list there is.
+    listCrds.mockResolvedValue({ crds: [WIDGETS] });
+    listCustomResource.mockResolvedValue({
+      items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
+    });
+
+    open("/k/widgets.example.com");
+    await waitFor(() => expect(rowNames()).toEqual(["left"]));
+    fireEvent.click(row("left"));
+    await waitFor(() => expect(paneName()).toBe("left"));
+
+    measured(SHARED);
+    expect(peekGrip().getAttribute("aria-valuemax")).toBe(String(SHARED - MIN_LIST_WIDTH));
   });
 
   it("still stops at its own ceiling when the row is generous", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   listCrds,
   rowInSelection,
@@ -229,9 +229,8 @@ function KindList({
   // the window is space the list does not have. Clamped here rather than in
   // the store, and on the way out rather than written back, so a pane
   // squeezed by a narrow row widens again when the row does.
-  const listRow = useRef<HTMLDivElement>(null);
-  const peekBounds = usePeekBounds(listRow);
-  const peekWidth = clampPeekWidth(usePeekWidth(), peekBounds);
+  const listRow = usePeekBounds();
+  const peekWidth = clampPeekWidth(usePeekWidth(), listRow.bounds);
 
   function peekAt(rowNamespace: string | null, rowName: string) {
     setPeek((prev) =>
@@ -351,7 +350,7 @@ function KindList({
           row past the window — without it a flex item refuses to shrink below
           its content and the whole screen scrolls sideways instead of the
           table scrolling inside itself. */}
-      <div ref={listRow} className="flex min-h-0 flex-1">
+      <div ref={listRow.ref} className="flex min-h-0 flex-1">
         <div className="scroll min-h-0 min-w-0 flex-1">
           {list.status === "loading" ? (
             <LoadingState label={`Loading ${lower}`} />
@@ -409,8 +408,8 @@ function KindList({
             <ResizeHandle
               label="the resource details"
               width={peekWidth}
-              minWidth={peekBounds.minWidth}
-              maxWidth={peekBounds.maxWidth}
+              minWidth={listRow.bounds.minWidth}
+              maxWidth={listRow.bounds.maxWidth}
               edge="left"
               onResize={setPeekWidth}
               onCommit={savePeekWidth}

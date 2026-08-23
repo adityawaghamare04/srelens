@@ -171,8 +171,16 @@ export function usePeekWidth(): number {
   return useSyncExternalStore(subscribe, peekWidth, peekWidth);
 }
 
+/** A measured box: put {@link PeekRoom.ref} on it, read the bounds off it. */
+export interface PeekRoom {
+  /** Goes on the box the list and the peek share. */
+  ref: (node: HTMLElement | null) => void;
+  bounds: PeekBounds;
+}
+
 /**
- * The bounds for the row this ref is on — the box the list and the peek share.
+ * The bounds for the row this hook's ref is put on — the box the two panes
+ * share.
  *
  * Observed rather than read once: the row's width changes when the window
  * does, when the reader drags the navigation sidebar, and when the rail
@@ -180,12 +188,22 @@ export function usePeekWidth(): number {
  * observation is of the *row*, whose width does not depend on how the peek
  * inside it is sized (`min-w-0` on the list's column is what guarantees that),
  * so measuring cannot chase its own tail.
+ *
+ * A callback ref rather than a `useRef` handed in, because the row is not
+ * always there on the first render: a custom resource's descriptor waits on
+ * CRD discovery, so `Resources` renders a loading state first and the row
+ * arrives later. An effect keyed on a ref OBJECT never re-runs when that
+ * happens — a ref's identity never changes — so it would observe nothing at
+ * all, `available` would stay 0, and every CRD list would quietly fall back to
+ * the absolute ceiling. Keyed on the node, the effect runs the moment there is
+ * something to measure. `setNode` is a state setter, so the ref itself is
+ * stable and React never detaches and re-attaches it. (task 17 review)
  */
-export function usePeekBounds(ref: { current: HTMLElement | null }): PeekBounds {
+export function usePeekBounds(): PeekRoom {
+  const [node, setNode] = useState<HTMLElement | null>(null);
   const [available, setAvailable] = useState(0);
 
   useLayoutEffect(() => {
-    const node = ref.current;
     if (!node) return;
     setAvailable(node.getBoundingClientRect().width);
     if (typeof ResizeObserver === "undefined") return;
@@ -195,7 +213,8 @@ export function usePeekBounds(ref: { current: HTMLElement | null }): PeekBounds 
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [ref]);
+  }, [node]);
 
-  return useMemo(() => peekBounds(available), [available]);
+  const bounds = useMemo(() => peekBounds(available), [available]);
+  return { ref: setNode, bounds };
 }
