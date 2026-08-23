@@ -138,6 +138,19 @@ describe("dockerRegistries", () => {
     ]);
   });
 
+  it("does not leak a colon-less `auth` token into the username column", () => {
+    // Some registries store a bare token in `auth` with no `username:password`
+    // separator at all. `decodedAuth.split(":", 1)[0]` on a colon-less string
+    // returns the whole string — the entire credential — which must not land
+    // in the username field just because there was nothing to split on.
+    const authField = btoa("FAKE-NOT-A-REAL-BARE-TOKEN-9f3c1a");
+    const config = { auths: { "registry7.example.test": { auth: authField } } };
+    const data = { ".dockerconfigjson": btoa(JSON.stringify(config)) };
+    expect(dockerRegistries(data, "kubernetes.io/dockerconfigjson")).toEqual([
+      { registry: "registry7.example.test", username: "—", credential: "Stored" },
+    ]);
+  });
+
   it("reads the legacy .dockercfg shape (registries at the top level, no `auths` wrapper)", () => {
     const authField = btoa("legacy-user:legacy-pass");
     const config = { "legacy.example.test": { auth: authField } };

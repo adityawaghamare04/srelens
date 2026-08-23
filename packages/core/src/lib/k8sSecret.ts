@@ -45,7 +45,14 @@ export function dockerRegistries(data: Record<string, string>, type: string): Do
     return Object.entries(auths).map(([registry, raw]) => {
       const auth = asRecord(raw);
       const decodedAuth = auth.auth ? decodeBase64(str(auth.auth)) : "";
-      const username = str(auth.username) || decodedAuth.split(":", 1)[0];
+      // `auth` is conventionally base64 of `username:password`, but some
+      // registries store a bare token there with no separator at all. On a
+      // colon-less string, `split(":", 1)[0]` returns the whole string — the
+      // entire credential — so the split only counts when a colon is
+      // actually present; a colon-less `auth` yields no username, not the
+      // whole decoded value.
+      const colonIndex = decodedAuth.indexOf(":");
+      const username = str(auth.username) || (colonIndex >= 0 ? decodedAuth.slice(0, colonIndex) : "");
       return {
         registry,
         username: username || "—",
