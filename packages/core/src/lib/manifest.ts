@@ -60,7 +60,7 @@ const REDACTION_FAILED = "This Secret's manifest is not shown, because it could 
 
 /**
  * Blank the values of a Secret manifest's top-level `data` and `stringData`
- * maps, keeping their keys.
+ * maps and of its `metadata.annotations`, keeping every key.
  *
  * `k8s.getObject` redacts Secret values in the backend; `k8s.getManifest`
  * deliberately does NOT (see `crates/kube/src/manifest.rs`) — it is the raw
@@ -74,14 +74,48 @@ const REDACTION_FAILED = "This Secret's manifest is not shown, because it could 
  * under `spec`, or one that happens to be an annotation's name, belongs to
  * something else and is left exactly as the cluster returned it.
  *
+ * AND every value under `metadata.annotations`, keys kept. THE SCOPE RULE IS
+ * "every annotation on a Secret", not "the one annotation kubectl writes",
+ * and the difference is the whole point:
+ *
+ * - `kubectl.kubernetes.io/last-applied-configuration` is the known carrier:
+ *   on an `apply`-managed Secret it holds the entire applied manifest, base64
+ *   `data` map included, so blanking `data` while leaving it alone puts the
+ *   same value back on screen two lines further down. It was the finding.
+ * - It is not the only carrier. Any controller can echo a Secret's material
+ *   into an annotation of its own — a copy for a sidecar, a "previous value"
+ *   left behind by a rotation, a checksum computed over the plaintext — and
+ *   the pane cannot tell those from a harmless one by looking at the key. A
+ *   rule naming a single well-known key would read as complete while covering
+ *   one carrier out of many, which is exactly how this was missed once.
+ * - So the annotation's KEY is printed and its VALUE never is. The reader
+ *   still sees which controllers touched the Secret, which is what the key is
+ *   for; the value can be read on the object's own YAML for a kind where an
+ *   annotation is not the material. This mirrors the Details pane, which gates
+ *   a Secret's whole annotation map behind a reveal rather than one key of it.
+ *
+ * WHAT THIS DOES NOT COVER, and must not be read as covering:
+ * - Only `Secret` manifests, because only its caller passes one. Nothing here
+ *   inspects `kind`; a ConfigMap must never be routed through this, and its
+ *   YAML tab still shows its own annotations in full.
+ * - Only annotations. `metadata.labels`, `metadata.name`, `ownerReferences`,
+ *   `managedFields` and every other field are printed as the cluster returned
+ *   them. A label's 63-character value could in principle hold a short secret;
+ *   this does not blank it, and widening to all of `metadata` would blank the
+ *   Secret's own name and leave nothing worth showing.
+ * - Nothing outside `metadata`. A `type`, or a future top-level field carrying
+ *   material, is untouched — the two value maps are named explicitly above,
+ *   and a new one would have to be added here.
+ *
  * Parsing goes through `parseDocument` rather than `parse` so key order and
  * comments survive: the reader is meant to be looking at the manifest the
  * cluster has, not a re-emitted approximation of it.
  *
  * FAILS CLOSED. Anything unexpected — a parse error (which includes a
- * multi-document source), a document that is not a map, a `data` that is not
- * a map, or an alias that could re-expose a value from somewhere else in the
- * document — returns `{ error }` and no `yaml` at all. Passing the input
+ * multi-document source), a document that is not a map, a `data`, `metadata`
+ * or `annotations` that is not a map, or an alias that could re-expose a value
+ * from somewhere else in the document — returns `{ error }` and no `yaml` at
+ * all. Passing the input
  * through on a shape this does not understand would be worse than having no
  * redactor, because the caller would believe it had worked.
  */
@@ -126,17 +160,38 @@ export function redactSecretManifest(yaml: string): { yaml?: string; error?: str
     };
   }
 
-  for (const key of SECRET_VALUE_KEYS) {
-    const node = doc.get(key, true);
-    // Absent, or explicitly empty (`data:`) — nothing to redact either way.
-    if (node === undefined || node === null) continue;
-    if (isScalar(node) && node.value === null) continue;
-    if (!isMap(node)) {
-      return { error: `${REDACTION_FAILED} its \`${key}\` is not a mapping.` };
-    }
+  /**
+   * Blank every value of the map at `path`, keeping its keys. Absent or
+   * explicitly empty is nothing to do; anything that is not a mapping is a
+   * shape this does not understand, so it fails closed rather than guessing.
+   */
+  const blankValuesAt = (path: string[]): string | null => {
+    const node = doc.getIn(path, true);
+    if (node === undefined || node === null) return null;
+    if (isScalar(node) && node.value === null) return null;
+    if (!isMap(node)) return `${REDACTION_FAILED} its \`${path.join(".")}\` is not a mapping.`;
     for (const pair of node.items) {
       pair.value = doc.createNode(REDACTION_MARKER);
     }
+    return null;
+  };
+
+  for (const key of SECRET_VALUE_KEYS) {
+    const failure = blankValuesAt([key]);
+    if (failure) return { error: failure };
+  }
+
+  // `metadata` itself must be a mapping before its annotations can be read: a
+  // `metadata` that is a scalar or a sequence is a document this does not
+  // understand, and reading no annotations out of it would silently pass an
+  // unredacted manifest through.
+  const metadata = doc.get("metadata", true);
+  if (metadata !== undefined && metadata !== null && !(isScalar(metadata) && metadata.value === null)) {
+    if (!isMap(metadata)) {
+      return { error: `${REDACTION_FAILED} its \`metadata\` is not a mapping.` };
+    }
+    const failure = blankValuesAt(["metadata", "annotations"]);
+    if (failure) return { error: failure };
   }
 
   try {

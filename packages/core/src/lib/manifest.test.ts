@@ -188,9 +188,58 @@ describe("redactSecretManifest", () => {
       `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\n  annotations:\n    data: annotation-value-not-a-secret\nspec:\n  data:\n    nested: nested-value-not-a-secret\ndata:\n  token: ${FIXTURE_VALUE}\n`,
     );
     expect(out.error).toBeUndefined();
-    expect(out.yaml).toContain("annotation-value-not-a-secret");
+    // `spec.data.nested` is the scoping proof: only the TOP-LEVEL `data` is
+    // the Secret's value map. The annotation named `data` keeps its key but
+    // loses its value — not because it is called `data`, but because every
+    // annotation value on a Secret is blanked; see the test above.
     expect(out.yaml).toContain("nested-value-not-a-secret");
+    expect(out.yaml).toContain("    data: REDACTED");
+    expect(out.yaml).not.toContain("annotation-value-not-a-secret");
     expect(out.yaml).not.toContain(FIXTURE_VALUE);
+  });
+
+  it("blanks the applied-configuration annotation, which carries the whole data map", () => {
+    // A `kubectl apply`-managed Secret keeps the ENTIRE manifest it last
+    // applied — base64 `data` map included — in this one annotation. Blanking
+    // the top-level `data` while leaving this alone puts the same value back
+    // on screen two lines further down, under an Alert promising it is not
+    // shown. (#331)
+    const applied = `{"apiVersion":"v1","kind":"Secret","data":{"token":"${FIXTURE_VALUE}"}}`;
+    const out = redactSecretManifest(
+      `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\n  annotations:\n    kubectl.kubernetes.io/last-applied-configuration: '${applied}'\ndata:\n  token: ${FIXTURE_VALUE}\n`,
+    );
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).not.toContain(FIXTURE_VALUE);
+    // The key stays: the reader still learns the Secret is `kubectl`-managed.
+    expect(out.yaml).toContain("kubectl.kubernetes.io/last-applied-configuration:");
+  });
+
+  it("blanks every annotation on a Secret, not only the one kubectl writes", () => {
+    // Any controller can echo a Secret's material into an annotation of its
+    // own — a checksum of the value, a copy for a sidecar, a "previous value"
+    // an operator left behind. A rule naming one well-known key would read as
+    // complete and cover one carrier out of many.
+    const out = redactSecretManifest(
+      `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\n  annotations:\n    example.com/copy-of-token: ${FIXTURE_VALUE}\n    example.com/harmless: rotated-by-dana\ndata:\n  token: ${FIXTURE_VALUE_2}\n`,
+    );
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).not.toContain(FIXTURE_VALUE);
+    expect(out.yaml).not.toContain(FIXTURE_VALUE_2);
+    expect(out.yaml).not.toContain("rotated-by-dana");
+    expect(out.yaml).toContain("example.com/copy-of-token:");
+    expect(out.yaml).toContain("example.com/harmless:");
+  });
+
+  it("leaves labels and the rest of metadata alone, which the annotation rule does not claim", () => {
+    // Scope, stated as a test so it cannot drift into a vaguer promise: this
+    // covers `data`, `stringData` and annotation VALUES. Labels, names and
+    // everything else are printed as the cluster returned them.
+    const out = redactSecretManifest(
+      `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\n  labels:\n    app: web\n  annotations:\n    a: ${FIXTURE_VALUE}\ndata:\n  token: ${FIXTURE_VALUE_2}\n`,
+    );
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).toContain("app: web");
+    expect(out.yaml).toContain("name: s-1");
   });
 
   it("preserves key order and comments, so the pane shows the cluster's own manifest", () => {
@@ -243,6 +292,23 @@ describe("redactSecretManifest", () => {
       );
       expect(out.error).toBeTruthy();
       expect(out.yaml).toBeUndefined();
+    });
+
+    it("returns an error when `metadata` or its `annotations` is not a mapping", () => {
+      // The annotation rule can only hold if the maps it walks are maps. A
+      // `metadata` it cannot read is not "no annotations to blank" — it is a
+      // document this does not understand, and reading zero annotations out
+      // of it would pass an unredacted manifest through.
+      for (const input of [
+        `kind: Secret\nmetadata: ${FIXTURE_VALUE}\ndata:\n  token: ${FIXTURE_VALUE_2}\n`,
+        `kind: Secret\nmetadata:\n  annotations: ${FIXTURE_VALUE}\ndata:\n  token: ${FIXTURE_VALUE_2}\n`,
+      ]) {
+        const out = redactSecretManifest(input);
+        expect(out.error).toBeTruthy();
+        expect(out.yaml).toBeUndefined();
+        expect(out.error).not.toContain(FIXTURE_VALUE);
+        expect(out.error).not.toContain(FIXTURE_VALUE_2);
+      }
     });
 
     it("never returns partially redacted text alongside an error", () => {
