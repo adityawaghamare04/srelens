@@ -62,7 +62,7 @@ describe("the list of ported screens", () => {
       "Application log",
       "Release notes",
       "Workloads",
-      "Resource lists",
+      "Resource lists and details",
     ]);
   });
 });

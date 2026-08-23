@@ -14,6 +14,7 @@ import { ColumnPicker } from "../ColumnPicker";
 import { Combobox } from "../Combobox";
 import { Checkbox } from "../Checkbox";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { Dialog } from "../Dialog";
 import { ConsoleDock } from "../ConsoleDock";
 import { ContextMenu } from "../ContextMenu";
 import { CustomizeMark, type MarkAppearance } from "../CustomizeMark";
@@ -22,6 +23,7 @@ import { DrillCard } from "../DrillCard";
 import { EmptyState } from "../EmptyState";
 import { ErrorState } from "../ErrorState";
 import { Eyebrow } from "../Eyebrow";
+import { FactGrid } from "../FactGrid";
 import { Field } from "../Field";
 import { FilterBar } from "../FilterBar";
 import { IconButton } from "../IconButton";
@@ -41,14 +43,16 @@ import { Panel } from "../Panel";
 import { Popover } from "../Popover";
 import { Progress } from "../Progress";
 import { Radio } from "../Radio";
+import { ResizeHandle } from "../ResizeHandle";
 import { ResourceTree, type ResourceNode } from "../ResourceTree";
 import { Screen } from "../Screen";
+import { Section } from "../Section";
 import { SegmentBar } from "../SegmentBar";
 import { Select } from "../Select";
 import { Sidebar } from "../Sidebar";
 import { Sparkline } from "../Sparkline";
-import { Stat } from "../Stat";
 import { Spinner } from "../Spinner";
+import { Stat } from "../Stat";
 import { StatusBar } from "../StatusBar";
 import { StatusPill } from "../StatusPill";
 import { SubHead } from "../SubHead";
@@ -158,12 +162,14 @@ export function Gallery() {
   const [hiddenColumns, setHiddenColumns] = useState<ReadonlySet<string>>(new Set(["age"]));
   const [manifest, setManifest] = useState("apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-1\n");
   const [dialog, setDialog] = useState<null | "plain" | "danger" | "busy">(null);
+  const [modal, setModal] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const [ask, setAsk] = useState("why is checkout-api restarting");
   const [drillStep, setDrillStep] = useState("diagnose");
   const [resource, setResource] = useState("pods");
   const [treeQuery, setTreeQuery] = useState("");
   const [sidebarQuery, setSidebarQuery] = useState("");
+  const [peekWidth, setPeekWidth] = useState(260);
   const [podFilter, setPodFilter] = useState("checkout");
   const [inspectorTab, setInspectorTab] = useState("overview");
   const [railCluster, setRailCluster] = useState("prod-eu");
@@ -328,6 +334,15 @@ export function Gallery() {
           <StatusPill status="Terminating" kind="info" />
           <StatusPill status="Unknown" />
         </div>
+        {/* `tinted` colours the word only where the state is bad: red
+            `Degraded`, plain `Running`. Off by default — a table where every
+            cell says something in colour says nothing. */}
+        <div className="kit-gallery__row">
+          <StatusPill status="Degraded" kind="danger" tinted />
+          <StatusPill status="Progressing" kind="warning" tinted />
+          <StatusPill status="Running" kind="success" tinted />
+          <StatusPill status="Unknown" tinted />
+        </div>
       </section>
 
       <section>
@@ -374,6 +389,37 @@ export function Gallery() {
       </section>
 
       <section>
+        <h2>Dialog</h2>
+        {/* The frame ConfirmDialog puts a question in, with the task left to
+            the caller: a title, a body, and one row of controls. */}
+        <div className="kit-gallery__row">
+          <Button size="xs" onClick={() => setModal(true)}>
+            customise
+          </Button>
+        </div>
+        {modal && (
+          <Dialog
+            title="Customise kind-local"
+            onClose={() => setModal(false)}
+            footer={
+              <>
+                <Button size="sm" variant="secondary" onClick={() => setModal(false)}>
+                  Reset
+                </Button>
+                <Button size="sm" onClick={() => setModal(false)}>
+                  Done
+                </Button>
+              </>
+            }
+          >
+            <div className="p-3 text-[0.8125rem] text-muted">
+              Whatever the task is. This one would hold a CustomizeMark.
+            </div>
+          </Dialog>
+        )}
+      </section>
+
+      <section>
         <h2>LoadingState</h2>
         <LoadingState />
         <LoadingState label="Loading pods" />
@@ -391,6 +437,57 @@ export function Gallery() {
       </section>
 
       <section>
+        <h2>Section</h2>
+        {/* The other shape beside Panel: a run of flat blocks divided by
+            hairline rules, which is what a detail body is made of. The first
+            carries no heading, and no rule is drawn above it. */}
+        <div className="card">
+          <Section>
+            <KV k="Replicas" v="9 ready · 12 desired" />
+            <KV k="Strategy" v="RollingUpdate · surge 25% · unavailable 0" />
+          </Section>
+          <Section title="Conditions">
+            <KV k={<StatusPill status="Available" kind="danger" tinted />} v="False · MinimumReplicasUnavailable" />
+            <KV k={<StatusPill status="ReplicaFailure" kind="success" tinted />} v="False · —" />
+          </Section>
+          <Section title="Labels">
+            <PairList breakValues pairs={[["app.kubernetes.io/name", "checkout-api"]]} />
+          </Section>
+        </div>
+      </section>
+
+      <section>
+        <h2>FactGrid</h2>
+        {/* The SAME rows as the run above, on a page instead of in a column:
+            the wrapper restyles a body it did not build, so a subject drawn in
+            both places is derived once. The heading spans, the pairs do not. */}
+        <div className="card">
+          <FactGrid>
+            <Section>
+              <KV k="Status" v="Running" />
+              <KV k="Node" v="eu-w4-c3-standard-a3" mono />
+              <KV k="Pod IP" v="10.44.21.4" mono />
+              <KV k="QoS class" v="Burstable" />
+              <KV k="Service account" v="cart-session-store" mono />
+              <KV k="Containers ready" v="1 of 1" />
+            </Section>
+            <Section title="Conditions">
+              <KV k={<StatusPill status="Ready" kind="success" tinted />} v="True · —" />
+            </Section>
+          </FactGrid>
+        </div>
+        {/* Two columns, for a surface with less room than a full tab. */}
+        <div className="card">
+          <FactGrid columns={2}>
+            <Section>
+              <KV k="Replicas" v="9 ready · 12 desired" />
+              <KV k="Up to date" v="9 of 12" />
+            </Section>
+          </FactGrid>
+        </div>
+      </section>
+
+      <section>
         <h2>Tabs</h2>
         <Tabs
           tabs={[
@@ -405,6 +502,33 @@ export function Gallery() {
         {/* The keyboard contract is the part worth checking here: the strip is
             one Tab stop, and Left/Right/Home/End move between tabs. */}
         <p className="text-[0.75rem] text-muted">showing: {tab}</p>
+        {/* The segmented variant: the same control and the same keyboard
+            contract, wearing the design's rounded pill instead of the window
+            chrome's flat strip. It is what a detail peek draws. */}
+        <Tabs
+          variant="segmented"
+          tabs={[
+            { id: "pods", label: "Details" },
+            { id: "services", label: "Containers" },
+            { id: "events", label: "Events" },
+          ]}
+          active={tab}
+          onChange={setTab}
+          label="Resource views, segmented"
+        />
+        {/* The underline variant: what the resource FULL TAB draws — words on
+            the page surface, the active one ruled in the accent. */}
+        <Tabs
+          variant="underline"
+          tabs={[
+            { id: "pods", label: "Overview" },
+            { id: "services", label: "YAML" },
+            { id: "events", label: "Events" },
+          ]}
+          active={tab}
+          onChange={setTab}
+          label="Resource views, underlined"
+        />
       </section>
 
       <section>
@@ -748,7 +872,7 @@ export function Gallery() {
             markup anywhere — which is why it is used standalone as often as
             through a list. */}
         <KV k="Status" v="Running" />
-        <KV k="Image" v="nginx:1.25" mono title="nginx:1.25" />
+        <KV k="Image" v="nginx:1.25" mono />
       </section>
 
       <section>
@@ -1273,6 +1397,14 @@ export function Gallery() {
             activeId={railCluster}
             onSelect={setRailCluster}
             onAdd={() => {}}
+            /* Right-click a mark: the items are the app's vocabulary, the
+               anchoring, the arrow keys and the dismissal are ContextMenu's. */
+            menuFor={(item) => [
+              { label: `Open ${item.name}`, onPick: () => setRailCluster(item.id) },
+              { label: "Customise…", onPick: () => {} },
+              { kind: "sep" },
+              { label: "Remove from workspace", danger: true, onPick: () => {} },
+            ]}
             items={[
               {
                 id: "prod-eu",
@@ -1320,6 +1452,27 @@ export function Gallery() {
             error="kubeconfig could not be read"
           />
           <p className="flex-1 p-3 text-[0.75rem] text-muted">no workspace yet</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>ResizeHandle</h2>
+        {/* The grip on its own, on the edge a docked-right pane wears it: drag
+            it LEFT to widen, or focus it and press ArrowLeft. The arrows
+            follow the edge, not the other handle. */}
+        <div className="card flex overflow-hidden" style={{ height: 160 }}>
+          <p className="flex-1 p-3 text-[0.75rem] text-muted">the view this sits beside</p>
+          <div className="relative flex shrink-0 flex-col" style={{ width: peekWidth, background: "var(--surface-sunk)" }}>
+            <ResizeHandle
+              label="the details"
+              width={peekWidth}
+              minWidth={180}
+              maxWidth={420}
+              edge="left"
+              onResize={setPeekWidth}
+            />
+            <p className="p-3 text-[0.75rem] text-muted">{peekWidth}px</p>
+          </div>
         </div>
       </section>
 
@@ -1374,10 +1527,15 @@ export function Gallery() {
             flagged
             status="CrashLoopBackOff"
             statusKind="danger"
+            /* The figures are drawn bare, so a value that wants a word on
+               screen carries its own — the `label` is the `sr-only` term and
+               is never rendered. Written the other way round this line read
+               `CrashLoopBackOff  9/12  17  6m`, which is the mistake, not the
+               example. `tone` mutes the age; the rest take ordinary ink. */
             facts={[
-              { label: "Ready", value: "9/12" },
-              { label: "Restarts", value: 17, tone: "sev" },
-              { label: "Age", value: "6m" },
+              { label: "Ready", value: "9/12 ready" },
+              { label: "Restarts", value: "17 restarts", tone: "sev" },
+              { label: "Age", value: "6m old", tone: "muted" },
             ]}
             actions={<IconButton icon={DotIcon} label="Open the full view" />}
             onClose={() => {}}

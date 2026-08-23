@@ -1,9 +1,20 @@
 import { useEffect, useState } from "react";
 import type { ClusterContext } from "@srelens/core";
-import { Button, ClusterRail, CustomizeMark, Drawer, Mark, type ClusterRailItem } from "@srelens/ui-kit";
+import {
+  Button,
+  ClusterRail,
+  CustomizeMark,
+  Dialog,
+  Mark,
+  NavIcon,
+  type ClusterRailItem,
+  type ContextMenuItem,
+  type IconComponent,
+} from "@srelens/ui-kit";
+import { Icons } from "../lib/icons";
 import { getMark, resetMark, setMark, useMark } from "../lib/marks";
 import { useInfos } from "../lib/probe";
-import { setActiveCluster, setWorkspaceClusters, useActiveCluster, useTabs } from "../lib/tabsStore";
+import { openTab, setActiveCluster, setWorkspaceClusters, useActiveCluster, useTabs } from "../lib/tabsStore";
 import { useWorkspaceView } from "../lib/workspace";
 
 export interface RailProps {
@@ -23,24 +34,67 @@ export interface RailProps {
  * The colours a cluster may be marked with.
  *
  * Tokens rather than hex, so a mark set in the dark theme is not a colour that
- * only worked there. Five, each named: {@link CustomizeMark} reads the label
+ * only worked there. Each is named too: {@link CustomizeMark} reads the label
  * aloud, and "#b4342a" names nothing. The custom picker beside them is still
- * there for anyone who wants a sixth.
+ * there for anyone who wants a twelfth.
+ *
+ * The `--mark-*` axis rather than the five semantic tokens this used to reuse
+ * (`--accent`, `--ok`, `--info`, `--warn`, `--sev`). Those say something — this
+ * is bad, this needs attention — and `--accent` moves with the accent axis, so
+ * a cluster marked violet turned blue for anyone who preferred a blue accent.
+ * A mark's colour is identity, not meaning, and identity should not move.
  */
 const PALETTE = [
-  { value: "var(--accent)", label: "Accent" },
-  { value: "var(--ok)", label: "Green" },
-  { value: "var(--info)", label: "Blue" },
-  { value: "var(--warn)", label: "Amber" },
-  { value: "var(--sev)", label: "Red" },
+  { value: "var(--mark-red)", label: "Red" },
+  { value: "var(--mark-orange)", label: "Orange" },
+  { value: "var(--mark-amber)", label: "Amber" },
+  { value: "var(--mark-green)", label: "Green" },
+  { value: "var(--mark-teal)", label: "Teal" },
+  { value: "var(--mark-blue)", label: "Blue" },
+  { value: "var(--mark-indigo)", label: "Indigo" },
+  { value: "var(--mark-purple)", label: "Purple" },
+  { value: "var(--mark-pink)", label: "Pink" },
+  { value: "var(--mark-slate)", label: "Slate" },
+  { value: "var(--mark-ink)", label: "Ink" },
 ];
+
+/**
+ * The symbols a mark may be drawn as, in place of its initials.
+ *
+ * The kit ships no icon set, so the catalogue is the app's — and it is the
+ * whole of what `mark: "icon"` can mean: an id stored here that is not in this
+ * list draws nothing, and {@link Mark} falls back to the initials underneath
+ * rather than to an empty coloured square.
+ *
+ * Named after the picture rather than after what the glyph means elsewhere in
+ * the app: this is someone choosing a badge for a cluster, and "Workloads" is
+ * not a thing anybody is picking. The ids are stored, so they are stable
+ * whatever the pictures behind them become.
+ */
+const SYMBOLS: Array<{ id: string; label: string; icon: IconComponent }> = [
+  { id: "server", label: "Server", icon: Icons.cluster },
+  { id: "layers", label: "Layers", icon: Icons.workloads },
+  { id: "box", label: "Box", icon: Icons.pods },
+  { id: "database", label: "Database", icon: Icons.statefulsets },
+  { id: "disk", label: "Disk", icon: Icons.storage },
+  { id: "network", label: "Network", icon: Icons.network },
+  { id: "shield", label: "Shield", icon: Icons.access },
+  { id: "key", label: "Key", icon: Icons.secrets },
+  { id: "terminal", label: "Terminal", icon: Icons.terminal },
+  { id: "compass", label: "Compass", icon: Icons.investigate },
+  { id: "wheel", label: "Ship's wheel", icon: Icons.helmreleases },
+  { id: "wrench", label: "Wrench", icon: Icons.toolbox },
+];
+
+const symbolFor = (id: string | undefined): IconComponent | undefined =>
+  SYMBOLS.find((symbol) => symbol.id === id)?.icon;
 
 /** An image mark is inlined into the settings file, so it has to stay small. */
 const MAX_IMAGE_BYTES = 64 * 1024;
 
 /**
- * The strip of cluster marks down the edge of the window, and the panel that
- * edits one of them.
+ * The strip of cluster marks down the edge of the window, the menu each one
+ * answers, and the dialog that edits how it looks.
  *
  * Everything drawn is the kit's; what lives here is the four stores the kit is
  * not allowed to see. The workspace says which clusters and in what order, the
@@ -54,17 +108,24 @@ const MAX_IMAGE_BYTES = 64 * 1024;
  * only covers the window between a kubeconfig changing and the store catching
  * up, and a mark for a cluster that is not there is worse than one mark fewer.
  *
- * The menu gesture opens the drawer rather than a context menu. The kit's
- * ContextMenu needs an element ref to anchor to and the rail hands back an
- * event, not a ref; the drawer is where the two things this menu would offer —
- * customise, remove — already live, so the gesture opens it directly.
+ * What the menu offers, and what it deliberately does not. The design draws a
+ * `Disconnect` in the destructive slot, and there is nothing behind that verb:
+ * core connects (`connectCluster`, which is a probe) and deletes a context out
+ * of the kubeconfig on disk (`deleteContext`, which is a far larger act than
+ * this menu implies), and the `disconnected` link state is derived from a
+ * probe's answer and re-derived by the next one — writing it by hand would be
+ * a claim the next probe erases. So the item keeps the name of what it really
+ * does, which is to drop the cluster from this workspace; a red row wired to
+ * the nearest available verb is worse than an honest one. `Connection details`
+ * opens `/connections`, which is a route this shell already knows and titles,
+ * though the screen behind it is still the Placeholder.
  *
  * The marks and the probes are read once for the whole list rather than once
  * per cluster: the number of clusters changes between renders, so a hook per
  * item would be a hook count that changes with the list, which React refuses.
  * `useInfos` is the probe store's whole-record snapshot, which exists for this.
  * The marks have no such hook, so the subscription rides on the `useMark` call
- * the drawer's editor needs anyway — that hook subscribes whatever id it is
+ * the dialog's editor needs anyway — that hook subscribes whatever id it is
  * asked about, so it re-renders this rail on any mark change and the items then
  * read the plain `getMark` beside it.
  */
@@ -81,10 +142,10 @@ export function Rail({ contexts, onConnect, error }: RailProps) {
   const value = useMark(target?.stableId ?? "", target?.name ?? "");
   const infos = useInfos();
 
-  // A context can leave while its drawer is open — a kubeconfig rewritten under
-  // the app. The drawer is already gone by then, since `target` cannot resolve;
+  // A context can leave while its dialog is open — a kubeconfig rewritten under
+  // the app. The dialog is already gone by then, since `target` cannot resolve;
   // this forgets which cluster it was about, so a context that comes back does
-  // not bring a panel nobody asked for back with it.
+  // not bring a dialog nobody asked for back with it.
   const stale = editing !== null && !byId.has(editing);
   useEffect(() => {
     if (stale) setEditing(null);
@@ -109,6 +170,10 @@ export function Rail({ contexts, onConnect, error }: RailProps) {
           name={mark.name}
           short={mark.short}
           color={mark.color}
+          // A symbol this build does not have is `undefined` rather than a
+          // blank: the mark then draws the initials, which say more than an
+          // empty square does.
+          icon={mark.mark === "icon" ? symbolFor(mark.icon) : undefined}
           imageSrc={mark.mark === "image" ? mark.imageSrc : undefined}
           withBadge={mark.withText}
           size="sm"
@@ -139,31 +204,65 @@ export function Rail({ contexts, onConnect, error }: RailProps) {
     setEditing(null);
   }
 
+  function menuFor(item: ClusterRailItem): ContextMenuItem[] {
+    return [
+      { label: `Open ${item.name}`, onPick: () => setActiveCluster(item.id) },
+      // The ellipsis is the promise that this one asks something more before
+      // anything happens — it opens the dialog below.
+      { label: "Customise…", icon: Icons.edit, onPick: () => setEditing(item.id) },
+      { kind: "sep" },
+      { label: "Connection details", onPick: () => openTab("/connections") },
+      // Named for what it does. See the note above on the design's Disconnect.
+      { label: "Remove from workspace", icon: Icons.trash, danger: true, onPick: () => remove(item.id) },
+    ];
+  }
+
+  const close = () => setEditing(null);
+
   return (
     <>
       <ClusterRail
         items={items}
         activeId={active ?? undefined}
         onSelect={setActiveCluster}
-        onMenu={(id) => setEditing(id)}
+        menuFor={menuFor}
         onAdd={onConnect}
         error={error}
       />
       {target && (
-        <Drawer open title={target.name} onClose={() => setEditing(null)}>
+        <Dialog
+          title={`Customise ${target.name}`}
+          onClose={close}
+          footer={
+            <>
+              {/* Reset is the editor's own, but it belongs beside Done rather
+                  than in a rule-topped row of its own above it: the design
+                  draws one row of controls, and CustomizeMark draws its own
+                  only when it is handed an `onReset` to draw it for. */}
+              <Button variant="secondary" size="sm" onClick={() => resetMark(target.stableId)}>
+                {/* The kit draws the glyph — NavIcon is what it offers for a
+                    decorative one — so nothing here renders an icon set's own
+                    element. */}
+                <NavIcon icon={Icons.revert} /> Reset
+              </Button>
+              {/* Every edit is already kept — the editor writes through on each
+                  keystroke — so this closes rather than commits. It is here
+                  because a dialog with no way out but its own × reads as one
+                  that has not been answered. */}
+              <Button variant="primary" size="sm" onClick={close}>
+                Done
+              </Button>
+            </>
+          }
+        >
           <CustomizeMark
             value={value}
             onChange={(next) => setMark(target.stableId, next)}
-            onReset={() => resetMark(target.stableId)}
             colors={PALETTE}
+            icons={SYMBOLS}
             maxImageBytes={MAX_IMAGE_BYTES}
           />
-          <div className="mt-3 flex justify-end px-3">
-            <Button variant="danger" size="sm" onClick={() => remove(target.stableId)}>
-              Remove from workspace
-            </Button>
-          </div>
-        </Drawer>
+        </Dialog>
       )}
     </>
   );

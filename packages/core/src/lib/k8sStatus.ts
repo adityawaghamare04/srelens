@@ -1,0 +1,311 @@
+/**
+ * One resource's status line, derived from a fetched object rather than from a
+ * list row.
+ *
+ * Every health predicate srelens already had — `podFlagged`,
+ * `deploymentFlagged` and their siblings in the new design's column table — is
+ * typed on a *summary row* the backend built (`PodSummary`, `DeploymentSummary`
+ * …). A detail pane holds a `K8sObject` instead, and has no row to ask. This
+ * module answers the same questions off the object, reusing the rules rather
+ * than restating them: `phaseKind` for a phase word's tone, `waitingKind` for a
+ * stuck container's.
+ *
+ * The word, the tone and the flag are decided together — see `Verdict` below.
+ * That is deliberate: they were once derived by separate functions, and a
+ * `Succeeded` pod ended up with a green pill and a red "needs attention" dot at
+ * the same time. Two readings of one fact can disagree; one reading cannot.
+ */
+import { phaseKind, waitingKind, type HealthKind } from "./k8sHealth";
+import { asArray, asRecord, str } from "./k8sRaw";
+import type { K8sObject } from "./manifest";
+
+/** A status word with the tone and the dot that go with it. */
+export interface StatusVerdict {
+  /**
+   * The kind's own status word — "Running", "Degraded", "Pending",
+   * "Succeeded", "Failed", "CrashLoopBackOff", "Complete", "Suspended",
+   * "Ready,SchedulingDisabled". One kind's vocabulary is not another's; this
+   * is whatever that kind calls the state it is in.
+   */
+  status: string;
+  /** Tone for the word, and for the unhealthy dot when `flagged`. */
+  health: HealthKind;
+  /** Whether the resource needs attention — a list row's dot, or the detail header's. */
+  flagged: boolean;
+}
+
+export interface ResourceStatusLine extends StatusVerdict {
+  /**
+   * The whole ready phrase, its noun included — "9/12 ready", "1/1 ready",
+   * "3/3 complete" — for rendering verbatim, or `null` where the kind has no
+   * such count. The noun is part of the string because it is not "ready" for
+   * every kind: a Job counts completions, not readiness.
+   */
+  readyText: string | null;
+}
+
+/**
+ * The six (tone, dot) pairs a status word may carry, and the ONLY place in
+ * srelens where a tone and a flag are written side by side. Every branch below
+ * picks one of these by name and supplies a word; none of them can pair a
+ * green pill with a red dot, because there is no verdict that says that.
+ *
+ * The pairs are not derivable from the tone alone, which is why they are
+ * enumerated rather than computed: a running Job is amber and NOT flagged
+ * (`jobFlagged` says only a failure earns the dot — still running is not yet
+ * wrong), while a Pending pod is amber and IS flagged.
+ */
+const WELL = { health: "success", flagged: false } as const;
+/** Deliberately at rest: scaled to zero, suspended. Nothing to see. */
+const AT_REST = { health: "neutral", flagged: false } as const;
+/** Working, and expected to be: an active Job. Amber, but no dot. */
+const IN_FLIGHT = { health: "warning", flagged: false } as const;
+/** On its way, or held back — worth a look but not a failure. */
+const UNSETTLED = { health: "warning", flagged: true } as const;
+const BROKEN = { health: "danger", flagged: true } as const;
+/** A word we do not know. No colour it has not earned, but still a dot: not
+ *  recognising a state is not the same as knowing it is fine. */
+const UNREADABLE = { health: "neutral", flagged: true } as const;
+
+type Verdict =
+  | typeof WELL
+  | typeof AT_REST
+  | typeof IN_FLIGHT
+  | typeof UNSETTLED
+  | typeof BROKEN
+  | typeof UNREADABLE;
+
+const verdict = (status: string, v: Verdict): StatusVerdict => ({ status, ...v });
+
+/** A count off `status`/`spec`, absent meaning zero (as the backend's list summaries read it). */
+function count(value: unknown): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * The word a kind uses when nothing at all is desired. Only core knows which
+ * kind uses which: a Deployment at zero replicas is "Scaled down", a DaemonSet
+ * matching no node is "Not scheduled", and a caller that picked its own word
+ * would be a second table of the same fact.
+ */
+function zeroWord(kind: string): string {
+  return kind === "DaemonSet" ? "Not scheduled" : "Scaled down";
+}
+
+/**
+ * Ready-out-of-desired, shared by every kind that scales: fewer ready than
+ * desired is Degraded, which is `deploymentFlagged`/`statefulSetFlagged`/
+ * `daemonSetFlagged`'s rule (`ready < desired`) read off the object.
+ *
+ * Nothing desired is not a failure — a Deployment scaled to zero, or a
+ * DaemonSet whose selector matches no node, is doing exactly what it was
+ * asked. The list's flagged rules agree: `0 < 0` is false, so no dot.
+ *
+ * Exported on the two bare counts, not on an object, for the same reason
+ * {@link podStatus} is: a list row carries the counts and no object at all
+ * (`DeploymentSummary.ready` is the string "1/3", `DaemonSetSummary` a pair of
+ * numbers), and the row's pill has to say what the header says about the same
+ * workload. It did not — the Workloads table paired "Progressing"/amber and
+ * "Available"/green by hand while this returned "Degraded"/red and
+ * "Scaled down"/neutral for the identical object, so double-clicking a row
+ * contradicted it. (#331)
+ */
+export function scaledStatus(kind: string, ready: number, desired: number): StatusVerdict {
+  if (desired === 0) return verdict(zeroWord(kind), AT_REST);
+  if (ready < desired) return verdict("Degraded", BROKEN);
+  return verdict("Running", WELL);
+}
+
+/** {@link scaledStatus} with the ready phrase only a detail header shows. */
+function scaledLine(kind: string, ready: number, desired: number): ResourceStatusLine {
+  return { ...scaledStatus(kind, ready, desired), readyText: `${ready}/${desired} ready` };
+}
+
+/**
+ * A workload's ready replicas out of its desired ones.
+ *
+ * `status.readyReplicas`, NOT `status.availableReplicas`. They are different
+ * fields: available is the subset of ready replicas that have also outlived
+ * `minReadySeconds`, so a healthy rollout sits at ready > available for a
+ * while. A line that says "ready" has to count the ready ones — the backend's
+ * `DeploymentSummary.ready` reads the same field, so the header and the list
+ * agree on one number.
+ */
+function replicaStatusLine(kind: string, object: K8sObject): ResourceStatusLine {
+  const spec = asRecord(object.spec);
+  const status = asRecord(object.status);
+  return scaledLine(kind, count(status.readyReplicas), count(spec.replicas));
+}
+
+/** A DaemonSet counts nodes, not replicas: `numberReady` of `desiredNumberScheduled`. */
+function daemonSetStatusLine(object: K8sObject): ResourceStatusLine {
+  const status = asRecord(object.status);
+  return scaledLine("DaemonSet", count(status.numberReady), count(status.desiredNumberScheduled));
+}
+
+/** The phases past which a pod is finished, and a container state cannot speak for it. */
+const TERMINAL_POD_PHASES = ["Succeeded", "Failed"];
+
+/**
+ * `podFlagged`'s rule as a verdict: anything the phase table does not call
+ * healthy earns the dot, and keeps its own tone while doing so.
+ */
+function phaseVerdict(phase: string): Verdict {
+  const health = phaseKind(phase);
+  if (health === "success") return WELL;
+  if (health === "warning") return UNSETTLED;
+  if (health === "danger") return BROKEN;
+  return UNREADABLE;
+}
+
+/**
+ * A pod's status word, tone and dot, from the two facts a list row and a
+ * fetched object can both supply: the phase, and the reason a container is
+ * waiting (`""` when none is).
+ *
+ * `status.phase` alone is not enough, and this is not a nicety: a pod whose
+ * only container sits in `CrashLoopBackOff` still reports phase `Running`, so
+ * anything reading the phase by itself draws a crash-looping pod green and
+ * healthy. kubectl shows the waiting reason for exactly this reason, and so do
+ * we — in the list and in the detail header, through this one function, so the
+ * two can never say different things about the same pod.
+ *
+ * A terminal pod is left alone: its containers are terminated, and a stale
+ * waiting entry must not drag a finished pod back to unhealthy.
+ */
+export function podStatus(phase: string, waitingReason = ""): StatusVerdict {
+  const word = phase || "Unknown";
+  if (waitingReason && !TERMINAL_POD_PHASES.includes(word)) {
+    return verdict(waitingReason, waitingKind(waitingReason) === "danger" ? BROKEN : UNSETTLED);
+  }
+  return verdict(word, phaseVerdict(word));
+}
+
+/**
+ * The same reading, off a fetched Pod: pull the phase and the first waiting
+ * reason out of the object — the two fields `summarise_pod` puts on a
+ * `PodSummary` — and hand them to `podStatus`, then add the ready count only
+ * a detail header shows.
+ */
+function podStatusLine(object: K8sObject): ResourceStatusLine {
+  const status = asRecord(object.status);
+  const statuses = asArray(status.containerStatuses).map(asRecord);
+  const ready = statuses.filter((c) => c.ready === true).length;
+  // No container statuses at all means the kubelet has not reported yet —
+  // "0/0 ready" would read as a fact when it is an absence.
+  const readyText = statuses.length > 0 ? `${ready}/${statuses.length} ready` : null;
+  // First waiting container, in container order — the same one the backend
+  // summarises onto a row.
+  const waiting = statuses
+    .map((c) => str(asRecord(asRecord(c.state).waiting).reason))
+    .find((reason) => reason !== "");
+  return { ...podStatus(str(status.phase), waiting), readyText };
+}
+
+/**
+ * A Job's outcome, on the list's own rule (`jobColumns`' status pill and
+ * `jobFlagged`): a failure is a failure, an in-flight Job is amber but is NOT
+ * flagged — still running is not yet wrong — and anything else has finished.
+ */
+export function jobStatus(failed: number, active: number): StatusVerdict {
+  if (failed > 0) return verdict("Failed", BROKEN);
+  if (active > 0) return verdict("Active", IN_FLIGHT);
+  return verdict("Complete", WELL);
+}
+
+/** {@link jobStatus} off a fetched Job, plus the completion count a header shows. */
+function jobStatusLine(object: K8sObject): ResourceStatusLine {
+  const spec = asRecord(object.spec);
+  const status = asRecord(object.status);
+  // An unset `completions` means one, per the Job API's own default.
+  const completions = spec.completions != null ? count(spec.completions) : 1;
+  const readyText = `${count(status.succeeded)}/${completions} complete`;
+  return { ...jobStatus(count(status.failed), count(status.active)), readyText };
+}
+
+/**
+ * A CronJob is suspended or it is not — the list's two pills. It has no
+ * unhealthy state of its own (a CronJob deliberately has no `flagged` rule:
+ * the health lives in the Jobs it spawns), and no ready count.
+ */
+export function cronJobStatus(suspended: boolean): StatusVerdict {
+  return suspended ? verdict("Suspended", AT_REST) : verdict("Active", WELL);
+}
+
+/** {@link cronJobStatus} off a fetched CronJob's own `spec.suspend`. */
+function cronJobStatusLine(object: K8sObject): ResourceStatusLine {
+  return { ...cronJobStatus(asRecord(object.spec).suspend === true), readyText: null };
+}
+
+/**
+ * A node's readiness, as the backend's `NodeSummary.status` derives it: the
+ * `Ready` condition True is "Ready", any other value "NotReady", and no such
+ * condition at all "Unknown".
+ *
+ * Cordoning is appended the way kubectl prints it, and warns: the list already
+ * badges `SchedulingDisabled` in the warning tone, and a node that is refusing
+ * new pods is a thing the reader wants marked. A node that is also NotReady
+ * keeps the worse of the two verdicts.
+ */
+export function nodeStatus(readiness: string, unschedulable: boolean): StatusVerdict {
+  const word = readiness || "Unknown";
+  const verdictForWord = phaseVerdict(word);
+  if (!unschedulable) return verdict(word, verdictForWord);
+  // Compared on the tone, not on the constant's identity: everything else in
+  // this file is safe by construction, and an identity check would be safe
+  // only by coincidence — a `phaseVerdict` that ever returned a fresh
+  // structurally-equal object would break this line silently.
+  return verdict(
+    `${word},SchedulingDisabled`,
+    verdictForWord.health === "danger" ? BROKEN : UNSETTLED,
+  );
+}
+
+/**
+ * {@link nodeStatus} off a fetched Node: the readiness word the backend's
+ * `NodeSummary.status` carries, derived here from the `Ready` condition
+ * instead — True is "Ready", any other value "NotReady", no such condition at
+ * all "Unknown".
+ */
+function nodeStatusLine(object: K8sObject): ResourceStatusLine {
+  const conditions = asArray(asRecord(object.status).conditions).map(asRecord);
+  const ready = conditions.find((c) => str(c.type) === "Ready");
+  const word = ready === undefined ? "Unknown" : str(ready.status) === "True" ? "Ready" : "NotReady";
+  return { ...nodeStatus(word, asRecord(object.spec).unschedulable === true), readyText: null };
+}
+
+/**
+ * The status line for a fetched resource, or `null` for a kind that has none.
+ *
+ * `kind` is passed rather than read off `object.kind` for the same reason the
+ * detail bodies take it: the caller already knows which kind it asked for, and
+ * a `K8sObject` is whatever JSON came back.
+ *
+ * A kind that is not listed here is not a gap. A ConfigMap has no health, and
+ * a custom resource's `status` is its own CRD's business — a `status.phase`
+ * that happens to read "Degraded" on some operator's object means whatever
+ * that operator decided. Returning `null` says "this pane draws no status
+ * line", which is the honest answer; guessing would put a red dot on a healthy
+ * resource.
+ */
+export function resourceStatusLine(kind: string, object: K8sObject): ResourceStatusLine | null {
+  switch (kind) {
+    case "Pod":
+      return podStatusLine(object);
+    case "Deployment":
+    case "StatefulSet":
+    case "ReplicaSet":
+      return replicaStatusLine(kind, object);
+    case "DaemonSet":
+      return daemonSetStatusLine(object);
+    case "Job":
+      return jobStatusLine(object);
+    case "CronJob":
+      return cronJobStatusLine(object);
+    case "Node":
+      return nodeStatusLine(object);
+    default:
+      return null;
+  }
+}

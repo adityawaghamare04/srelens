@@ -3,7 +3,7 @@ import { describe as suite, it, expect } from "vitest";
 import { describe, isBuiltInKind, screenFor } from "./routes";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
-import { Resources } from "../screens/Resources";
+import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
 
 suite("isBuiltInKind", () => {
@@ -54,6 +54,17 @@ suite("describe", () => {
 
   it("names a resource detail after the resource", () => {
     expect(describe("/resources/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
+  });
+
+  it("names a /k/ resource detail after the resource, not its kind or slug", () => {
+    // /k/Pod/default/web-1 shares a prefix with the /k/pods list route — the
+    // detail branch must win, or this would title itself "Pod/default/web-1"
+    // and carry kind "workloads" via the list-route fallback below.
+    expect(describe("/k/Pod/default/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
+  });
+
+  it("names a cluster-scoped /k/ resource detail the same way", () => {
+    expect(describe("/k/Node/-/worker-1", "c")).toMatchObject({ title: "worker-1", kind: "resource", sub: "c" });
   });
 
   it("titles the row menu's logs/shell/forward tabs distinctly from the bare resource tab and from each other", () => {
@@ -114,6 +125,30 @@ suite("screenFor", () => {
     // One screen answers every `/k/` route, so a slug nobody enumerated —
     // a CRD this cluster happens to have — reaches the same one.
     expect(screenFor("/k/widgets.example.com")).toBe(Resources);
+  });
+
+  it("resolves a detail route to the detail screen, not the list screen they share a prefix with", () => {
+    // /k/pods (a list) and /k/Pod/default/web-1 (a detail) share the "/k/"
+    // prefix. Get this wrong and every detail route in the app renders the
+    // list screen as if the resource's name were just another kind slug.
+    expect(screenFor("/k/pods")).toBe(Resources);
+    expect(screenFor("/k/Pod/default/web-1")).toBe(ResourceDetailScreen);
+    // The cluster-scoped sentinel is a namespace segment like any other, so a
+    // Node's route resolves the same way a Pod's does.
+    expect(screenFor("/k/Node/-/worker-1")).toBe(ResourceDetailScreen);
+  });
+
+  it("keeps a custom resource's detail route on the detail screen", () => {
+    // A CRD's kind can be anything, including something that reads like a
+    // slug — the segment COUNT is what tells a detail route from a list one.
+    expect(screenFor("/k/Widget/default/left")).toBe(ResourceDetailScreen);
+    expect(screenFor("/k/widgets.example.com")).toBe(Resources);
+  });
+
+  it("resolves a detail route whose name needed encoding", () => {
+    // `detailRoute` percent-encodes every segment; a name with a slash in it
+    // would otherwise split into six and match nothing at all.
+    expect(screenFor("/k/Pod/default/web%2F1")).toBe(ResourceDetailScreen);
   });
 
   it("still refuses a route with no screen", () => {

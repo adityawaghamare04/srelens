@@ -354,12 +354,40 @@
     white-space: nowrap;
   }
   .seg-btn:hover { color: var(--ink); }
-  .seg-btn[data-on="true"] {
+  /* Two flags, one look. `data-on` is what a radiogroup of segments emits
+     (CustomizeMark); `data-active` is what a tablist emits (Tabs' segmented
+     variant), which the ARIA contract already spells `aria-selected`. The
+     design system has one segmented control, so both drive the same pill. */
+  .seg-btn[data-on="true"],
+  .seg-btn[data-active="true"] {
     background: var(--surface);
     color: var(--ink);
     box-shadow: 0 1px 2px rgba(20, 18, 25, 0.08);
   }
-  [data-theme="dark"] .seg-btn[data-on="true"] { box-shadow: none; background: var(--surface-raised); }
+  [data-theme="dark"] .seg-btn[data-on="true"],
+  [data-theme="dark"] .seg-btn[data-active="true"] { box-shadow: none; background: var(--surface-raised); }
+  /* Five panes of a resource detail do not fit a 260px peek. The control
+     carries its own overflow rather than pushing the pane sideways, and hides
+     the bar for the same reason the window's tab strip does: inside a control
+     this short it would eat the labels. Scoped to the variant so a three-way
+     radiogroup keeps sizing to its content. */
+  .seg[data-variant="segmented"] {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .seg[data-variant="segmented"]::-webkit-scrollbar { display: none; }
+
+  /* A bare figure in a pane header. `.path` would do the size and the lining
+     up, but it is muted, and the design reads `Degraded  9/12 ready  84d` with
+     the ratio in normal ink and only the age quiet. Muting is therefore a tone
+     the caller passes, not the default this class bakes in. */
+  .fact {
+    font-size: 0.75rem;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
 
   /* status: a dot and a word. Colour is reserved for what is wrong. */
   .status {
@@ -370,6 +398,10 @@
     color: var(--ink-muted);
   }
   .status .dot { width: 6px; height: 6px; border-radius: 99px; flex-shrink: 0; }
+  /* Emitted by StatusPill only under `tinted`, and only for danger and warn.
+     The colour comes from the tone as an inline style — the weight is here,
+     because a bad state that is merely red is nothing to a reader who cannot
+     see it, and the extra weight is the second channel. */
   .status[data-bad="true"] { font-weight: 500; }
 
   .row-ask {
@@ -563,7 +595,39 @@
   }
   .pane-body { flex: 1; min-height: 0; overflow: auto; }
 
+  /* A flat titled section: the run of blocks a detail body is made of, divided
+     by hairline rules rather than boxed in cards. `Panel` draws the card and
+     keeps its call sites; this is the other shape, and the two are not one
+     component with a flag because the card has a ruled head, a lifted surface
+     and a border, none of which survive here.
+
+     The rule is drawn between siblings, never around them, so the first block
+     in a run has no line above it and the last none below — the divider is the
+     thing, not a frame. */
+  .section { padding: 0.6rem 0.75rem; }
   .section + .section { border-top: 1px solid var(--rule); }
+  .section-title { margin-bottom: 0.3rem; }
+
+  /* A section that folds: the heading itself is the control, so the whole
+     line is clickable rather than a caret the size of a full stop beside it.
+     Inherits the heading's own type — this is the same line it was, wearing a
+     caret that turns with the state. */
+  .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .section-caret { transition: transform 120ms ease; color: var(--ink-faint); }
+  .section-caret[data-open="true"] { transform: rotate(90deg); }
+  /* A closed block is its heading and nothing else, so the gap the heading
+     kept for content it no longer has goes with it. */
+  .section[data-open="false"] .section-title { margin-bottom: 0; }
+
   .section-head {
     position: sticky;
     top: 0;
@@ -604,6 +668,35 @@
     font-variant-numeric: tabular-nums;
   }
   .kv-v.code { font-size: 0.6875rem; }
+
+  /* The same fact rows, read across a page instead of down a column.
+
+     `FactGrid` wraps a body it did not build — the peek and the full tab draw
+     one subject from one derivation — so every rule here is a descendant of
+     `.factgrid` and the peek's own rows are untouched by it existing. The
+     column count arrives as `--fact-cols` because a class per count is a class
+     the stylesheet has to enumerate. */
+  .factgrid { --fact-cols: 3; }
+  .factgrid .section {
+    display: grid;
+    grid-template-columns: repeat(var(--fact-cols), minmax(0, 1fr));
+    column-gap: 1.5rem;
+    align-content: start;
+  }
+  /* A heading, a table, a list of pods: everything that is not a pair takes
+     the whole width. A table in a third of a grid is not a narrower table. */
+  .factgrid .section > :not(.kv) { grid-column: 1 / -1; }
+  /* `Table` seats itself inside a `display: contents` wrapper, so the wrapper
+     never becomes a grid item and the rule above lands on nothing — it is the
+     TABLE that gets placed. Naming it directly is what keeps a Pod Volumes or
+     a related-pods table out of one column of three. */
+  .factgrid .section table { grid-column: 1 / -1; }
+  .factgrid .kv {
+    display: block;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent);
+  }
+  .factgrid .kv-k { margin-bottom: 0.1rem; }
 
   /* a quiet field label — sentence case, no tracking */
   .field-label {
@@ -855,6 +948,44 @@
     cursor: default;
     user-select: none;
   }
+  /* The 108px above is the window's document tabs: a tab named `a.yaml` is
+     still a target worth hitting, and the chrome has the width to spend. A
+     `Tabs` strip does not — five panes at that minimum need 540px and the
+     resource peek runs 260-640 with a 352 default, so the strip scrolled
+     sideways at every ordinary width. Scoped by the attribute only `Tabs`
+     emits, so `TabStrip` keeps the minimum it was written for. (#331) */
+  .tabstrip[data-variant] .tab { min-width: 0; }
+
+  /* The third tab skin. The window chrome fills its active tab and the peek
+     raises a pill; a page does neither — the words sit on the surface and the
+     accent rules under the one you are reading. Added when the design asked
+     for it and not before, which is the only reason a design system is allowed
+     a third of anything. */
+  .utabs {
+    display: flex;
+    align-items: stretch;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .utabs::-webkit-scrollbar { display: none; }
+  .utab {
+    position: relative;
+    padding: 0.4rem 0.55rem;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--ink-muted);
+    white-space: nowrap;
+  }
+  .utab:hover { color: var(--ink-soft); }
+  .utab[data-active="true"] {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+    font-weight: 600;
+  }
   .tab:hover { background: var(--field); }
   .tab[data-active="true"] {
     background: var(--surface);
@@ -988,6 +1119,19 @@
     border-right: 1px solid var(--rule);
   }
   .resize-handle:hover { border-right-color: var(--accent); }
+  /* The mirrored grip. A pane docked on the right of the screen carries its
+     handle on its LEFT edge, so the rule it draws belongs on that side too —
+     the base rule above is one-sided, and left alone it would draw the grip's
+     border down the far side of the pane. In the same @layer deliberately:
+     this codebase declares its cascade layers, and a components rule that
+     landed in `utilities` would win and lose against the wrong things. */
+  .resize-handle[data-edge="left"] {
+    right: auto;
+    left: -2px;
+    border-right: none;
+    border-left: 1px solid var(--rule);
+  }
+  .resize-handle[data-edge="left"]:hover { border-left-color: var(--accent); }
 
   /* --- context menu ----------------------------------------------- */
   .ctx-menu {

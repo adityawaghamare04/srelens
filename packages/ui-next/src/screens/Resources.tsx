@@ -14,6 +14,7 @@ import {
   FilterBar,
   LiveSignal,
   LoadingState,
+  ResizeHandle,
   Screen,
   Table,
   filterTableData,
@@ -22,23 +23,28 @@ import {
 import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
+import { detailRoute, parseDetailRoute } from "../lib/detailRoute";
 import { customDescriptorFor } from "../lib/kinds/custom";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { KindDescriptor, ListRow } from "../lib/kinds/types";
+import { clampPeekWidth, savePeekWidth, setPeekWidth, usePeekBounds, usePeekWidth } from "../lib/peekWidth";
 import { useResourceList } from "../lib/resourceList";
 import { describe, isBuiltInKind } from "../lib/routes";
+import { openTab } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
+import { ResourceDetail } from "./detail/ResourceDetail";
+import { ResourceTab } from "./detail/ResourceTab";
 import { ResourceBulk } from "./ResourceBulk";
 import { useRowMenu } from "./ResourceMenu";
 import {
   NamespaceErrorAlert,
   NamespacePicker,
   NoClusterScreen,
+  StaleSelectionAlert,
   columnOptionsFor,
   emptyTableCopy,
-  openResourceTab,
   toggleColumnVisibility,
   useResourceTabView,
 } from "./resourceShell";
@@ -204,6 +210,38 @@ function KindList({
   // render.
   useEffect(() => setSelected(new Set()), [selection]);
 
+  // The peek's subject: which row the pane beside the table is showing, or
+  // `null` for no pane at all. Only the row's identity is held — the pane
+  // reads the object itself — so nothing here can go stale against the list.
+  //
+  // The setter returns the PREVIOUS value when the row clicked is the one
+  // already on show, so a second click on the same row is not even a state
+  // change. `useObject` is keyed on the primitives below and would not refetch
+  // either way, but a re-render per click of a list that already answers is
+  // work nobody asked for, and holding the identity stable says so.
+  const [peek, setPeek] = useState<{ namespace: string | null; name: string } | null>(null);
+
+  // How wide that pane is. Module state rather than this screen's, so the
+  // width the reader dragged is the width every resource list opens at — and
+  // so it outlives the tab.
+  //
+  // The bounds are this screen's own business, though, and they come off the
+  // row below rather than off the window: the cluster rail and the navigation
+  // sidebar are outside this screen and the sidebar is itself resizable, so
+  // the window is space the list does not have. Clamped here rather than in
+  // the store, and on the way out rather than written back, so a pane
+  // squeezed by a narrow row widens again when the row does.
+  const listRow = usePeekBounds();
+  const peekWidth = clampPeekWidth(usePeekWidth(), listRow.bounds);
+
+  function peekAt(rowNamespace: string | null, rowName: string) {
+    setPeek((prev) =>
+      prev && prev.name === rowName && prev.namespace === rowNamespace
+        ? prev
+        : { namespace: rowNamespace, name: rowName },
+    );
+  }
+
   const lower = title.toLocaleLowerCase();
 
   function onToggleColumn(key: string) {
@@ -237,6 +275,22 @@ function KindList({
   }
 
   const columnOptions = columnOptionsFor(allColumns);
+
+  // Read out here rather than inside the function below: a function
+  // declaration closes over the widest type `descriptor` ever has, so the
+  // narrowing the guard above performed is not in scope within one.
+  const k8sKind = descriptor.k8sKind;
+
+  /**
+   * Promote a row to a tab of its own — the row's double click and the peek
+   * header's "Open tab" alike. One expression rather than two: `openTab`
+   * dedupes by route string, so two spellings of the same resource would
+   * quietly become two tabs, which is the very bug the route model was built
+   * to stop.
+   */
+  function openRowTab(rowNamespace: string | null, rowName: string) {
+    openTab(detailRoute(k8sKind, rowNamespace, rowName), { clusterName: name });
+  }
 
   // Loading and error each replace the table with their own state below; the
   // stale-rows alert and the bulk bar only ever mean something once there is
@@ -283,6 +337,14 @@ function KindList({
 
       {!clusterScoped && <NamespaceErrorAlert error={namespaceError} />}
 
+      {!clusterScoped && (
+        <StaleSelectionAlert
+          selection={selection}
+          namespaces={namespaces}
+          onReset={() => setNamespaces(context.stableId, [])}
+        />
+      )}
+
       {showRows && list.error && (
         // Rows and an error together: the last good list is still on screen
         // and is no longer being refreshed. Emptying the table would throw
@@ -308,35 +370,154 @@ function KindList({
           onDone={() => setSelected(new Set())}
         />
       )}
-      <div className="scroll min-h-0 flex-1">
-        {list.status === "loading" ? (
-          <LoadingState label={`Loading ${lower}`} />
-        ) : list.status === "error" ? (
-          <ErrorState
-            title={`Could not list ${lower} on ${name}`}
-            detail={list.error}
-            onRetry={list.reload}
-          />
-        ) : (
-          <Table
-            columns={renderedColumns}
-            data={filtered}
-            getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
-            selection={{ selected, onChange: setSelected }}
-            sort={sort}
-            onSortChange={setSort}
-            activeFilterKey={filterKey}
-            onActiveFilterKeyChange={setFilterKey}
-            onRowActivate={(row) => openResourceTab(row.name, name)}
-            rowMenu={rowMenuItems}
-            rowMenuLabel={`${title} actions`}
-            {...emptyTableCopy(rows.length, lower, name, clusterScoped ? "" : " in the namespaces you are looking at")}
-          />
+      {/* The list and the peek, side by side. No split-pane component: the kit
+          has none, and one call site does not justify inventing one. `min-w-0`
+          on the table's own column is what keeps the peek from widening this
+          row past the window — without it a flex item refuses to shrink below
+          its content and the whole screen scrolls sideways instead of the
+          table scrolling inside itself. */}
+      <div ref={listRow.ref} className="flex min-h-0 flex-1">
+        <div className="scroll min-h-0 min-w-0 flex-1">
+          {list.status === "loading" ? (
+            <LoadingState label={`Loading ${lower}`} />
+          ) : list.status === "error" ? (
+            <ErrorState
+              title={`Could not list ${lower} on ${name}`}
+              detail={list.error}
+              onRetry={list.reload}
+            />
+          ) : (
+            <Table
+              columns={renderedColumns}
+              data={filtered}
+              getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
+              selection={{ selected, onChange: setSelected }}
+              sort={sort}
+              onSortChange={setSort}
+              activeFilterKey={filterKey}
+              onActiveFilterKeyChange={setFilterKey}
+              // Single click peeks, double click (or Enter) opens the tab —
+              // `Table` owns both gestures, so a row is reachable from the
+              // keyboard either way.
+              onRowClick={(row) => peekAt(row.namespace ?? null, row.name)}
+              onRowActivate={(row) => openRowTab(row.namespace ?? null, row.name)}
+              rowMenu={rowMenuItems}
+              rowMenuLabel={`${title} actions`}
+              {...emptyTableCopy(rows.length, lower, name, clusterScoped ? "" : " in the namespaces you are looking at")}
+            />
+          )}
+        </div>
+        {peek && (
+          // Deliberately NOT keyed on the subject: `ResourceDetail` gates its
+          // own panes on the target it is rendering for, and remounting per
+          // row would throw away the reader's selected pane on every click —
+          // the one thing that component's own comments say must survive a
+          // subject change.
+          //
+          // A plain `div`, not an `aside`: `Inspector` is already a named
+          // region, and a second complementary landmark around it would be
+          // noise (see the kit's own note on that).
+          //
+          // `relative` and an inline width rather than a `w-` utility: the
+          // grip is positioned against this box, and the width is now a
+          // number the reader owns. Changing it re-styles this element in
+          // place — the pane below is not keyed and does not remount, or
+          // every frame of a drag would refetch the resource.
+          <div className="relative flex min-h-0 shrink-0 flex-col" style={{ width: peekWidth }}>
+            {/* No `rule-l` on the box: the grip draws the rule between the
+                list and the pane itself, the same way the sidebar's does. It
+                is named after what the reader called it — "resource details"
+                — since `ResizeHandle` announces itself as `Resize {label}`.
+                Written live and persisted once on release. */}
+            <ResizeHandle
+              label="the resource details"
+              width={peekWidth}
+              minWidth={listRow.bounds.minWidth}
+              maxWidth={listRow.bounds.maxWidth}
+              edge="left"
+              onResize={setPeekWidth}
+              onCommit={savePeekWidth}
+            />
+            <ResourceDetail
+              context={name}
+              kind={descriptor.k8sKind}
+              namespace={peek.namespace}
+              name={peek.name}
+              // The one prop the tab host does not pass, carrying both of the
+              // controls the design gives the peek's header. Promoting does
+              // not dismiss: the reader asked for a tab, not for the list to
+              // stop showing them what they were looking at.
+              peek={{
+                onClose: () => setPeek(null),
+                onOpenTab: () => openRowTab(peek.namespace, peek.name),
+              }}
+            />
+          </div>
         )}
       </div>
       {/* Outside the scrolling table body: a `ConfirmDialog` is a portal
           anyway, but a clipped ancestor is one fewer thing to reason about. */}
       {rowMenuDialog}
     </Screen>
+  );
+}
+
+/**
+ * The resource detail route's screen — the peek's other host.
+ *
+ * One tab, one resource, filled edge to edge by `ResourceTab`: the design's
+ * own full-tab screen, which is NOT the peek at a wider width. Spec rule R-5
+ * said it was, and the user's mock of this tab retired it — a breadcrumb
+ * header with the actions on the same line, a metric strip, a three-column
+ * fact grid, the containers table inline on Overview. What the two hosts
+ * still share, they share through `useDetailPanes`: one read of the object,
+ * one lazy-load rule per pane, the same per-kind bodies, the same actions.
+ *
+ * Everything it shows comes out of the route string:
+ * `/k/<kind>/<namespace>/<name>` already carries the Kubernetes kind — not
+ * the list screen's slug, and not for built-in kinds only, since
+ * `customDescriptorFor` mints a CRD's route from `crd.kind` too — so there is
+ * nothing to look up and nothing to keep in step with the list.
+ *
+ * No `Screen` wrapper: `ResourceTab` already heads the page with the
+ * resource's name and its breadcrumb, and the window's tab strip titles the
+ * tab with the same name (`describe`). A toolbar above it would say
+ * everything twice and cost the page a strip's worth of height.
+ */
+export function ResourceDetailScreen({ route }: { route: string }) {
+  const context = useActiveContext();
+  const parts = parseDetailRoute(route);
+  // The strip's own title for this route — the resource's name — so the
+  // guard below names the same thing the tab does.
+  const title = parts?.name ?? describe(route).title;
+
+  if (!context) {
+    return <NoClusterScreen title={title} noun="resources" />;
+  }
+
+  if (!parts) {
+    // Unreachable through `screenFor`, which only sends a route here once
+    // `parseDetailRoute` has already accepted it. Kept as a state rather than
+    // a throw: a route string can arrive from a persisted session, and a tab
+    // that says what is wrong with it is worth more than a blank surface.
+    return (
+      <Screen title={title} eyebrow={context.name} fill>
+        <ErrorState
+          title={`${route} does not name a resource`}
+          detail="A resource tab's route is /k/<kind>/<namespace>/<name>. Close this tab and open the resource from its list."
+        />
+      </Screen>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <ResourceTab
+        context={context.name}
+        kind={parts.kind}
+        namespace={parts.namespace}
+        name={parts.name}
+      />
+    </div>
   );
 }

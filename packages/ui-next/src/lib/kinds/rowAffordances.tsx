@@ -5,6 +5,23 @@ import type { ListRow } from "./types";
 const NAME_KEY = "name";
 
 /**
+ * What "ask about this resource" actually asks — one phrasing, wherever the
+ * affordance is drawn.
+ *
+ * A list row's chip and the detail pane's footer button are the same question
+ * in two shapes, and the console is a text channel: two call sites composing
+ * their own strings would send the agent two subtly different prompts for one
+ * gesture, and only one of them would ever be read back against the answers it
+ * produces. The health verdict picks between them — an unhealthy subject is
+ * asked WHY, a healthy one is asked what it is doing — and the caller supplies
+ * that verdict because it comes from a different place in each host
+ * (`KindDescriptor.flagged` for a row, `resourceStatusLine` for the pane).
+ */
+export function askQuestion(name: string, flagged: boolean): string {
+  return flagged ? `Why is ${name} unhealthy?` : `What is ${name} using right now?`;
+}
+
+/**
  * The two row affordances the design mock has that the classic port lacked —
  * shared by every screen that lists rows, rather than duplicated per one.
  * `Resources.tsx` and `Workloads.tsx` each built this independently because
@@ -60,10 +77,7 @@ export function withRowAffordances<Row extends ListRow>(
       sortable: false,
       filterable: false,
       render: (row: Row) => (
-        <AskChip
-          question={isFlagged(row) ? `Why is ${row.name} unhealthy?` : `What is ${row.name} using right now?`}
-          onAsk={ask}
-        />
+        <AskChip question={askQuestion(row.name, isFlagged(row))} onAsk={ask} />
       ),
     },
   ];

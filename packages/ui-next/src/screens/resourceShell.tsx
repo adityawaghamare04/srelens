@@ -1,6 +1,6 @@
 import { Alert, Button, EmptyState, MultiSelect, Screen, Spinner, type Column, type TableSort } from "@srelens/ui-kit";
 import { toggleColumn } from "../lib/columnPrefs";
-import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
+import { setTabView, useTabs, useTabView } from "../lib/tabsStore";
 
 /**
  * Shell pieces `Resources.tsx` (one kind per `/k/<slug>` tab) and
@@ -87,6 +87,52 @@ export function NamespaceErrorAlert({ error }: { error: string }) {
   );
 }
 
+/**
+ * Whether a remembered selection is stale — every namespace it names is gone
+ * from the cluster, rather than merely holding no rows of this particular
+ * kind right now. The two look identical from the row count alone, which is
+ * exactly why this is decided separately: emptiness is ordinary, a selection
+ * naming nothing the cluster has is not. `namespaces === null` (still
+ * loading) is not evidence of anything, since nothing has been checked yet.
+ */
+export function selectionIsStale(selection: string[], namespaces: string[] | null): boolean {
+  return selection.length > 0 && namespaces !== null && selection.every((ns) => !namespaces.includes(ns));
+}
+
+/**
+ * What a stale selection is worth telling the reader, with the same
+ * recovery a manual clear gives: back to "all namespaces". Silence here
+ * would read as "this cluster has none of what you're looking for" when the
+ * true story is "the namespaces you last picked — from a deleted namespace,
+ * or a kubeconfig that now points somewhere else — aren't there to look in".
+ * Left in place rather than reset on its own: an automatic reset the reader
+ * never asked for is a second surprise stacked on the first, and the
+ * selection may yet be exactly right again once whatever changed changes
+ * back.
+ */
+export function StaleSelectionAlert({
+  selection,
+  namespaces,
+  onReset,
+}: {
+  selection: string[];
+  namespaces: string[] | null;
+  onReset: () => void;
+}) {
+  if (!selectionIsStale(selection, namespaces)) return null;
+  return (
+    <Alert
+      tone="warn"
+      title="Remembered namespaces are gone"
+      onDismiss={onReset}
+      dismissLabel="Show all namespaces"
+      className="mx-3 mt-3 mb-3"
+    >
+      {`${selection.join(", ")} no longer exist on this cluster.`}
+    </Alert>
+  );
+}
+
 export interface ResourceTabView {
   tabId: string;
   sort: TableSort | null;
@@ -151,11 +197,6 @@ export function toggleColumnVisibility(params: {
   const { key, storageKey, hidden, filterKey, tabId } = params;
   if (!hidden.has(key) && filterKey === key) setTabView(tabId, { filterKey: null });
   toggleColumn(storageKey, key);
-}
-
-/** The one place both screens send a row's own detail route from. */
-export function openResourceTab(rowName: string, clusterName: string): void {
-  openTab(`/resources/${encodeURIComponent(rowName)}`, { clusterName });
 }
 
 /** "This kind has none" and "the filter matched none" are different facts,

@@ -1,4 +1,5 @@
-import { useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { cx } from "./cx";
 import type { IconComponent } from "./IconButton";
 import { filled } from "./slot";
@@ -47,8 +48,17 @@ export interface ClusterRailProps {
   onSelect: (id: string) => void;
   /** The double-click gesture — usually "focus this cluster and nothing else". */
   onOpen?: (id: string) => void;
-  /** The context-menu gesture, pointer or keyboard. */
-  onMenu?: (id: string, event: MouseEvent<HTMLButtonElement>) => void;
+  /**
+   * The right-click menu for one cluster. An empty list means this cluster
+   * answers no right-click, and the browser's own menu is left alone.
+   *
+   * A list of items rather than the event this used to hand back: a menu is
+   * anchored, portalled, arrowed through and dismissed, and none of that can be
+   * done by a caller holding a coordinate — see {@link ContextMenu}. Same seam
+   * as `TabStrip.menuFor`, for the same reason: the rail knows a mark can be
+   * right-clicked, not what the product offers when it is.
+   */
+  menuFor?: (item: ClusterRailItem) => ContextMenuItem[];
   /** Print the name under each mark. Off by default: the mark carries it. */
   showNames?: boolean;
   /** How wide the marks are, in px. The rail sizes itself and its add tile to match. */
@@ -119,7 +129,7 @@ function WarningGlyph() {
  * that owns application state is a design system with one call site. So `items`
  * arrives already filtered, ordered and resolved, every gesture leaves as a
  * callback, and the two things the mock opened for itself — a context menu and a
- * preferences popover — become `onMenu` and the `footer` slot, because both are
+ * preferences popover — become `menuFor` and the `footer` slot, because both are
  * built from the app's own vocabulary of routes and actions. This is the line
  * `NavIcon`, `MultiSelect` and `CodeEditor` each drew before it. (#320)
  *
@@ -149,9 +159,9 @@ function WarningGlyph() {
  * so the arrows are a shortcut through a dozen marks rather than a roving
  * tabindex, which would be the wrong contract for a landmark. The right-click
  * gesture needs no keyboard twin: browsers raise `contextmenu` for Shift+F10 and
- * the Menu key, so `onMenu` is already reachable without a pointer, which is
- * what makes it safe for `onOpen` — a double-click, and nothing else — to be the
- * shortcut it is rather than the only route to what it does.
+ * the Menu key, so `menuFor`'s menu is already reachable without a pointer,
+ * which is what makes it safe for `onOpen` — a double-click, and nothing else —
+ * to be the shortcut it is rather than the only route to what it does.
  *
  * The hint is a {@link Tooltip} rather than the mock's `title`, which never
  * appeared on focus and was a two-line string with an escaped newline in it. It
@@ -163,7 +173,7 @@ export function ClusterRail({
   activeId,
   onSelect,
   onOpen,
-  onMenu,
+  menuFor,
   showNames = false,
   markSize,
   onAdd,
@@ -242,8 +252,9 @@ export function ClusterRail({
               .filter((part) => filled(part))
               .join(", ");
             const hint = [item.name, item.detail].filter((part) => filled(part)).join(" — ");
+            const menu = menuFor?.(item) ?? [];
 
-            return (
+            const node = (
               <li key={item.id} className="flex w-full flex-col items-center gap-1.5">
                 {/* The rule belongs to the item that starts a new run, so the
                     list stays one list — a reader hears how many clusters there
@@ -263,14 +274,6 @@ export function ClusterRail({
                     data-unavailable={away || undefined}
                     onClick={() => onSelect(item.id)}
                     onDoubleClick={onOpen ? () => onOpen(item.id) : undefined}
-                    onContextMenu={
-                      onMenu
-                        ? (event) => {
-                            event.preventDefault();
-                            onMenu(item.id, event);
-                          }
-                        : undefined
-                    }
                     className="relative flex w-full flex-col items-center gap-0.5"
                     style={away ? { opacity: 0.42 } : undefined}
                   >
@@ -313,6 +316,21 @@ export function ClusterRail({
                   </button>
                 </Tooltip>
               </li>
+            );
+
+            // The `li` is the trigger, rather than a wrapper around it: Radix
+            // hands the ref and the gesture to whatever single element it is
+            // given, and a `span` wrapped around an `li` is not markup a list
+            // will keep. Nothing measures it — a context menu anchors to the
+            // pointer, not to its trigger — so the rail's layout is untouched.
+            // An empty list is left unwrapped so the browser's own menu still
+            // opens; wrapping would take it away and give back an empty box.
+            return menu.length > 0 ? (
+              <ContextMenu key={item.id} items={menu} label={`${item.name} actions`}>
+                {node}
+              </ContextMenu>
+            ) : (
+              node
             );
           })}
         </ul>

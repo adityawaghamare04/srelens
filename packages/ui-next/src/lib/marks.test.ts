@@ -21,6 +21,25 @@ describe("marks", () => {
     loadMarks(s);
     expect(getMark("prod", "prod-eu").color).toBe("var(--ok)");
   });
+  it("keeps which symbol a symbol mark chose", () => {
+    // The glyph is an id out of the app's own catalogue, not a component, so
+    // it is the one part of a symbol mark that has to survive the round trip.
+    const s = fakeStorage();
+    loadMarks(s);
+    setMark("prod", { ...defaultMark("prod-eu"), mark: "icon", icon: "server" }, s);
+    loadMarks(fakeStorage()); // forget
+    loadMarks(s);
+    expect(getMark("prod", "prod-eu")).toMatchObject({ mark: "icon", icon: "server" });
+  });
+  it("drops one unreadable mark on its own, leaving the rest", () => {
+    // Losing one cluster's colour is a nuisance; losing every cluster's is not.
+    const s = fakeStorage();
+    const good = { ...defaultMark("staging"), color: "var(--mark-teal)" };
+    s.m.set(MARKS_KEY, JSON.stringify({ prod: { ...good, mark: "hologram" }, staging: good }));
+    loadMarks(s);
+    expect(getMark("prod", "prod-eu")).toEqual(defaultMark("prod-eu"));
+    expect(getMark("staging", "staging").color).toBe("var(--mark-teal)");
+  });
   it("resets to the default and survives a throwing storage", () => {
     const s = fakeStorage();
     loadMarks(s);
@@ -69,7 +88,7 @@ describe("marks the shell reads", () => {
     for (const raw of ["[]", "null", "7", "{oops", '{"prod":3}']) {
       s.m.set(MARKS_KEY, raw);
       loadMarks(s);
-      expect(getMark("prod", "prod-eu").color).toBe("var(--accent)");
+      expect(getMark("prod", "prod-eu").color).toBe("var(--mark-indigo)");
     }
   });
 
@@ -78,10 +97,10 @@ describe("marks the shell reads", () => {
     const s = fakeStorage();
     loadMarks(s);
     const { result } = renderHook(() => useMark("prod", "prod-eu"));
-    expect(result.current.color).toBe("var(--accent)");
+    expect(result.current.color).toBe("var(--mark-indigo)");
     act(() => setMark("prod", { ...defaultMark("prod-eu"), color: "var(--ok)" }, s));
     expect(result.current.color).toBe("var(--ok)");
     act(() => resetMark("prod", s));
-    expect(result.current.color).toBe("var(--accent)");
+    expect(result.current.color).toBe("var(--mark-indigo)");
   });
 });

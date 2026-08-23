@@ -32,7 +32,7 @@ proto.hasPointerCapture ??= () => false;
 proto.setPointerCapture ??= () => {};
 proto.releasePointerCapture ??= () => {};
 
-import type { ClusterContext } from "@srelens/core";
+import { resourceStatusLine, type ClusterContext, type K8sObject } from "@srelens/core";
 import { Workloads } from "./Workloads";
 import { ConsoleProvider } from "../console";
 import * as store from "../lib/tabsStore";
@@ -111,6 +111,9 @@ const rowNames = () =>
     (row) => row.querySelector("td:not(.tbl-check)")?.textContent ?? null,
   );
 
+/** The tab a route is open in — the one the screen under test is bound to. */
+const tabFor = (route: string) => store.currentWorkspace().tabs.find((t) => t.route === route)!;
+
 function open() {
   store.openTab("/resources");
   return render(
@@ -134,6 +137,39 @@ describe("Workloads", () => {
 
     // Five kinds, five watches — never one list re-fetched as five rows.
     expect(watchResource).toHaveBeenCalledTimes(5);
+  });
+
+  it("reads a crash-looping pod's waiting reason in the row, not the phase that hides it", async () => {
+    // The row already got its unhealthy dot from `podFlagged`, which asks
+    // core. The label asked `row.phase` instead — and a pod whose container
+    // is in a back-off loop still reports "Running", so the same row said
+    // both "needs attention" and "Running". Both now read `podStatus`.
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, kind: string, onRows: (rows: unknown[]) => void) => {
+        onRows(
+          kind === "pods"
+            ? [{ name: "web-1", namespace: "default", phase: "Running", ready: "0/1", restarts: 7, node: "n1", age: "2d", image: "acme/web:1", waitingReason: "CrashLoopBackOff" }]
+            : [],
+        );
+        return { stop };
+      },
+    );
+    open();
+
+    await waitFor(() => expect(rowNames()).toEqual(["Needs attentionweb-1"]));
+    const row = screen.getByText("web-1").closest("tr")!;
+    // The dot and the word now agree: the row says "needs attention" AND says
+    // what is the matter, instead of saying "Running" beside its own dot.
+    expect(within(row).getByText("Needs attention")).toBeTruthy();
+    expect(within(row).getByText("CrashLoopBackOff")).toBeTruthy();
+    expect(within(row).queryByText("Running")).toBeNull();
+  });
+
+  it("leaves a healthy pod reading its phase", async () => {
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+    const row = screen.getByText("web-1").closest("tr")!;
+    expect(within(row).getByText("Running")).toBeTruthy();
   });
 
   it("narrows to one kind from the segment control", async () => {
@@ -164,6 +200,18 @@ describe("Workloads", () => {
     await waitFor(() =>
       expect(rowNames()).toEqual(["node-exporter", "web-1", "checkout", "db", "nightly-backup"]),
     );
+  });
+
+  it("opens the resource's /k/<kind>/<namespace>/<name> route, keyed by the row's own kind", async () => {
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+
+    // web-1 is a Pod in this union — its route must carry "Pod", not the
+    // "/resources" route this list is itself opened at.
+    fireEvent.doubleClick(screen.getByText("web-1").closest("tr")!);
+
+    await waitFor(() => expect(tabFor("/k/Pod/default/web-1")).toBeTruthy());
+    expect(store.currentWorkspace().activeId).toBe(tabFor("/k/Pod/default/web-1").id);
   });
 
   it("keeps listing the kinds that answered when one of the five fails", async () => {
@@ -358,5 +406,138 @@ describe("Workloads", () => {
     await waitFor(() =>
       expect(cronjobSetSuspend).toHaveBeenCalledWith("prod-eu", "default", "paused-cleanup", false),
     );
+  });
+});
+
+/**
+ * The object a detail pane would have fetched for the same subject the row
+ * describes — same replica counts, so the two readings are of one fact and any
+ * difference between them is a disagreement rather than a difference of input.
+ */
+function workloadObject(kind: string, name: string, ready: number, desired: number): K8sObject {
+  const status = kind === "DaemonSet"
+    ? { numberReady: ready, desiredNumberScheduled: desired }
+    : { readyReplicas: ready };
+  return {
+    kind,
+    apiVersion: "apps/v1",
+    metadata: { name, namespace: "default" },
+    spec: kind === "DaemonSet" ? {} : { replicas: desired },
+    status,
+  } as K8sObject;
+}
+
+/** The row's status pill, as the word it shows and the tone it shows it in. */
+function pillOf(row: HTMLElement): { status: string; kind: string | null } {
+  const pill = row.querySelectorAll(".status");
+  const last = pill[pill.length - 1] as HTMLElement;
+  return { status: last.textContent ?? "", kind: last.getAttribute("data-kind") };
+}
+
+/**
+ * The row and the detail header are two renderings of one verdict, and a
+ * reader sees both — double-clicking the row opens the pane. They were derived
+ * by different code: the header by core's `resourceStatusLine`, the row by a
+ * local table pairing a label with a tone by hand. The local table had already
+ * drifted on every case below. (#331)
+ */
+describe("Workloads rows and the detail header they open", () => {
+  function listing(rows: Record<string, unknown[]>) {
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, kind: string, onRows: (r: unknown[]) => void) => {
+        onRows(rows[kind] ?? []);
+        return { stop };
+      },
+    );
+  }
+
+  it("calls a degraded Deployment what the header calls it, in the tone its own dot uses", async () => {
+    listing({ deployments: [{ name: "checkout", namespace: "default", ready: "1/3", upToDate: 1, available: 1, age: "10d" }] });
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(1));
+
+    const header = resourceStatusLine("Deployment", workloadObject("Deployment", "checkout", 1, 3))!;
+    const row = screen.getByText("checkout").closest("tr")!;
+    // The header reads "Degraded", danger, flagged — and the row draws the
+    // very same object.
+    expect(header.status).toBe("Degraded");
+    expect(header.flagged).toBe(true);
+    expect(pillOf(row)).toEqual({ status: header.status, kind: header.health });
+    // The dot beside it: an amber word next to a red dot is the contradiction
+    // the kit fixed in `Inspector`, and it was reproduced here.
+    expect(within(row).getByText("Needs attention")).toBeTruthy();
+  });
+
+  it("calls a Deployment scaled to zero what the header calls it", async () => {
+    listing({ deployments: [{ name: "idle", namespace: "default", ready: "0/0", upToDate: 0, available: 0, age: "10d" }] });
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(1));
+
+    const header = resourceStatusLine("Deployment", workloadObject("Deployment", "idle", 0, 0))!;
+    expect(header.status).toBe("Scaled down");
+    expect(pillOf(screen.getByText("idle").closest("tr")!)).toEqual({
+      status: header.status,
+      kind: header.health,
+    });
+  });
+
+  it("calls a StatefulSet short of its replicas what the header calls it", async () => {
+    listing({ statefulsets: [{ name: "db", namespace: "default", ready: "1/2", updated: 1, service: "db-svc", age: "30d" }] });
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(1));
+
+    const header = resourceStatusLine("StatefulSet", workloadObject("StatefulSet", "db", 1, 2))!;
+    expect(header.status).toBe("Degraded");
+    expect(pillOf(screen.getByText("db").closest("tr")!)).toEqual({
+      status: header.status,
+      kind: header.health,
+    });
+  });
+
+  it("calls a DaemonSet scheduled on no node what the header calls it — not the replica word", async () => {
+    listing({ daemonsets: [{ name: "gpu-agent", namespace: "kube-system", desired: 0, current: 0, ready: 0, upToDate: 0, available: 0, age: "1d" }] });
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(1));
+
+    const header = resourceStatusLine("DaemonSet", workloadObject("DaemonSet", "gpu-agent", 0, 0))!;
+    // A DaemonSet matching no node is "Not scheduled", not "Scaled down":
+    // the zero word is the kind's, and only core knows which kind uses which.
+    expect(header.status).toBe("Not scheduled");
+    expect(pillOf(screen.getByText("gpu-agent").closest("tr")!)).toEqual({
+      status: header.status,
+      kind: header.health,
+    });
+  });
+
+  it("calls a healthy Deployment what the header calls it", async () => {
+    listing({ deployments: DEPLOYMENTS });
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(1));
+
+    const header = resourceStatusLine("Deployment", workloadObject("Deployment", "checkout", 2, 2))!;
+    expect(header.status).toBe("Running");
+    expect(pillOf(screen.getByText("checkout").closest("tr")!)).toEqual({
+      status: header.status,
+      kind: header.health,
+    });
+    expect(within(screen.getByText("checkout").closest("tr")!).queryByText("Needs attention")).toBeNull();
+  });
+
+  it("calls a suspended CronJob what the header calls it", async () => {
+    listing({ cronjobs: [{ name: "paused-cleanup", namespace: "default", schedule: "0 3 * * *", suspended: true, active: 0, lastSchedule: "-", age: "60d" }] });
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(1));
+
+    const header = resourceStatusLine("CronJob", {
+      kind: "CronJob",
+      apiVersion: "batch/v1",
+      metadata: { name: "paused-cleanup", namespace: "default" },
+      spec: { suspend: true },
+      status: {},
+    } as K8sObject)!;
+    expect(pillOf(screen.getByText("paused-cleanup").closest("tr")!)).toEqual({
+      status: header.status,
+      kind: header.health,
+    });
   });
 });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ageSortValue,
+  podStatus,
   rowInSelection,
   watchNamespaceForSelection,
   type ClusterContext,
@@ -8,6 +9,7 @@ import {
   type DaemonSetSummary,
   type DeploymentSummary,
   type StatefulSetSummary,
+  type StatusVerdict,
 } from "@srelens/core";
 import { useNamespaceOptions } from "@srelens/core/react";
 import {
@@ -29,21 +31,31 @@ import {
 import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
-import { formatCpu, formatMemory, phaseKind, type PodRow } from "../lib/kinds/columns";
+import { detailRoute } from "../lib/detailRoute";
+import {
+  cronJobVerdict,
+  daemonSetVerdict,
+  deploymentVerdict,
+  formatCpu,
+  formatMemory,
+  statefulSetVerdict,
+  type PodRow,
+} from "../lib/kinds/columns";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { ListRow } from "../lib/kinds/types";
 import { useResourceList, type ResourceList } from "../lib/resourceList";
 import { describe } from "../lib/routes";
+import { openTab } from "../lib/tabsStore";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
 import { useRowMenu } from "./ResourceMenu";
 import {
   NamespaceErrorAlert,
   NamespacePicker,
   NoClusterScreen,
+  StaleSelectionAlert,
   columnOptionsFor,
   emptyTableCopy,
-  openResourceTab,
   toggleColumnVisibility,
   useResourceTabView,
 } from "./resourceShell";
@@ -57,9 +69,11 @@ const NAME_KEY = "name";
  * single-kind `/k/<slug>` list must not, because interleaving five kinds
  * makes a row's kind otherwise unrecoverable.
  *
- * `flagged` is computed once, per row, from that row's own
- * `KindDescriptor.flagged` (Correction 3) — the affordance below only ever
- * reads it, rather than re-deriving health per kind.
+ * `flagged` is computed once, per row, from the same verdict its status word
+ * and tone come from (see `fromVerdict`) — the affordance below only ever
+ * reads it, rather than re-deriving health per kind. The typed lists'
+ * `KindDescriptor.flagged` is that verdict's own `.flagged`, so the two hosts
+ * cannot disagree about one row.
  */
 interface WorkloadRow extends ListRow {
   kind: string;
@@ -92,99 +106,79 @@ const SEGMENTS: TabItem[] = [
 ];
 
 /**
- * Deployment, StatefulSet and DaemonSet have no native status field — only a
- * ready-vs-desired count, which is exactly what `KindDescriptor.flagged`
- * already reduces to a boolean. Deriving the pill from that one boolean
- * keeps a single source of truth rather than re-parsing "N/M" here too.
+ * The word, the tone and the dot for one row, from the one verdict its own
+ * kind answers with.
+ *
+ * There is no table here pairing a label with a colour, and that is the point.
+ * This screen used to carry `readyStatus`, which paired "Progressing" with
+ * amber and "Available" with green by hand — a fourth such table, after core
+ * was refactored so that no branch anywhere writes a tone and a flag side by
+ * side except the six named verdicts in `k8sStatus`. It had already drifted
+ * from all three others: a degraded Deployment read amber "Progressing" here
+ * and red "Degraded" in the detail header a double-click away, with this row's
+ * own red dot beside the amber word; a Deployment scaled to zero read green
+ * "Available" against the header's neutral "Scaled down". No test asserted any
+ * of those words. (#331)
  */
-function readyStatus(flagged: boolean): { label: string; kind: StatusKind } {
-  return flagged ? { label: "Progressing", kind: "warning" } : { label: "Available", kind: "success" };
+function fromVerdict(row: ListRow, kind: string, ready: string, verdict: StatusVerdict): WorkloadRow {
+  return {
+    name: row.name,
+    namespace: row.namespace,
+    kind,
+    ready,
+    statusLabel: verdict.status,
+    statusKind: verdict.health,
+    age: (row as { age?: string }).age,
+    // From the same verdict as the word beside it — not from the descriptor's
+    // own `flagged`, which is that verdict's `.flagged` anyway. One call, so
+    // the dot and the word are two channels of one reading rather than two
+    // readings that happen to agree.
+    flagged: verdict.flagged,
+  };
 }
 
-function fromDeployment(row: ListRow, flagged: boolean): WorkloadRow {
+const fromDeployment = (row: ListRow): WorkloadRow => {
   const d = row as DeploymentSummary;
-  const status = readyStatus(flagged);
-  return {
-    name: d.name,
-    namespace: d.namespace,
-    kind: "Deployment",
-    ready: d.ready,
-    statusLabel: status.label,
-    statusKind: status.kind,
-    age: d.age,
-    flagged,
-  };
-}
+  return fromVerdict(d, "Deployment", d.ready, deploymentVerdict(d));
+};
 
-function fromStatefulSet(row: ListRow, flagged: boolean): WorkloadRow {
+const fromStatefulSet = (row: ListRow): WorkloadRow => {
   const s = row as StatefulSetSummary;
-  const status = readyStatus(flagged);
-  return {
-    name: s.name,
-    namespace: s.namespace,
-    kind: "StatefulSet",
-    ready: s.ready,
-    statusLabel: status.label,
-    statusKind: status.kind,
-    age: s.age,
-    flagged,
-  };
-}
+  return fromVerdict(s, "StatefulSet", s.ready, statefulSetVerdict(s));
+};
 
-function fromDaemonSet(row: ListRow, flagged: boolean): WorkloadRow {
+const fromDaemonSet = (row: ListRow): WorkloadRow => {
   const d = row as DaemonSetSummary;
-  const status = readyStatus(flagged);
-  return {
-    name: d.name,
-    namespace: d.namespace,
-    kind: "DaemonSet",
-    // DaemonSet reports `ready`/`desired` as two bare numbers rather than
-    // Deployment/StatefulSet's own "N/M" string — recomposed here so the
-    // union's Ready column reads the same shape for every kind.
-    ready: `${d.ready}/${d.desired}`,
-    statusLabel: status.label,
-    statusKind: status.kind,
-    age: d.age,
-    flagged,
-  };
-}
+  // DaemonSet reports `ready`/`desired` as two bare numbers rather than
+  // Deployment/StatefulSet's own "N/M" string — recomposed here so the
+  // union's Ready column reads the same shape for every kind.
+  return fromVerdict(d, "DaemonSet", `${d.ready}/${d.desired}`, daemonSetVerdict(d));
+};
 
-function fromPod(row: ListRow, flagged: boolean): WorkloadRow {
+function fromPod(row: ListRow): WorkloadRow {
   const p = row as PodRow;
+  // Not `p.phase`: a pod whose container is in a back-off loop still reports
+  // phase "Running", so a row reading the phase alone said "Running" beside
+  // its own unhealthy dot — which comes from `podFlagged`, which asks this
+  // same function. One reading, so the dot and the word cannot disagree.
   return {
-    name: p.name,
-    namespace: p.namespace,
-    kind: "Pod",
-    ready: p.ready,
-    statusLabel: p.phase,
-    statusKind: phaseKind(p.phase),
+    ...fromVerdict(p, "Pod", p.ready, podStatus(p.phase, p.waitingReason)),
     restarts: p.restarts,
     cpu: p.cpu,
     memory: p.memory,
     image: p.image,
-    age: p.age,
-    flagged,
   };
 }
 
 /**
- * CronJob has no `flagged` in its descriptor (Task 4's ruling: no sensible
- * notion of "unhealthy" for a schedule) and no ready count at all — its Ready
- * cell is the one the mock itself renders empty.
+ * CronJob has no unhealthy state (Task 4's ruling: no sensible notion of
+ * "unhealthy" for a schedule — core's `cronJobStatus` gives both its verdicts
+ * `flagged: false`) and no ready count at all — its Ready cell is the one the
+ * mock itself renders empty.
  */
 function fromCronJob(row: ListRow): WorkloadRow {
   const c = row as CronJobSummary;
-  return {
-    name: c.name,
-    namespace: c.namespace,
-    kind: "CronJob",
-    ready: "—",
-    statusLabel: c.suspended ? "Suspended" : "Active",
-    statusKind: c.suspended ? "neutral" : "success",
-    age: c.age,
-    flagged: false,
-    suspended: c.suspended,
-  };
+  return { ...fromVerdict(c, "CronJob", "—", cronJobVerdict(c)), suspended: c.suspended };
 }
 
 /**
@@ -362,36 +356,11 @@ function WorkloadList({
   // five results into a table is not itself something React needs to track
   // between renders.
   const kinds: KindEntry[] = [
-    {
-      key: "deployments",
-      label: "Deployment",
-      list: deploymentsList,
-      toRow: (row) => fromDeployment(row, deploymentsDescriptor?.flagged?.(row) ?? false),
-    },
-    {
-      key: "statefulsets",
-      label: "StatefulSet",
-      list: statefulSetsList,
-      toRow: (row) => fromStatefulSet(row, statefulSetsDescriptor?.flagged?.(row) ?? false),
-    },
-    {
-      key: "daemonsets",
-      label: "DaemonSet",
-      list: daemonSetsList,
-      toRow: (row) => fromDaemonSet(row, daemonSetsDescriptor?.flagged?.(row) ?? false),
-    },
-    {
-      key: "pods",
-      label: "Pod",
-      list: podsList,
-      toRow: (row) => fromPod(row, podsDescriptor?.flagged?.(row) ?? false),
-    },
-    {
-      key: "cronjobs",
-      label: "CronJob",
-      list: cronJobsList,
-      toRow: fromCronJob,
-    },
+    { key: "deployments", label: "Deployment", list: deploymentsList, toRow: fromDeployment },
+    { key: "statefulsets", label: "StatefulSet", list: statefulSetsList, toRow: fromStatefulSet },
+    { key: "daemonsets", label: "DaemonSet", list: daemonSetsList, toRow: fromDaemonSet },
+    { key: "pods", label: "Pod", list: podsList, toRow: fromPod },
+    { key: "cronjobs", label: "CronJob", list: cronJobsList, toRow: fromCronJob },
   ];
 
   // The union: every kind's rows, mapped and concatenated. One shared array,
@@ -486,6 +455,12 @@ function WorkloadList({
 
       <NamespaceErrorAlert error={namespaceError} />
 
+      <StaleSelectionAlert
+        selection={selection}
+        namespaces={namespaces}
+        onReset={() => setNamespaces(context.stableId, [])}
+      />
+
       {allLoading ? (
         <div className="scroll min-h-0 flex-1">
           <LoadingState label={`Loading ${lower}`} />
@@ -525,7 +500,9 @@ function WorkloadList({
               onSortChange={setSort}
               activeFilterKey={filterKey}
               onActiveFilterKeyChange={setFilterKey}
-              onRowActivate={(row) => openResourceTab(row.name, name)}
+              onRowActivate={(row) =>
+                openTab(detailRoute(row.kind, row.namespace ?? null, row.name), { clusterName: name })
+              }
               rowMenu={rowMenuItems}
               rowMenuLabel={`${title} actions`}
               {...emptyTableCopy(segmented.length, segmentLower, name, " in the namespaces you are looking at")}

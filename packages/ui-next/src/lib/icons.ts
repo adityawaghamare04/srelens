@@ -10,6 +10,7 @@ import {
   Copy,
   Cpu,
   Database,
+  ExternalLink,
   FileCog,
   FilePlus,
   FolderOpen,
@@ -33,6 +34,7 @@ import {
   Puzzle,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Route,
   ScrollText,
@@ -44,6 +46,7 @@ import {
   ShieldCheck,
   ShipWheel,
   Signpost,
+  Sparkles,
   SlidersHorizontal,
   Scaling,
   Sun,
@@ -168,6 +171,15 @@ export const Icons = {
   toolbox: Wrench,
   newresource: FilePlus,
 
+  /** Promote what is on screen into a tab of its own — the detail peek's
+   *  "Open tab". */
+  openTab: ExternalLink,
+
+  /** Hand what is on screen to the agent — the row's ask chip wears its own
+   *  inline glyph (the kit takes no icon-set dependency), so this is for the
+   *  detail pane's footer button, which is a `Button` like any other. */
+  ask: Sparkles,
+
   // The application log screen's own actions.
   refresh: RefreshCw,
   copy: Copy,
@@ -175,6 +187,8 @@ export const Icons = {
 
   // The row menu's write actions, shared by every kind that offers them.
   edit: Pencil,
+  /** Put something back the way it was — the mark editor's Reset. */
+  revert: RotateCcw,
   scale: Scaling,
   restart: RotateCw,
   evict: LogOut,

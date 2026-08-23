@@ -12,6 +12,16 @@ export interface PodSummary {
    *  e.g. "acme/checkout-api:118a7e, envoyproxy/envoy:v1.30". Empty when the
    *  pod has no containers. */
   image: string;
+  /**
+   * Why a container is waiting, when one is — "CrashLoopBackOff",
+   * "ImagePullBackOff", "ContainerCreating" — and "" when none is. `phase`
+   * cannot tell a healthy pod from a crash-looping one on its own (a pod whose
+   * container is in a back-off loop still reports "Running"), so read the two
+   * together through `podStatus`, never `phase` alone.
+   *
+   * Optional only for the sake of fixtures: `k8s.listPods` always sends it.
+   */
+  waitingReason?: string;
 }
 
 export interface NamespacesOutcome {

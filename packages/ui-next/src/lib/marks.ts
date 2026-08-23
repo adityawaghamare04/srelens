@@ -32,9 +32,18 @@ export function initials(name: string): string {
   return letters.toUpperCase().slice(0, 3);
 }
 
-/** What a cluster looks like before anyone has customised it. */
+/**
+ * What a cluster looks like before anyone has customised it.
+ *
+ * The indigo of the mark palette rather than `var(--accent)`, which is what
+ * this used to be: the accent moves with the accent axis, so an uncustomised
+ * mark changed colour for anyone who preferred a blue accent, and — because
+ * the editor's swatches are radios compared by value — the palette then had
+ * nothing checked and no tab stop at all until a colour was picked. The mark
+ * tokens are identity rather than meaning and move with nothing.
+ */
 export function defaultMark(name: string): MarkAppearance {
-  return { name, short: initials(name), color: "var(--accent)", mark: "text", withText: true };
+  return { name, short: initials(name), color: "var(--mark-indigo)", mark: "text", withText: true };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);

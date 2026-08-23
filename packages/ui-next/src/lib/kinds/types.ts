@@ -63,4 +63,15 @@ export interface KindDescriptor<Row extends ListRow = ListRow> {
    * whatever renders this must say why beside the dot, not just tint it.
    */
   flagged?: (row: Row) => boolean;
+  /**
+   * Extra panes the resource detail shell offers beyond Details, YAML and
+   * Events, which every kind gets. Absent (the default) means neither — most
+   * kinds have no containers or metrics of their own. Set by whichever task
+   * ports that pane's per-kind body (Pod's containers, a node's or pod's
+   * metrics, ...), never inferred from the kind's name.
+   */
+  panes?: {
+    containers?: boolean;
+    metrics?: boolean;
+  };
 }

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { cx } from "./cx";
 import { EmptyState } from "./EmptyState";
+import { ResizeHandle } from "./ResizeHandle";
 import { filled } from "./slot";
 import { TextInput } from "./TextInput";
 
@@ -31,9 +32,6 @@ export interface SidebarProps {
   className?: string;
 }
 
-/** One arrow key's worth of width. Coarse enough to get somewhere, fine enough to aim. */
-const STEP = 16;
-
 /**
  * The app's left-hand navigation column: a way back, whose cluster you are
  * looking at, a filter, the tree itself, and whatever the app wants to keep in
@@ -47,16 +45,12 @@ const STEP = 16;
  * scrolling middle and the drag. What goes in them is the caller's, including
  * which tree; that is why this takes `children` rather than a `focused` flag.
  *
- * The resize is the part worth hardening. The mock's handle was a
- * `role="separator"` with a mousedown listener and no name, no value and no
- * keys — announced to assistive technology as a control, workable only by
- * pointer. Here it is named after the sidebar, carries its width as
- * `aria-valuenow` between its two bounds, and takes the arrow keys and
- * Home/End. The drag itself now measures from where the pointer went down
- * rather than from `clientX - 46`, which was the width of the rail the mock
- * happened to sit beside — an assumption about the shell that the kit is in no
- * position to make. Width is reported when it settles rather than persisted
- * here: `localStorage` is the app's, not the design system's. (#320)
+ * The resize is the part worth hardening, and it now lives in
+ * {@link ResizeHandle} — this was the only hardened copy of it in the kit, and
+ * the detail peek beside the resource list needed the same control on its
+ * other edge. What is left here is the state the handle deliberately does not
+ * hold: the width itself, and the report to the app when it settles, because
+ * `localStorage` is the app's and not the design system's. (#320)
  */
 export function Sidebar({
   label,
@@ -76,55 +70,6 @@ export function Sidebar({
   className,
 }: SidebarProps) {
   const [width, setWidth] = useState(defaultWidth);
-  const widthRef = useRef(width);
-  widthRef.current = width;
-  // Whatever a drag in flight needs undone, so unmounting mid-drag does not
-  // leave listeners on the window and the page unselectable.
-  const release = useRef<() => void>(() => {});
-  useEffect(() => () => release.current(), []);
-
-  const clamp = (next: number) => Math.max(minWidth, Math.min(maxWidth, Math.round(next)));
-
-  function commit(next: number) {
-    const settled = clamp(next);
-    setWidth(settled);
-    onWidthChange?.(settled);
-  }
-
-  function onMouseDown(event: MouseEvent) {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = widthRef.current;
-    const move = (e: globalThis.MouseEvent) => setWidth(clamp(startWidth + (e.clientX - startX)));
-    const detach = () => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-      document.body.style.userSelect = "";
-      release.current = () => {};
-    };
-    function up() {
-      detach();
-      // Once, on release. A caller persisting this should not be written to on
-      // every pixel of the drag.
-      onWidthChange?.(widthRef.current);
-    }
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
-    document.body.style.userSelect = "none";
-    release.current = detach;
-  }
-
-  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    let next: number | null = null;
-    if (event.key === "ArrowRight") next = width + STEP;
-    else if (event.key === "ArrowLeft") next = width - STEP;
-    else if (event.key === "Home") next = minWidth;
-    else if (event.key === "End") next = maxWidth;
-    if (next === null) return;
-    // Otherwise Home/End also jump the page and the arrows scroll the tree.
-    event.preventDefault();
-    commit(next);
-  }
 
   return (
     <nav
@@ -182,18 +127,15 @@ export function Sidebar({
         </div>
       )}
 
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={`Resize ${label}`}
-        aria-valuenow={width}
-        aria-valuemin={minWidth}
-        aria-valuemax={maxWidth}
-        // A resize a pointer can do and a keyboard cannot is not a resize.
-        tabIndex={0}
-        className="resize-handle"
-        onMouseDown={onMouseDown}
-        onKeyDown={onKeyDown}
+      {/* The sidebar is docked on the left, so its grip is on its right edge
+          — `ResizeHandle`'s default. It names itself after the landmark. */}
+      <ResizeHandle
+        label={label}
+        width={width}
+        minWidth={minWidth}
+        maxWidth={maxWidth}
+        onResize={setWidth}
+        onCommit={onWidthChange}
       />
     </nav>
   );
