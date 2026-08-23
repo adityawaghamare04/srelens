@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ageSortValue,
-  phaseKind,
+  podStatus,
   rowInSelection,
   watchNamespaceForSelection,
   type ClusterContext,
@@ -153,13 +153,18 @@ function fromDaemonSet(row: ListRow, flagged: boolean): WorkloadRow {
 
 function fromPod(row: ListRow, flagged: boolean): WorkloadRow {
   const p = row as PodRow;
+  // Not `p.phase`: a pod whose container is in a back-off loop still reports
+  // phase "Running", so a row reading the phase alone said "Running" beside
+  // its own unhealthy dot — which comes from `podFlagged`, which asks this
+  // same function. One reading, so the dot and the word cannot disagree.
+  const status = podStatus(p.phase, p.waitingReason);
   return {
     name: p.name,
     namespace: p.namespace,
     kind: "Pod",
     ready: p.ready,
-    statusLabel: p.phase,
-    statusKind: phaseKind(p.phase),
+    statusLabel: status.status,
+    statusKind: status.health,
     restarts: p.restarts,
     cpu: p.cpu,
     memory: p.memory,

@@ -139,6 +139,39 @@ describe("Workloads", () => {
     expect(watchResource).toHaveBeenCalledTimes(5);
   });
 
+  it("reads a crash-looping pod's waiting reason in the row, not the phase that hides it", async () => {
+    // The row already got its unhealthy dot from `podFlagged`, which asks
+    // core. The label asked `row.phase` instead — and a pod whose container
+    // is in a back-off loop still reports "Running", so the same row said
+    // both "needs attention" and "Running". Both now read `podStatus`.
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, kind: string, onRows: (rows: unknown[]) => void) => {
+        onRows(
+          kind === "pods"
+            ? [{ name: "web-1", namespace: "default", phase: "Running", ready: "0/1", restarts: 7, node: "n1", age: "2d", image: "acme/web:1", waitingReason: "CrashLoopBackOff" }]
+            : [],
+        );
+        return { stop };
+      },
+    );
+    open();
+
+    await waitFor(() => expect(rowNames()).toEqual(["Needs attentionweb-1"]));
+    const row = screen.getByText("web-1").closest("tr")!;
+    // The dot and the word now agree: the row says "needs attention" AND says
+    // what is the matter, instead of saying "Running" beside its own dot.
+    expect(within(row).getByText("Needs attention")).toBeTruthy();
+    expect(within(row).getByText("CrashLoopBackOff")).toBeTruthy();
+    expect(within(row).queryByText("Running")).toBeNull();
+  });
+
+  it("leaves a healthy pod reading its phase", async () => {
+    open();
+    await waitFor(() => expect(rowNames()).toHaveLength(5));
+    const row = screen.getByText("web-1").closest("tr")!;
+    expect(within(row).getByText("Running")).toBeTruthy();
+  });
+
   it("narrows to one kind from the segment control", async () => {
     open();
     await waitFor(() => expect(rowNames()).toHaveLength(5));
