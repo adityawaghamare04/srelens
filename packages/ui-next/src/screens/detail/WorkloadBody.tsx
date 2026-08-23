@@ -1,24 +1,22 @@
 import { useEffect, useState } from "react";
 import {
+  ageFromTimestamp,
   ageSortValue,
   asArray,
   asRecord,
-  conditionKind,
   listReplicaSets,
-  phaseKind,
-  podMetrics,
-  podsForSelector,
   str,
-  timestampWithAge,
   updateStrategyText,
   type Condition,
   type K8sObject,
-  type PodMetric,
-  type PodSummary,
   type ReplicaSetSummary,
 } from "@srelens/core";
-import { EmptyState, KV, LoadingState, PairList, Panel, StatusPill, Table, type Column } from "@srelens/ui-kit";
+import { EmptyState, KV, LoadingState, PairList, Section, Table, type Column } from "@srelens/ui-kit";
+import { AnnotationLines, ConditionsSection, RelatedPodsSection } from "./ConditionsSection";
 import { SELF_DESCRIBING_KINDS } from "./GenericBody";
+
+/** The annotation a Deployment records its current rollout number in. */
+const REVISION_ANNOTATION = "deployment.kubernetes.io/revision";
 
 /** A formatted list, one item per line — matches `PodBody`'s own helper of
  *  the same shape, kept local since it's a small presentational detail, not
@@ -35,21 +33,10 @@ function StringList({ items }: { items: string[] }) {
   );
 }
 
-/**
- * A workload's conditions as a row of status pills — classic's
- * `ConditionBadges`, ported onto the kit's `StatusPill` (coloured via core's
- * `conditionKind`, the same formatter Task 10 used for a Pod's condition
- * timeline) rather than reintroducing classic's separate badge-variant
- * heuristic as a second, un-shared way to colour a condition.
- */
-function ConditionPills({ conditions }: { conditions: Condition[] }) {
-  return (
-    <div className="flex flex-wrap gap-1">
-      {conditions.map((c) => (
-        <StatusPill key={c.type} status={c.type} kind={conditionKind(c)} />
-      ))}
-    </div>
-  );
+/** The images a workload's pod template runs, each named once. */
+function templateImages(spec: Record<string, unknown>): string[] {
+  const containers = asArray(asRecord(asRecord(spec.template).spec).containers);
+  return [...new Set(containers.map((c) => str(asRecord(c).image)).filter(Boolean))];
 }
 
 const DEPLOY_REVISION_COLUMNS: Column<ReplicaSetSummary>[] = [
@@ -59,31 +46,35 @@ const DEPLOY_REVISION_COLUMNS: Column<ReplicaSetSummary>[] = [
   { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => r.age },
 ];
 
+interface RevisionsState {
+  status: "idle" | "loading" | "ready" | "error";
+  revisions?: ReplicaSetSummary[];
+}
+
 /**
- * The ReplicaSets a Deployment has rolled out — classic's `DeployRevisions`,
- * fetched live via core's `listReplicaSets`. Deployment-only: classic never
- * calls this for StatefulSet/DaemonSet/ReplicaSet either, since only a
- * Deployment has revision history of its own. Name is a `ResourceLink` in
- * classic, and the whole row is `onRowClick`-navigable; both render as
- * plain mono text here — see the task report for the full inert-value
- * list. Classic's own component has no write action (no rollback button, no
- * menu) — only navigation — so nothing needed to be scoped out on that
- * account; it only ever SHOWS revisions.
+ * The ReplicaSets a Deployment has rolled out, fetched once for the whole
+ * body — classic's `DeployRevisions`, via core's `listReplicaSets`.
+ *
+ * Held here rather than inside the revisions table because two blocks need
+ * it: the table below, and the `Revision` fact above it, whose "(6m ago)"
+ * is the age of the ReplicaSet carrying the current revision number. Two
+ * fetches of one list is one list too many, and two lists that arrive at
+ * different moments is a pane that can show a revision the table does not
+ * have.
+ *
+ * Deployment-only (`enabled`): classic never calls this for
+ * StatefulSet/DaemonSet/ReplicaSet either, since only a Deployment has
+ * revision history of its own. The hook still runs for every kind — hooks
+ * must — and simply fetches nothing.
  */
-function DeployRevisionsSection({
-  context,
-  namespace,
-  ownerName,
-}: {
-  context: string;
-  namespace: string;
-  ownerName: string;
-}) {
-  const [state, setState] = useState<{ status: "loading" | "ready" | "error"; revisions?: ReplicaSetSummary[] }>({
-    status: "loading",
-  });
+function useDeployRevisions(context: string, namespace: string, ownerName: string, enabled: boolean): RevisionsState {
+  const [state, setState] = useState<RevisionsState>({ status: "idle" });
 
   useEffect(() => {
+    if (!enabled || !context || !namespace || !ownerName) {
+      setState({ status: "idle" });
+      return;
+    }
     let active = true;
     setState({ status: "loading" });
     listReplicaSets(context, namespace, ownerName).then((out) => {
@@ -97,147 +88,105 @@ function DeployRevisionsSection({
     return () => {
       active = false;
     };
-  }, [context, namespace, ownerName]);
+  }, [context, namespace, ownerName, enabled]);
 
-  if (state.status === "error") return null; // a missing revisions list shouldn't break the panel
-  if (state.status === "loading") {
-    return (
-      <Panel title="Deploy Revisions">
+  return state;
+}
+
+/**
+ * The revisions table itself — the fetched list, rendered. Name is a
+ * `ResourceLink` in classic, and the whole row is `onRowClick`-navigable;
+ * both render as plain mono text here — see the task report for the full
+ * inert-value list. Classic's own component has no write action (no rollback
+ * button, no menu) — only navigation — so nothing needed to be scoped out on
+ * that account; it only ever SHOWS revisions.
+ */
+function DeployRevisionsSection({ state }: { state: RevisionsState }) {
+  if (state.status === "idle" || state.status === "error") return null; // a missing list shouldn't break the pane
+  return (
+    <Section title="Deploy Revisions">
+      {state.status === "loading" ? (
         <LoadingState label="Loading revisions" />
-      </Panel>
-    );
-  }
-
-  return (
-    <Panel title="Deploy Revisions">
-      <Table
-        columns={DEPLOY_REVISION_COLUMNS}
-        data={state.revisions ?? []}
-        getRowKey={(r) => r.name}
-        emptyText="No revisions"
-      />
-    </Panel>
-  );
-}
-
-interface RelatedPod extends PodSummary {
-  cpu?: number;
-  memory?: number;
-}
-
-const RELATED_POD_COLUMNS: Column<RelatedPod>[] = [
-  { key: "name", header: "Name", render: (p) => <span className="font-mono">{p.name}</span> },
-  { key: "node", header: "Node", render: (p) => <span className="font-mono">{p.node || "—"}</span> },
-  { key: "ready", header: "Ready", render: (p) => p.ready },
-  { key: "cpu", header: "CPU", render: (p) => (p.cpu != null ? (p.cpu / 1000).toFixed(3) : "—") },
-  { key: "memory", header: "Memory", render: (p) => (p.memory != null ? `${p.memory} Mi` : "—") },
-  { key: "status", header: "Status", render: (p) => <StatusPill status={p.phase} kind={phaseKind(p.phase)} /> },
-];
-
-/**
- * The pods a workload manages, matched by its label selector — classic's
- * `ManagedPods`. Fetched live via core's `podsForSelector`/`podMetrics`
- * (metrics best-effort, same as classic: a missing metrics-server must not
- * hide the pods). Name and Node are `ResourceLink`s in classic that navigate
- * to the Pod/Node object; here they render as plain mono text — see the task
- * report for the full inert-value list.
- */
-function RelatedPodsSection({
-  context,
-  namespace,
-  selector,
-}: {
-  context: string;
-  namespace: string;
-  selector: Record<string, string>;
-}) {
-  const [state, setState] = useState<{ status: "loading" | "ready" | "error"; pods?: RelatedPod[] }>({
-    status: "loading",
-  });
-  const selectorKey = JSON.stringify(selector);
-
-  useEffect(() => {
-    let active = true;
-    setState({ status: "loading" });
-    Promise.all([
-      podsForSelector(context, namespace, selector),
-      // Metrics are best-effort: a missing metrics-server must not hide pods.
-      podMetrics(context, namespace).catch((): { metrics?: PodMetric[] } => ({ metrics: [] })),
-    ]).then(([podsOut, metricsOut]) => {
-      if (!active) return;
-      if (podsOut.error) {
-        setState({ status: "error" });
-        return;
-      }
-      const usage = new Map((metricsOut.metrics ?? []).map((m) => [m.name, m]));
-      const pods = (podsOut.pods ?? []).map((p) => {
-        const m = usage.get(p.name);
-        return { ...p, cpu: m?.cpuMillicores, memory: m?.memoryMiB };
-      });
-      setState({ status: "ready", pods });
-    });
-    return () => {
-      active = false;
-    };
-    // selectorKey captures the selector's identity without a new object each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context, namespace, selectorKey]);
-
-  if (state.status === "error") return null; // a missing pods list shouldn't break the panel
-  if (state.status === "loading") {
-    return (
-      <Panel title="Pods">
-        <LoadingState label="Loading pods" />
-      </Panel>
-    );
-  }
-
-  return (
-    <Panel title="Pods">
-      <Table columns={RELATED_POD_COLUMNS} data={state.pods ?? []} getRowKey={(p) => p.name} emptyText="No pods" />
-    </Panel>
+      ) : (
+        <Table
+          columns={DEPLOY_REVISION_COLUMNS}
+          data={state.revisions ?? []}
+          getRowKey={(r) => r.name}
+          emptyText="No revisions"
+        />
+      )}
+    </Section>
   );
 }
 
 /**
- * A Deployment/StatefulSet/ReplicaSet's Properties section — classic's
- * `WorkloadDetailView`, ported fact-for-fact. Namespace and Managed by are
- * `ResourceLink`/`LinkedResources` in classic that navigate; they render
- * here as plain text (see the task report for the full inert-value list).
+ * A Deployment/StatefulSet/ReplicaSet's facts, in the order the design's own
+ * Deployment frame reads them: Replicas, Up to date, Strategy, Revision,
+ * Selector, Min ready seconds, Namespace, Created, Image — with the
+ * kind-specific extras (Managed by, a StatefulSet's Service and volume claim
+ * templates) beside their own kin.
  *
- * Labels, Annotations, Selector, Managed by and Conditions are OMITTED when
- * empty rather than shown as classic's chip widgets do ("None") — the same
- * convention `PodBody`'s Properties section settled on for the same reason:
- * the kit has no expandable chip component, and `PairList` (used here for
- * Labels/Annotations/Selector) already renders nothing for an empty set.
- * Keeping one idiom across both bodies rather than reintroducing classic's
- * "None" text for this body alone.
+ * No heading and no `Name` row: the pane's header has already given the name,
+ * the kind and the namespace.
+ *
+ * NO STATUS ROW EITHER, and that is the fix rather than an omission. This
+ * panel used to state a workload's health a second time, from
+ * `availableReplicas >= desired` — and available is the subset of ready
+ * replicas that have outlived `minReadySeconds`, so a Deployment with that
+ * field set showed a header reading "Running · 12/12 ready" directly above a
+ * panel reading "Pending". Two readings of one fact can disagree. The header
+ * already says the word (through core's `resourceStatusLine`), the design's
+ * own Deployment frame has no such row, and the numbers under it say the rest
+ * — so the second reading is deleted, not re-pointed. The design DOES keep a
+ * `Status` row on a Pod, where the phase is the pod's own vocabulary rather
+ * than a count; `PodBody` renders it, from `resourceStatusLine`.
+ *
+ * `Replicas` reads "9 ready · 12 desired" — the design's form, and the same
+ * two numbers the header and the list row show, off `status.readyReplicas`
+ * like both of them. It replaces a five-number sentence ("12 desired, 9
+ * updated, 12 total, 9 available, 0 unavailable") that made the reader find
+ * the two that mattered; `Up to date` gets the row of its own the design
+ * gives it, and the rest are on the YAML tab.
+ *
+ * `Strategy` is core's `updateStrategyText` for every kind. It always was for
+ * a StatefulSet/DaemonSet; a Deployment alone read `spec.strategy.type` and
+ * so printed "RollingUpdate" with the surge and unavailable clauses — the two
+ * numbers that decide how a rollout behaves — dropped.
+ *
+ * Namespace and Managed by are a `ResourceLink`/`LinkedResources` in classic
+ * that navigate; they render here as plain text (see the task report).
  */
-function WorkloadPropertiesSection({ kind, object }: { kind: string; object: K8sObject }) {
+function WorkloadFactsSection({
+  kind,
+  object,
+  revisions,
+}: {
+  kind: string;
+  object: K8sObject;
+  revisions?: ReplicaSetSummary[];
+}) {
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
-  const labels = meta.labels ?? {};
-  const annotations = meta.annotations ?? {};
   const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
   const owners = meta.ownerReferences ?? [];
-  const conditions = asArray(status.conditions) as unknown as Condition[];
   const created = str(meta.creationTimestamp);
 
   const num = (v: unknown) => (v != null ? Number(v) : 0);
-  const desired = spec.replicas != null ? num(spec.replicas) : 0;
-  const total = num(status.replicas);
+  const desired = num(spec.replicas);
+  const ready = num(status.readyReplicas);
   const updated = num(status.updatedReplicas);
-  const available = num(status.availableReplicas);
-  const unavailable = num(status.unavailableReplicas);
-  const replicaText = `${desired} desired, ${updated} updated, ${total} total, ${available} available, ${unavailable} unavailable`;
+  const strategy =
+    kind === "Deployment"
+      ? updateStrategyText(asRecord(spec.strategy))
+      : updateStrategyText(asRecord(spec.updateStrategy));
 
-  // srelens shows "Running" once the workload is fully available.
-  const running = desired > 0 && available >= desired;
-  const phase = running ? "Running" : "Pending";
-
-  const strategyType =
-    kind === "Deployment" ? str(asRecord(spec.strategy).type) : updateStrategyText(asRecord(spec.updateStrategy));
+  // The number is the Deployment's own annotation; the age belongs to the
+  // ReplicaSet carrying that revision, which may not have arrived yet — the
+  // number alone is still a true fact, so it shows without waiting.
+  const revision = str((meta.annotations ?? {})[REVISION_ANNOTATION]);
+  const revisionAge = revisions?.find((r) => r.revision === revision)?.age;
+  const revisionText = revisionAge ? `${revision} (${revisionAge} ago)` : revision;
 
   const serviceName = kind === "StatefulSet" ? str(spec.serviceName) : "";
   const volumeClaimTemplateNames =
@@ -246,34 +195,39 @@ function WorkloadPropertiesSection({ kind, object }: { kind: string; object: K8s
           .map((t) => str(asRecord(asRecord(t).metadata).name))
           .filter(Boolean)
       : [];
+  const images = templateImages(spec);
 
   return (
-    <Panel title="Properties">
-      {created && <KV k="Created" v={timestampWithAge(created, Date.now())} />}
-      <KV k="Name" v={str(meta.name)} mono />
-      {meta.namespace && <KV k="Namespace" v={str(meta.namespace)} mono />}
-      {Object.keys(labels).length > 0 && <KV k="Labels" v={<PairList pairs={Object.entries(labels)} />} />}
-      {Object.keys(annotations).length > 0 && (
-        <KV k="Annotations" v={<PairList pairs={Object.entries(annotations)} />} />
+    <Section>
+      <KV k="Replicas" v={`${ready} ready · ${desired} desired`} />
+      <KV k="Up to date" v={`${updated} of ${desired}`} />
+      {strategy && <KV k="Strategy" v={strategy} />}
+      {revision && <KV k="Revision" v={revisionText} />}
+      {Object.keys(selector).length > 0 && (
+        <KV k="Selector" v={<PairList pairs={Object.entries(selector)} breakValues />} />
       )}
-      <KV k="Replicas" v={replicaText} />
-      {Object.keys(selector).length > 0 && <KV k="Selector" v={<PairList pairs={Object.entries(selector)} />} />}
+      {spec.minReadySeconds != null && <KV k="Min ready seconds" v={str(spec.minReadySeconds)} />}
       {owners.length > 0 && (
         <KV k="Managed by" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
       )}
-      {strategyType && <KV k="Strategy type" v={strategyType} />}
       {serviceName && <KV k="Service" v={serviceName} mono />}
       {volumeClaimTemplateNames.length > 0 && (
         <KV k="Volume claim templates" v={volumeClaimTemplateNames.join(", ")} />
       )}
-      <KV k="Status" v={<StatusPill status={phase} kind={phaseKind(phase)} />} />
-      {conditions.length > 0 && <KV k="Conditions" v={<ConditionPills conditions={conditions} />} />}
-    </Panel>
+      {meta.namespace && <KV k="Namespace" v={str(meta.namespace)} mono />}
+      {created && <KV k="Created" v={`${ageFromTimestamp(created, Date.now())} ago`} />}
+      {images.length > 0 && (
+        <KV
+          k="Image"
+          v={images.length === 1 ? <span className="font-mono">{images[0]}</span> : <StringList items={images} />}
+        />
+      )}
+    </Section>
   );
 }
 
 /**
- * A DaemonSet's Scheduling section — classic's `DaemonSetBody`. Unlike the
+ * A DaemonSet's Scheduling block — classic's `DaemonSetBody`. Unlike the
  * other three workload kinds, a DaemonSet has no "replicas": its own numbers
  * are per-node (desired/current/ready/up-to-date/available across matching
  * nodes), read straight off `status`.
@@ -285,15 +239,49 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
   const strategyText = updateStrategyText(asRecord(spec.updateStrategy));
 
   return (
-    <Panel title="Scheduling">
+    <Section title="Scheduling">
       {status.desiredNumberScheduled != null && <KV k="Desired" v={str(status.desiredNumberScheduled)} />}
       {status.currentNumberScheduled != null && <KV k="Current" v={str(status.currentNumberScheduled)} />}
       {status.numberReady != null && <KV k="Ready" v={str(status.numberReady)} />}
       {status.updatedNumberScheduled != null && <KV k="Up-to-date" v={str(status.updatedNumberScheduled)} />}
       {status.numberAvailable != null && <KV k="Available" v={str(status.numberAvailable)} />}
       {strategyText && <KV k="Update strategy" v={strategyText} />}
-      {Object.keys(selector).length > 0 && <KV k="Selector" v={<PairList pairs={Object.entries(selector)} />} />}
-    </Panel>
+      {Object.keys(selector).length > 0 && (
+        <KV k="Selector" v={<PairList pairs={Object.entries(selector)} breakValues />} />
+      )}
+    </Section>
+  );
+}
+
+/**
+ * The object's labels, as a block of full-width `key=value` lines.
+ *
+ * `breakValues` is not decoration: `PairList` truncates by default and no
+ * longer writes the value into a row `title` — that attribute was how a
+ * Secret's whole applied manifest reached the DOM — so wrapping is now the
+ * only way a long label can be read at all.
+ */
+function LabelsSection({ labels }: { labels: Record<string, string> }) {
+  const pairs = Object.entries(labels);
+  if (pairs.length === 0) return null;
+  return (
+    <Section title="Labels">
+      <PairList pairs={pairs} breakValues />
+    </Section>
+  );
+}
+
+/**
+ * The object's annotations, through the shared rule that holds back the
+ * applied manifest — see `AnnotationLines`. The heading is here rather than
+ * there because a block with nothing in it must not draw its own rule.
+ */
+function AnnotationsSection({ annotations }: { annotations: Record<string, string> }) {
+  if (Object.keys(annotations).length === 0) return null;
+  return (
+    <Section title="Annotations">
+      <AnnotationLines annotations={annotations} />
+    </Section>
   );
 }
 
@@ -301,29 +289,39 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
  * The Details pane for Deployment, StatefulSet, DaemonSet and ReplicaSet —
  * classic's `WorkloadDetailView` (Deployment/StatefulSet/ReplicaSet) and
  * `DaemonSetBody` (DaemonSet), which classic renders as genuinely different
- * shapes (replica counts vs. per-node counts), not variations on one KV
- * list. A Deployment then shows its rolled-out revisions (classic's
- * `DeployRevisions`).
+ * shapes (replica counts vs. per-node counts), not variations on one KV list —
+ * on the design's own shape: a flat run of blocks divided by hairline rules,
+ * not a stack of cards.
  *
- * Related pods (classic's `ManagedPods`) render here ONLY for the
- * `SELF_DESCRIBING_KINDS` this body covers (Deployment/StatefulSet/
- * ReplicaSet) — matching classic's own `WorkloadDetailView`, which renders
- * `ManagedPods` itself for exactly those three. DaemonSet is deliberately
- * excluded: classic's `DaemonSetBody` renders ONLY its Scheduling section —
- * it is the generic `GenericDetail` wrapper that supplies DaemonSet's
- * related pods, and `GenericBody` (this package's port of that wrapper)
- * already adds one via `relatedPodSelector` for every kind that isn't
- * self-describing. Without this gate, a DaemonSet would get two "Pods"
- * panels — one from here, one from `GenericBody` — since DaemonSet has a
- * selector but is not self-describing.
+ * Every block is a sibling of every other, with nothing wrapped around any of
+ * them: `.section + .section` is what draws the rule between two blocks, so a
+ * div — or a bare `LoadingState` — between two of them quietly removes the
+ * rule on both sides. A block with nothing to say renders nothing at all.
+ *
+ * Conditions, Labels and Annotations are rendered here ONLY for the
+ * `SELF_DESCRIBING_KINDS` — the same gate related pods use, and for the same
+ * reason: a DaemonSet is wrapped by `GenericBody`, which supplies all three,
+ * so rendering them here too would show each of them twice.
+ *
+ * Related pods (classic's `ManagedPods`) follow the same rule. DaemonSet is
+ * deliberately excluded: classic's `DaemonSetBody` renders ONLY its Scheduling
+ * section — it is the generic `GenericDetail` wrapper that supplies a
+ * DaemonSet's related pods, and `GenericBody` (this package's port of that
+ * wrapper) already adds one via `relatedPodSelector` for every kind that isn't
+ * self-describing.
  */
 export function WorkloadDetailsBody({ object, context }: { object: K8sObject; context: string }) {
   const kind = str(object.kind);
+  const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
-  const namespace = str(object.metadata?.namespace);
-  const name = str(object.metadata?.name);
+  const namespace = str(meta.namespace);
+  const name = str(meta.name);
   const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
   const hasSelector = Object.keys(selector).length > 0;
+  const selfDescribing = SELF_DESCRIBING_KINDS.has(kind);
+  const conditions = asArray(asRecord(object.status).conditions) as unknown as Condition[];
+  const annotations = meta.annotations ?? {};
+  const revisions = useDeployRevisions(context, namespace, name, kind === "Deployment");
 
   if (!kind) return <EmptyState title="No workload data" />;
 
@@ -332,13 +330,18 @@ export function WorkloadDetailsBody({ object, context }: { object: K8sObject; co
       {kind === "DaemonSet" ? (
         <DaemonSetSchedulingSection object={object} />
       ) : (
-        <WorkloadPropertiesSection kind={kind} object={object} />
+        <WorkloadFactsSection kind={kind} object={object} revisions={revisions.revisions} />
       )}
-      {kind === "Deployment" && namespace && name && (
-        <DeployRevisionsSection context={context} namespace={namespace} ownerName={name} />
-      )}
-      {hasSelector && namespace && SELF_DESCRIBING_KINDS.has(kind) && (
+      <DeployRevisionsSection state={revisions} />
+      {hasSelector && namespace && selfDescribing && (
         <RelatedPodsSection context={context} namespace={namespace} selector={selector} />
+      )}
+      {selfDescribing && (
+        <>
+          <ConditionsSection conditions={conditions} />
+          <LabelsSection labels={meta.labels ?? {}} />
+          <AnnotationsSection annotations={annotations} />
+        </>
       )}
     </>
   );

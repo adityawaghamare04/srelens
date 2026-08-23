@@ -1,19 +1,17 @@
 import type { ReactNode } from "react";
 import {
-  absoluteTimestamp,
   ageFromTimestamp,
   asArray,
   asRecord,
-  conditionKind,
   containerLastRestartTime,
   containerStateText,
   envText,
   latestRestartTime,
   mountText,
   orderPodConditions,
-  phaseKind,
   portText,
   probeChips,
+  resourceStatusLine,
   resourceText,
   str,
   summarizeAffinity,
@@ -26,12 +24,13 @@ import {
   EmptyState,
   KV,
   PairList,
-  Panel,
+  Section,
   StatusPill,
   SubHead,
   Table,
   type Column,
 } from "@srelens/ui-kit";
+import { AnnotationLines, ConditionsSection } from "./ConditionsSection";
 
 /**
  * Kubernetes' own labels for a pod volume's source kind, keyed on which field
@@ -104,20 +103,49 @@ function volumeTypeLabel(volume: Record<string, unknown>): string {
   return VOLUME_TYPE_LABELS[type] ?? type;
 }
 
+/** The images a pod runs, each named once however many containers share it. */
+function imagesOf(containers: unknown): string[] {
+  return [...new Set(asArray(containers).map((c) => str(asRecord(c).image)).filter(Boolean))];
+}
+
+/** One image reads as a fact; several read as a list. */
+function ImageValue({ images }: { images: string[] }) {
+  return images.length === 1 ? <span className="font-mono">{images[0]}</span> : <StringList items={images} />;
+}
+
 /**
- * A pod's identity, ownership and placement — classic's "Properties" section,
- * ported fact-for-fact. Several of these (Namespace, Node, Service Account,
- * Priority Class, Runtime Class, Controlled By, Image pull secrets) are
- * `ResourceLink`s in classic that navigate to another object; they render
- * here as plain text instead (see the task report for the full list and what
- * each would link to).
+ * The pod's facts, in the order the design's own Pod frame reads them:
+ * Status, Node, Pod IP, QoS class, Service account, Containers ready,
+ * Restarts, Controlled by, Created, Image.
+ *
+ * No heading. The design heads the first block of a detail with nothing — the
+ * pane's header has already given the name, the kind and the namespace — and
+ * no `Name` row either, which repeated that header verbatim.
+ *
+ * The frame's ten facts are not everything srelens knows, and the extras it
+ * carries over from classic (Pod IPs, Priority class, Runtime class, Image
+ * pull secrets, Last restart) stay: the frame is a design, not a schema. They
+ * sit beside their own kin rather than in a heap at the end, so the reading
+ * order the frame set survives them.
+ *
+ * `Image` is new here. It used to live only on the Containers pane, which
+ * meant the one question asked of a pod more often than any other — what is
+ * it running — took a tab change to answer.
+ *
+ * The status word comes from core's `resourceStatusLine`, the same reading the
+ * pane's header and the list row use. Nothing here derives a second opinion:
+ * a pod whose container sits in `CrashLoopBackOff` still reports phase
+ * "Running", so a fact list reading `status.phase` by itself would print
+ * "Running" under a header saying "CrashLoopBackOff".
+ *
+ * Namespace, Node, Service account, Priority class, Runtime class, Controlled
+ * by and Image pull secrets are `ResourceLink`s in classic that navigate;
+ * they render here as plain text (see the task report for the full list).
  */
-function PropertiesSection({ object }: { object: K8sObject }) {
+function FactsSection({ object }: { object: K8sObject }) {
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
-  const labels = meta.labels ?? {};
-  const annotations = meta.annotations ?? {};
   const owners = meta.ownerReferences ?? [];
   const podIPs = asArray(status.podIPs)
     .map((p) => str(asRecord(p).ip))
@@ -125,17 +153,18 @@ function PropertiesSection({ object }: { object: K8sObject }) {
   const imagePullSecrets = asArray(spec.imagePullSecrets)
     .map((secret) => str(asRecord(secret).name))
     .filter(Boolean);
+  const containerStatuses = asArray(status.containerStatuses).map(asRecord);
   const allContainerStatuses = [
-    ...asArray(status.initContainerStatuses),
-    ...asArray(status.containerStatuses),
-    ...asArray(status.ephemeralContainerStatuses),
-  ].map(asRecord);
+    ...asArray(status.initContainerStatuses).map(asRecord),
+    ...containerStatuses,
+    ...asArray(status.ephemeralContainerStatuses).map(asRecord),
+  ];
   const podRestartCount = allContainerStatuses.reduce(
     (total, containerStatus) => total + Number(containerStatus.restartCount ?? 0),
     0,
   );
   const podLastRestart = latestRestartTime(allContainerStatuses);
-  const phase = str(status.phase);
+  const containersReady = containerStatuses.filter((c) => c.ready === true).length;
   const created = str(meta.creationTimestamp);
   const nodeName = str(spec.nodeName);
   const podIP = str(status.podIP);
@@ -143,25 +172,18 @@ function PropertiesSection({ object }: { object: K8sObject }) {
   const priorityClassName = str(spec.priorityClassName);
   const runtimeClassName = str(spec.runtimeClassName);
   const qosClass = str(status.qosClass);
+  const images = imagesOf(spec.containers);
+  const statusLine = resourceStatusLine("Pod", object);
 
   return (
-    <Panel title="Properties">
-      {created && <KV k="Created" v={timestampWithAge(created, Date.now())} />}
-      <KV k="Name" v={str(meta.name)} mono />
-      {meta.namespace && <KV k="Namespace" v={str(meta.namespace)} mono />}
-      {Object.keys(labels).length > 0 && <KV k="Labels" v={<PairList pairs={Object.entries(labels)} />} />}
-      {Object.keys(annotations).length > 0 && (
-        <KV k="Annotations" v={<PairList pairs={Object.entries(annotations)} />} />
+    <Section>
+      {statusLine && (
+        <KV k="Status" v={<StatusPill status={statusLine.status} kind={statusLine.health} tinted />} />
       )}
-      {owners.length > 0 && (
-        <KV k="Controlled by" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
-      )}
-      <KV k="Status" v={<StatusPill status={phase || "—"} kind={phaseKind(phase)} />} />
-      <KV k="Container restarts" v={str(podRestartCount)} />
-      {podLastRestart && <KV k="Last restart" v={timestampWithAge(podLastRestart, Date.now())} />}
       {nodeName && <KV k="Node" v={nodeName} mono />}
       {podIP && <KV k="Pod IP" v={podIP} mono />}
       {podIPs.length > 0 && <KV k="Pod IPs" v={<StringList items={podIPs} />} />}
+      {qosClass && <KV k="QoS class" v={qosClass} />}
       {serviceAccountName && <KV k="Service account" v={serviceAccountName} mono />}
       {priorityClassName && <KV k="Priority class" v={priorityClassName} mono />}
       {runtimeClassName && <KV k="Runtime class" v={runtimeClassName} mono />}
@@ -171,41 +193,21 @@ function PropertiesSection({ object }: { object: K8sObject }) {
           v={<StringList items={imagePullSecrets.map((name) => `Secret/${name}`)} />}
         />
       )}
-      {qosClass && <KV k="QoS class" v={qosClass} />}
-    </Panel>
-  );
-}
-
-/**
- * The pod lifecycle conditions timeline, in the order `orderPodConditions`
- * gives (PodScheduled → Initialized → ContainersReady → Ready, then anything
- * else in its original order) — not the order the API happened to return
- * them.
- */
-function ConditionsSection({ conditions }: { conditions: Condition[] }) {
-  if (conditions.length === 0) return null;
-  return (
-    <Panel title="Conditions">
-      <ol className="flex flex-col gap-2">
-        {orderPodConditions(conditions).map((condition) => (
-          <li key={condition.type} className="flex items-center justify-between gap-3">
-            <span>
-              {condition.type}
-              {condition.reason && condition.reason !== condition.type && (
-                <span className="text-muted"> · {condition.reason}</span>
-              )}
-            </span>
-            <StatusPill status={condition.status} kind={conditionKind(condition)} />
-            <span
-              className="text-right text-xs text-muted"
-              title={condition.lastTransitionTime ? absoluteTimestamp(condition.lastTransitionTime) : undefined}
-            >
-              {condition.lastTransitionTime ? `${ageFromTimestamp(condition.lastTransitionTime)} ago` : ""}
-            </span>
-          </li>
-        ))}
-      </ol>
-    </Panel>
+      {/* No container status at all means the kubelet has not reported yet:
+          "0 of 0" and "0 restarts" would read as facts where there is only an
+          absence. */}
+      {containerStatuses.length > 0 && (
+        <KV k="Containers ready" v={`${containersReady} of ${containerStatuses.length}`} />
+      )}
+      {allContainerStatuses.length > 0 && <KV k="Restarts" v={str(podRestartCount)} />}
+      {podLastRestart && <KV k="Last restart" v={timestampWithAge(podLastRestart, Date.now())} />}
+      {owners.length > 0 && (
+        <KV k="Controlled by" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
+      )}
+      {meta.namespace && <KV k="Namespace" v={str(meta.namespace)} mono />}
+      {created && <KV k="Created" v={`${ageFromTimestamp(created, Date.now())} ago`} />}
+      {images.length > 0 && <KV k="Image" v={<ImageValue images={images} />} />}
+    </Section>
   );
 }
 
@@ -225,16 +227,16 @@ function SchedulingSection({ object }: { object: K8sObject }) {
   if (!hasScheduling) return null;
 
   return (
-    <Panel title="Scheduling">
+    <Section title="Scheduling">
       <KV k="Node" v={spec.nodeName ? str(spec.nodeName) : "Not scheduled"} mono={!!spec.nodeName} />
       {Object.keys(nodeSelector).length > 0 && (
-        <KV k="Node selector" v={<PairList pairs={Object.entries(nodeSelector)} />} />
+        <KV k="Node selector" v={<PairList pairs={Object.entries(nodeSelector)} breakValues />} />
       )}
       {affinityLines.length > 0 && <KV k="Affinity" v={<StringList items={affinityLines} />} />}
       {tolerations.length > 0 && (
         <KV k="Tolerations" v={<StringList items={tolerations.map(tolerationText)} />} />
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -255,34 +257,83 @@ function PodVolumesSection({ object }: { object: K8sObject }) {
   const volumes = asArray(spec.volumes).map(asRecord);
   if (volumes.length === 0) return null;
   return (
-    <Panel title="Pod Volumes">
+    <Section title="Pod Volumes">
       <Table columns={VOLUME_COLUMNS} data={volumes} getRowKey={(v) => str(v.name)} />
-    </Panel>
+    </Section>
   );
 }
 
 /**
- * A pod's Details pane: Properties, the conditions timeline, Scheduling and
- * Pod Volumes, in classic's own order. The container list lives on the
- * Containers pane instead (`PodContainersBody`, below), which is what
- * `panes.containers` exists for.
+ * The object's labels, as a block of full-width `key=value` lines.
+ *
+ * `breakValues` is not decoration: `PairList` truncates by default and no
+ * longer writes the value into a row `title` — that attribute was how a
+ * Secret's whole applied manifest reached the DOM — so wrapping is now the
+ * only way a long label can be read at all.
+ */
+function LabelsSection({ labels }: { labels: Record<string, string> }) {
+  const pairs = Object.entries(labels);
+  if (pairs.length === 0) return null;
+  return (
+    <Section title="Labels">
+      <PairList pairs={pairs} breakValues />
+    </Section>
+  );
+}
+
+/**
+ * The object's annotations, through the shared rule that holds back the
+ * applied manifest — see `AnnotationLines`. The heading is here rather than
+ * there because a block with nothing in it must not draw its own rule.
+ */
+function AnnotationsSection({ annotations }: { annotations: Record<string, string> }) {
+  if (Object.keys(annotations).length === 0) return null;
+  return (
+    <Section title="Annotations">
+      <AnnotationLines annotations={annotations} />
+    </Section>
+  );
+}
+
+/**
+ * A pod's Details pane, as a flat run of blocks divided by hairline rules —
+ * the facts, then Scheduling and Pod Volumes, then Conditions, Labels and
+ * Annotations.
+ *
+ * Every block is a sibling of every other, with nothing wrapped around any of
+ * them: `.section + .section` is what draws the rule between two blocks, so a
+ * div — or a bare `LoadingState` — between two of them quietly removes the
+ * rule on both sides. A block with nothing to say renders nothing at all, and
+ * the rules land in the right places on their own.
+ *
+ * Conditions, Labels and Annotations close the pane rather than following the
+ * facts immediately as the design frame draws them. The frame has no
+ * Scheduling or Volumes block to place, and `GenericBody` already ends every
+ * other kind's Details this way — so a reader moving between kinds finds the
+ * same three blocks in the same place.
+ *
+ * The container list lives on the Containers pane instead
+ * (`PodContainersBody`, below), which is what `panes.containers` exists for.
  */
 export function PodDetailsBody({ object }: { object: K8sObject }) {
+  const meta = object.metadata ?? {};
   const status = asRecord(object.status);
   const conditions = asArray(status.conditions) as unknown as Condition[];
 
   const sections: ReactNode[] = [
-    <PropertiesSection key="properties" object={object} />,
-    <ConditionsSection key="conditions" conditions={conditions} />,
+    <FactsSection key="facts" object={object} />,
     <SchedulingSection key="scheduling" object={object} />,
     <PodVolumesSection key="volumes" object={object} />,
+    <ConditionsSection key="conditions" conditions={orderPodConditions(conditions)} />,
+    <LabelsSection key="labels" labels={meta.labels ?? {}} />,
+    <AnnotationsSection key="annotations" annotations={meta.annotations ?? {}} />,
   ];
 
   return <>{sections}</>;
 }
 
 /**
- * One container's card — app, init or ephemeral. State and restart count come
+ * One container's block — app, init or ephemeral. State and restart count come
  * from its `containerStatuses` entry (absent while the pod is still being
  * scheduled, e.g. an init container that hasn't started); ports, probes,
  * environment and mounts come from the spec and are omitted outright, not
@@ -325,7 +376,7 @@ function ContainerCard({
       <SubHead>
         <span className="flex items-center gap-2">
           {name}
-          {state && <StatusPill status={state.text} kind={state.kind} />}
+          {state && <StatusPill status={state.text} kind={state.kind} tinted />}
         </span>
       </SubHead>
       {targetContainerName && <KV k="Debugging" v={targetContainerName} mono />}
@@ -357,13 +408,13 @@ function ContainerGroup({
 }) {
   if (containers.length === 0) return null;
   return (
-    <Panel title={title}>
+    <Section title={title}>
       <div className="flex flex-col gap-4">
         {containers.map((c) => (
           <ContainerCard key={str(c.name)} container={c} status={statuses.get(str(c.name))} />
         ))}
       </div>
-    </Panel>
+    </Section>
   );
 }
 
@@ -378,6 +429,10 @@ function statusesByName(list: unknown): Map<string, Record<string, unknown>> {
  * `ResourceOverview.tsx` — onto kit components; the interactive port-forward
  * affordance classic offers inline is not wired here, since neither ui-next
  * nor the kit has a forward dialog yet (see the task report).
+ *
+ * Flat blocks, like the Details pane beside it: the two panes are read in the
+ * same 352px column, and a card here beside a rule there is two answers to
+ * one question.
  */
 export function PodContainersBody({ object }: { object: K8sObject }) {
   const spec = asRecord(object.spec);
@@ -399,7 +454,7 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
         containers={initContainers}
         statuses={statusesByName(status.initContainerStatuses)}
       />
-      <Panel title="Containers">
+      <Section title="Containers">
         {containers.length === 0 ? (
           <EmptyState title="No containers" />
         ) : (
@@ -409,7 +464,7 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
             ))}
           </div>
         )}
-      </Panel>
+      </Section>
       <ContainerGroup
         title="Ephemeral containers"
         containers={ephemeralContainers}

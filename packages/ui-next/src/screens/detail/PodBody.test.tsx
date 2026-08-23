@@ -162,107 +162,240 @@ describe("PodContainersBody", () => {
   });
 });
 
+/** The label column of one flat block, in the order it reads. `heading`
+ *  names the block; without one, the pane's first block — which the design
+ *  heads with nothing at all. */
+function factLabels(container: HTMLElement, heading?: string): string[] {
+  const block = heading
+    ? screen.getByRole("heading", { name: heading }).closest("section")
+    : container.querySelector("section.section");
+  return [...(block?.querySelectorAll(".kv-k") ?? [])].map((el) => el.textContent ?? "");
+}
+
 describe("PodDetailsBody", () => {
-  it("shows conditions in the order orderPodConditions gives, not API order", () => {
-    render(
-      <PodDetailsBody
-        object={pod(
-          {},
-          {
-            conditions: [
-              { type: "Ready", status: "True", lastTransitionTime: "2026-08-20T00:03:00Z" },
-              { type: "PodScheduled", status: "True", lastTransitionTime: "2026-08-20T00:00:00Z" },
-              { type: "ContainersReady", status: "True", lastTransitionTime: "2026-08-20T00:02:00Z" },
-              { type: "Initialized", status: "True", lastTransitionTime: "2026-08-20T00:01:00Z" },
-            ],
-          },
-        )}
-      />,
-    );
-    const items = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
-    expect(items).toHaveLength(4);
-    expect(items[0]).toContain("PodScheduled");
-    expect(items[1]).toContain("Initialized");
-    expect(items[2]).toContain("ContainersReady");
-    expect(items[3]).toContain("Ready");
-  });
+  const FULL_POD = pod(
+    {
+      containers: [APP_CONTAINER],
+      nodeName: "node-a",
+      serviceAccountName: "web-sa",
+      priorityClassName: "high",
+      runtimeClassName: "gvisor",
+      imagePullSecrets: [{ name: "registry-creds" }],
+    },
+    {
+      phase: "Running",
+      podIP: "10.0.0.5",
+      podIPs: [{ ip: "10.0.0.5" }, { ip: "fd00::5" }],
+      qosClass: "Burstable",
+      containerStatuses: [APP_STATUS],
+    },
+    {
+      name: "web-1",
+      namespace: "default",
+      creationTimestamp: "2026-08-20T00:00:00Z",
+      labels: { app: "web", tier: "frontend" },
+      annotations: { "kubectl.kubernetes.io/note": "deployed via ci" },
+      ownerReferences: [{ kind: "ReplicaSet", name: "web-abc123" }],
+    },
+  );
 
-  it("omits the Conditions panel when the pod reports none, but still shows Properties", () => {
-    render(<PodDetailsBody object={pod({}, {})} />);
-    expect(screen.queryByText("Conditions")).toBeNull();
-    expect(screen.getByText("Properties")).toBeDefined();
-  });
+  describe("the fact list", () => {
+    it("leads with what the design's own Pod frame leads with, and heads it with nothing", () => {
+      // Status first, Created ninth — not classic's Created/Name/Namespace
+      // opening. The extras srelens shows beyond the design frame sit beside
+      // their own kin (Pod IPs after Pod IP, Last restart after Restarts)
+      // rather than at the end.
+      const { container } = render(<PodDetailsBody object={FULL_POD} />);
+      expect(factLabels(container)).toEqual([
+        "Status",
+        "Node",
+        "Pod IP",
+        "Pod IPs",
+        "QoS class",
+        "Service account",
+        "Priority class",
+        "Runtime class",
+        "Image pull secrets",
+        "Containers ready",
+        "Restarts",
+        "Controlled by",
+        "Namespace",
+        "Created",
+        "Image",
+      ]);
+      // No heading over the first block: the pane's header has already said
+      // which pod this is.
+      expect(screen.queryByRole("heading", { name: "Properties" })).toBeNull();
+    });
 
-  describe("Properties", () => {
-    const FULL_POD = pod(
-      {
-        nodeName: "node-a",
-        serviceAccountName: "web-sa",
-        priorityClassName: "high",
-        runtimeClassName: "gvisor",
-        imagePullSecrets: [{ name: "registry-creds" }],
-      },
-      {
-        phase: "Running",
-        podIP: "10.0.0.5",
-        podIPs: [{ ip: "10.0.0.5" }, { ip: "fd00::5" }],
-        qosClass: "Burstable",
-        containerStatuses: [APP_STATUS],
-      },
-      {
-        name: "web-1",
-        namespace: "default",
-        creationTimestamp: "2026-08-20T00:00:00Z",
-        labels: { app: "web", tier: "frontend" },
-        annotations: { "kubectl.kubernetes.io/note": "deployed via ci" },
-        ownerReferences: [{ kind: "ReplicaSet", name: "web-abc123" }],
-      },
-    );
-
-    it("shows every Properties fact, with cross-resource references rendered as plain text", () => {
+    it("shows the pod's image, which used to live only on the Containers pane", () => {
       render(<PodDetailsBody object={FULL_POD} />);
-      expect(screen.getByText("Properties")).toBeDefined();
-      expect(screen.getByText("web-1")).toBeDefined();
+      expect(screen.getByText("Image")).toBeDefined();
+      expect(screen.getByText("ghcr.io/example/app:1.2.3")).toBeDefined();
+    });
+
+    it("names every image a multi-container pod runs, not just the first", () => {
+      render(
+        <PodDetailsBody
+          object={pod({ containers: [APP_CONTAINER, SIDECAR_CONTAINER] }, {}, { name: "web-1" })}
+        />,
+      );
+      expect(screen.getByText("ghcr.io/example/app:1.2.3")).toBeDefined();
+      expect(screen.getByText("ghcr.io/example/sidecar:1.0")).toBeDefined();
+    });
+
+    it("counts the containers that are ready", () => {
+      render(<PodDetailsBody object={FULL_POD} />);
+      expect(screen.getByText("Containers ready")).toBeDefined();
+      expect(screen.getByText("1 of 1")).toBeDefined();
+    });
+
+    it("omits the ready count while the kubelet has reported no container statuses", () => {
+      // "0 of 0" would read as a fact where there is only an absence.
+      render(<PodDetailsBody object={pod({ containers: [APP_CONTAINER] }, { phase: "Pending" })} />);
+      expect(screen.queryByText("Containers ready")).toBeNull();
+    });
+
+    it("says Restarts, the word the design uses", () => {
+      render(<PodDetailsBody object={FULL_POD} />);
+      expect(screen.getByText("Restarts")).toBeDefined();
+      expect(screen.queryByText("Container restarts")).toBeNull();
+      expect(screen.getByText("3")).toBeDefined();
+    });
+
+    it("drops the Name row, which repeated the pane's own header", () => {
+      const { container } = render(<PodDetailsBody object={FULL_POD} />);
+      expect(factLabels(container)).not.toContain("Name");
+      expect(screen.queryByText("web-1")).toBeNull();
+    });
+
+    it("reads Created as an age alone", () => {
+      render(<PodDetailsBody object={FULL_POD} />);
+      const created = screen.getByText("Created").closest("dl");
+      expect(created?.textContent).toMatch(/^Created\d/);
+      expect(created?.textContent).not.toMatch(/\(/);
+    });
+
+    it("takes the status word from core's one reading, so the header cannot contradict it", () => {
+      // A pod whose container is in CrashLoopBackOff still reports phase
+      // "Running"; `resourceStatusLine` is what the header reads too.
+      render(
+        <PodDetailsBody
+          object={pod(
+            { containers: [APP_CONTAINER] },
+            {
+              phase: "Running",
+              containerStatuses: [{ name: "app", ready: false, restartCount: 7, state: { waiting: { reason: "CrashLoopBackOff" } } }],
+            },
+          )}
+        />,
+      );
+      expect(screen.getByText("CrashLoopBackOff")).toBeDefined();
+      expect(screen.queryByText("Running")).toBeNull();
+    });
+
+    it("shows the remaining facts as plain text, with nothing that navigates", () => {
+      render(<PodDetailsBody object={FULL_POD} />);
       expect(screen.getByText("default")).toBeDefined();
-      expect(screen.getByTitle("app=web")).toBeDefined();
-      expect(screen.getByTitle("tier=frontend")).toBeDefined();
-      expect(screen.getByTitle("kubectl.kubernetes.io/note=deployed via ci")).toBeDefined();
       expect(screen.getByText("ReplicaSet/web-abc123")).toBeDefined();
-      expect(screen.getByText("Running")).toBeDefined();
-      expect(screen.getByText("3")).toBeDefined(); // container restarts, summed from containerStatuses
       expect(screen.getAllByText("node-a").length).toBeGreaterThan(0);
-      expect(screen.getByText("fd00::5")).toBeDefined(); // second Pod IP, from the list
+      expect(screen.getByText("fd00::5")).toBeDefined();
       expect(screen.getByText("web-sa")).toBeDefined();
       expect(screen.getByText("high")).toBeDefined();
       expect(screen.getByText("gvisor")).toBeDefined();
       expect(screen.getByText("Secret/registry-creds")).toBeDefined();
       expect(screen.getByText("Burstable")).toBeDefined();
-
       // Namespace, Node, Service account, Priority class, Runtime class and
       // Controlled by are `ResourceLink`s in classic; nothing here can
-      // navigate (see the task report), so none of it renders as a
-      // navigation control. Scoped to "Open ..." (classic's ResourceLink
-      // aria-label) rather than a bare button query, since Table's own
-      // column-sort buttons are a legitimate control, not a link.
+      // navigate (see the task report).
       expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
-    it("omits absent Properties facts rather than showing them empty", () => {
+    it("omits absent facts rather than showing them empty", () => {
       const bare = pod({}, {}, { name: "bare-1", namespace: "default" });
-      render(<PodDetailsBody object={bare} />);
-      expect(screen.getByText("Properties")).toBeDefined();
-      expect(screen.getByText("bare-1")).toBeDefined();
+      const { container } = render(<PodDetailsBody object={bare} />);
+      expect(factLabels(container)).toEqual(["Status", "Namespace"]);
+    });
+
+    it("is a flat run of blocks, not a stack of cards", () => {
+      const { container } = render(<PodDetailsBody object={FULL_POD} />);
+      expect(container.querySelector(".card")).toBeNull();
+      expect(container.querySelectorAll("section.section").length).toBeGreaterThan(1);
+    });
+  });
+
+  describe("Labels and Annotations", () => {
+    it("gives each its own headed block of full-width key=value lines", () => {
+      const { container } = render(<PodDetailsBody object={FULL_POD} />);
+      expect(screen.getByRole("heading", { name: "Labels" })).toBeDefined();
+      expect(screen.getByRole("heading", { name: "Annotations" })).toBeDefined();
+      expect(screen.getByText("app=")).toBeDefined();
+      expect(screen.getByText("web")).toBeDefined();
+      expect(screen.getByText("kubectl.kubernetes.io/note=")).toBeDefined();
+      expect(screen.getByText("deployed via ci")).toBeDefined();
+      // Not rows in the fact list, where a pair had a third of the pane.
+      expect(factLabels(container)).not.toContain("Labels");
+      expect(container.querySelector("li.truncate")).toBeNull();
+    });
+
+    it("withholds the applied-manifest annotation through the shared helper", () => {
+      const manifest = `{"kind":"Pod","spec":{"containers":[{"name":"app"}]}}`;
+      const { container } = render(
+        <PodDetailsBody
+          object={pod(
+            {},
+            {},
+            {
+              name: "web-1",
+              annotations: { "kubectl.kubernetes.io/last-applied-configuration": manifest, app: "web" },
+            },
+          )}
+        />,
+      );
+      expect(container.innerHTML).not.toContain("containers");
+      expect(screen.getByText(/last-applied-configuration/).textContent).toMatch(/YAML/);
+      expect(screen.getByText("web")).toBeDefined();
+    });
+
+    it("omits both blocks when the pod carries neither", () => {
+      render(<PodDetailsBody object={pod({}, {}, { name: "bare-1" })} />);
       expect(screen.queryByText("Labels")).toBeNull();
       expect(screen.queryByText("Annotations")).toBeNull();
-      expect(screen.queryByText("Controlled by")).toBeNull();
-      expect(screen.queryByText("Node")).toBeNull();
-      expect(screen.queryByText("Pod IP")).toBeNull();
-      expect(screen.queryByText("Pod IPs")).toBeNull();
-      expect(screen.queryByText("Service account")).toBeNull();
-      expect(screen.queryByText("Priority class")).toBeNull();
-      expect(screen.queryByText("Runtime class")).toBeNull();
-      expect(screen.queryByText("Image pull secrets")).toBeNull();
-      expect(screen.queryByText("QoS class")).toBeNull();
+    });
+  });
+
+  describe("Conditions", () => {
+    it("shows the pod's own conditions in lifecycle order, through the one shared block", () => {
+      const { container } = render(
+        <PodDetailsBody
+          object={pod(
+            {},
+            {
+              conditions: [
+                { type: "Ready", status: "True", lastTransitionTime: "2026-08-20T00:03:00Z" },
+                { type: "PodScheduled", status: "True", lastTransitionTime: "2026-08-20T00:00:00Z" },
+                { type: "ContainersReady", status: "True", lastTransitionTime: "2026-08-20T00:02:00Z" },
+                { type: "Initialized", status: "True", lastTransitionTime: "2026-08-20T00:01:00Z" },
+              ],
+            },
+          )}
+        />,
+      );
+      expect(factLabels(container, "Conditions")).toEqual([
+        "PodScheduled",
+        "Initialized",
+        "ContainersReady",
+        "Ready",
+      ]);
+      // The shared block's form: status and reason as one value, no
+      // last-transition column.
+      expect(screen.getAllByText("True · —")).toHaveLength(4);
+    });
+
+    it("omits the Conditions block when the pod reports none, and still shows the facts", () => {
+      const { container } = render(<PodDetailsBody object={pod({}, {})} />);
+      expect(screen.queryByText("Conditions")).toBeNull();
+      expect(factLabels(container)).toContain("Status");
     });
   });
 
@@ -279,35 +412,30 @@ describe("PodDetailsBody", () => {
         { name: "web-2" },
       );
       render(<PodDetailsBody object={scheduled} />);
-      expect(screen.getByText("Scheduling")).toBeDefined();
-      // "node-b" is shown in both Properties and Scheduling, same as classic.
+      expect(screen.getByRole("heading", { name: "Scheduling" })).toBeDefined();
+      // "node-b" is shown in both the fact list and Scheduling, same as classic.
       expect(screen.getAllByText("node-b")).toHaveLength(2);
-      expect(screen.getByTitle("disktype=ssd")).toBeDefined();
+      expect(screen.getByText("disktype=")).toBeDefined();
+      expect(screen.getByText("ssd")).toBeDefined();
       expect(screen.getByText("Pod anti-affinity: 1 required")).toBeDefined();
       expect(screen.getByText("dedicated=gpu → NoSchedule")).toBeDefined();
-      // Same inert-value check as Properties: nothing here can navigate.
       expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
-    it("omits the Scheduling panel when the pod has no placement info", () => {
-      const unscheduled = pod({}, {}, { name: "web-3" });
-      render(<PodDetailsBody object={unscheduled} />);
+    it("omits the Scheduling block when the pod has no placement info", () => {
+      render(<PodDetailsBody object={pod({}, {}, { name: "web-3" })} />);
       expect(screen.queryByText("Scheduling")).toBeNull();
     });
 
     it("shows Not scheduled when the pod has placement info but no assigned node", () => {
       const pending = pod(
-        {
-          tolerations: [{ key: "dedicated", operator: "Equal", value: "gpu", effect: "NoSchedule" }],
-        },
+        { tolerations: [{ key: "dedicated", operator: "Equal", value: "gpu", effect: "NoSchedule" }] },
         {},
         { name: "web-6" },
       );
       render(<PodDetailsBody object={pending} />);
-      expect(screen.getByText("Scheduling")).toBeDefined();
+      expect(screen.getByRole("heading", { name: "Scheduling" })).toBeDefined();
       expect(screen.getByText("Not scheduled")).toBeDefined();
-      // Only one "Node" fact renders — Properties omits it too, since
-      // spec.nodeName is unset.
       expect(screen.getByText("Node")).toBeDefined();
     });
   });
@@ -326,7 +454,7 @@ describe("PodDetailsBody", () => {
         { name: "web-4" },
       );
       render(<PodDetailsBody object={withVolumes} />);
-      expect(screen.getByText("Pod Volumes")).toBeDefined();
+      expect(screen.getByRole("heading", { name: "Pod Volumes" })).toBeDefined();
       expect(screen.getByText("data")).toBeDefined();
       expect(screen.getByText("Persistent Volume Claim")).toBeDefined();
       expect(screen.getByText("PersistentVolumeClaim/data-pvc")).toBeDefined();
@@ -335,16 +463,11 @@ describe("PodDetailsBody", () => {
       expect(screen.getByText("Node temporary storage")).toBeDefined();
       expect(screen.getByText("creds")).toBeDefined();
       expect(screen.getByText("Secret/app-creds")).toBeDefined();
-      // Same inert-value check as Properties and Scheduling: the Source
-      // column names the PVC/Secret it points at without a way to open it.
-      // (Table's own column-sort buttons are excluded on purpose — a real
-      // control, just not a navigation one.)
       expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
-    it("omits the Pod Volumes panel when the pod has no volumes", () => {
-      const noVolumes = pod({}, {}, { name: "web-5" });
-      render(<PodDetailsBody object={noVolumes} />);
+    it("omits the Pod Volumes block when the pod has no volumes", () => {
+      render(<PodDetailsBody object={pod({}, {}, { name: "web-5" })} />);
       expect(screen.queryByText("Pod Volumes")).toBeNull();
     });
   });
