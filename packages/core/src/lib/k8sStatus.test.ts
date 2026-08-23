@@ -438,13 +438,33 @@ describe("podStatus — the one reading a list row and a fetched object share", 
   });
 });
 
+/**
+ * The six legal (tone, dot) pairs, keyed by what `k8sStatus` calls them. Any
+ * pair outside this table is a hand-rolled one — the class of mistake that put
+ * a green pill and a red dot on one `Succeeded` pod.
+ */
+const LEGAL_VERDICTS: Record<string, string> = {
+  "success/false": "WELL",
+  "neutral/false": "AT_REST",
+  "warning/false": "IN_FLIGHT",
+  "warning/true": "UNSETTLED",
+  "danger/true": "BROKEN",
+  "neutral/true": "UNREADABLE",
+};
+
 describe("the tone and the dot are paired structurally", () => {
-  it("never draws a success-toned status with an unhealthy dot, across every kind and state", () => {
+  it("pairs every kind and state as one of the six verdicts, and reaches all six", () => {
     const objects: [string, K8sObject][] = [
       ["Pod", pod({ phase: "Running", containerStatuses: [container("a", { running: {} }, true)] })],
       ["Pod", pod({ phase: "Succeeded" })],
       ["Pod", pod({ phase: "Pending" })],
       ["Pod", pod({ phase: "Failed" })],
+      // The waiting branch, which the phase alone never reaches: a pod stuck
+      // in a back-off, and one merely on its way up.
+      ["Pod", pod({ phase: "Running", containerStatuses: [container("a", { waiting: { reason: "CrashLoopBackOff" } }, false)] })],
+      ["Pod", pod({ phase: "Pending", containerStatuses: [container("a", { waiting: { reason: "ContainerCreating" } }, false)] })],
+      // A word the phase table does not know — the only producer of UNREADABLE.
+      ["Pod", pod({ phase: "Evicted" })],
       ["Deployment", deployment({ replicas: 3 }, { readyReplicas: 3 })],
       ["Deployment", deployment({ replicas: 3 }, { readyReplicas: 1 })],
       ["Deployment", deployment({ replicas: 0 }, {})],
@@ -459,20 +479,30 @@ describe("the tone and the dot are paired structurally", () => {
       ["CronJob", { kind: "CronJob", spec: {}, status: {} }],
       ["Node", { kind: "Node", spec: {}, status: { conditions: [{ type: "Ready", status: "True" }] } }],
       ["Node", { kind: "Node", spec: { unschedulable: true }, status: { conditions: [{ type: "Ready", status: "True" }] } }],
+      // Cordoned AND NotReady: the branch that has to keep the worse verdict.
+      ["Node", { kind: "Node", spec: { unschedulable: true }, status: { conditions: [{ type: "Ready", status: "False" }] } }],
       ["Node", { kind: "Node", spec: {}, status: { conditions: [] } }],
     ];
+
+    const reached = new Set<string>();
     for (const [kind, object] of objects) {
       const line = resourceStatusLine(kind, object)!;
       expect(line).not.toBeNull();
-      if (line.health === "success") {
-        expect({ kind, status: line.status, flagged: line.flagged }).toEqual({
-          kind,
-          status: line.status,
-          flagged: false,
-        });
-      }
-      // And a danger-toned state always earns the dot, in every direction.
-      if (line.health === "danger") expect(line.flagged).toBe(true);
+      const subject = `${kind} · ${line.status}`;
+      const verdict = LEGAL_VERDICTS[`${line.health}/${line.flagged}`];
+      // `expect.any(String)` rather than `toBeDefined`: an illegal pair fails
+      // with the kind and the word that produced it, not just `undefined`.
+      expect({ subject, verdict }).toEqual({ subject, verdict: expect.any(String) });
+      reached.add(verdict);
+      // The two directions of the original rule, kept explicit: a healthy
+      // tone never earns a dot, and a failing one always does.
+      if (line.health === "success") expect({ subject, flagged: line.flagged }).toEqual({ subject, flagged: false });
+      if (line.health === "danger") expect({ subject, flagged: line.flagged }).toEqual({ subject, flagged: true });
     }
+
+    // The sweep is only worth its prose if it actually walks every branch:
+    // without this, a verdict could stop being produced by anything and no
+    // test would notice.
+    expect([...reached].sort()).toEqual([...new Set(Object.values(LEGAL_VERDICTS))].sort());
   });
 });

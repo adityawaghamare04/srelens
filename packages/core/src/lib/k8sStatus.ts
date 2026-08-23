@@ -228,7 +228,11 @@ function nodeStatus(object: K8sObject): ResourceStatusLine {
   const word = ready === undefined ? "Unknown" : str(ready.status) === "True" ? "Ready" : "NotReady";
   const readiness = phaseVerdict(word);
   if (asRecord(object.spec).unschedulable !== true) return line(word, readiness, null);
-  return line(`${word},SchedulingDisabled`, readiness === BROKEN ? BROKEN : UNSETTLED, null);
+  // Compared on the tone, not on the constant's identity: everything else in
+  // this file is safe by construction, and an identity check would be safe
+  // only by coincidence — a `phaseVerdict` that ever returned a fresh
+  // structurally-equal object would break this line silently.
+  return line(`${word},SchedulingDisabled`, readiness.health === "danger" ? BROKEN : UNSETTLED, null);
 }
 
 /**
