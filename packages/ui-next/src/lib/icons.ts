@@ -34,6 +34,7 @@ import {
   Puzzle,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Route,
   ScrollText,
@@ -186,6 +187,8 @@ export const Icons = {
 
   // The row menu's write actions, shared by every kind that offers them.
   edit: Pencil,
+  /** Put something back the way it was — the mark editor's Reset. */
+  revert: RotateCcw,
   scale: Scaling,
   restart: RotateCw,
   evict: LogOut,
