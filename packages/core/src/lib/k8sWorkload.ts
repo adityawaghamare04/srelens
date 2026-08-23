@@ -25,15 +25,29 @@ export function summarizeAffinity(affinity: Record<string, unknown>): string[] {
   return lines;
 }
 
-/** "RollingUpdate (partition 2)" / "RollingUpdate (max unavailable 1)" / "OnDelete". */
+/**
+ * "RollingUpdate · surge 25% · unavailable 0" / "RollingUpdate · partition 2" /
+ * "OnDelete".
+ *
+ * The form is the design mock's, read off frame A's Strategy row: a middle-dot
+ * run rather than a parenthesised comma list, labels without their "max"
+ * prefix, and surge named before unavailable. Where the mock and the build
+ * disagree on a value's form, the mock wins.
+ *
+ * One helper, so a DaemonSet's Update strategy row reads the same way a
+ * Deployment's does — the mock only draws the Deployment, but two forms for
+ * one fact would be a worse answer than the one it does draw.
+ */
 export function updateStrategyText(strategy: Record<string, unknown>): string {
   const type = str(strategy.type) || "RollingUpdate";
   const ru = asRecord(strategy.rollingUpdate);
   const parts: string[] = [];
+  // `!= null` and not a truthiness test: `maxUnavailable: 0` is a real
+  // setting — take nothing down while rolling — and the strictest one there is.
   if (ru.partition != null) parts.push(`partition ${str(ru.partition)}`);
-  if (ru.maxUnavailable != null) parts.push(`max unavailable ${str(ru.maxUnavailable)}`);
-  if (ru.maxSurge != null) parts.push(`max surge ${str(ru.maxSurge)}`);
-  return parts.length ? `${type} (${parts.join(", ")})` : type;
+  if (ru.maxSurge != null) parts.push(`surge ${str(ru.maxSurge)}`);
+  if (ru.maxUnavailable != null) parts.push(`unavailable ${str(ru.maxUnavailable)}`);
+  return [type, ...parts].join(" · ");
 }
 
 export function relatedPodSelector(kind: string, obj: K8sObject): Record<string, string> {

@@ -29,7 +29,7 @@ describe("summarizeAffinity", () => {
 // classic's ResourceOverview.test.tsx did not cover updateStrategyText; written
 // here against the body as moved (see k8sWorkload.ts), not against its name.
 describe("updateStrategyText", () => {
-  it("defaults to RollingUpdate with no parenthetical when the strategy is empty", () => {
+  it("defaults to RollingUpdate with nothing after it when the strategy is empty", () => {
     expect(updateStrategyText({})).toBe("RollingUpdate");
   });
 
@@ -37,30 +37,38 @@ describe("updateStrategyText", () => {
     expect(updateStrategyText({ type: "OnDelete" })).toBe("OnDelete");
   });
 
-  it("appends a partition clause when rollingUpdate.partition is set", () => {
-    expect(updateStrategyText({ rollingUpdate: { partition: 2 } })).toBe(
-      "RollingUpdate (partition 2)",
-    );
-  });
-
-  it("appends a max-unavailable clause when rollingUpdate.maxUnavailable is set", () => {
-    expect(updateStrategyText({ rollingUpdate: { maxUnavailable: 1 } })).toBe(
-      "RollingUpdate (max unavailable 1)",
-    );
-  });
-
-  it("appends a max-surge clause when rollingUpdate.maxSurge is set", () => {
-    expect(updateStrategyText({ rollingUpdate: { maxSurge: "25%" } })).toBe(
-      "RollingUpdate (max surge 25%)",
-    );
-  });
-
-  it("joins multiple rollingUpdate clauses with a comma, in partition/maxUnavailable/maxSurge order", () => {
+  it("reads the design mock's Deployment strategy verbatim: surge before unavailable", () => {
+    // Frame A draws `RollingUpdate · surge 25% · unavailable 0`. Where the
+    // mock and the build disagree on a value's form, the mock wins — so the
+    // separator is a middle dot rather than a parenthesised comma list, the
+    // labels drop their "max", and surge is named before unavailable.
     expect(
-      updateStrategyText({
-        rollingUpdate: { partition: 1, maxUnavailable: 1, maxSurge: 1 },
-      }),
-    ).toBe("RollingUpdate (partition 1, max unavailable 1, max surge 1)");
+      updateStrategyText({ type: "RollingUpdate", rollingUpdate: { maxUnavailable: 0, maxSurge: "25%" } }),
+    ).toBe("RollingUpdate · surge 25% · unavailable 0");
+  });
+
+  it("appends a partition clause when rollingUpdate.partition is set", () => {
+    expect(updateStrategyText({ rollingUpdate: { partition: 2 } })).toBe("RollingUpdate · partition 2");
+  });
+
+  it("appends an unavailable clause when rollingUpdate.maxUnavailable is set", () => {
+    expect(updateStrategyText({ rollingUpdate: { maxUnavailable: 1 } })).toBe("RollingUpdate · unavailable 1");
+  });
+
+  it("appends a surge clause when rollingUpdate.maxSurge is set", () => {
+    expect(updateStrategyText({ rollingUpdate: { maxSurge: "25%" } })).toBe("RollingUpdate · surge 25%");
+  });
+
+  it("keeps an unavailable clause that is explicitly zero, which the mock shows", () => {
+    // `0` is a real setting — "take nothing down while rolling" — and dropping
+    // it as falsy would silently lose the strictest configuration there is.
+    expect(updateStrategyText({ rollingUpdate: { maxUnavailable: 0 } })).toBe("RollingUpdate · unavailable 0");
+  });
+
+  it("joins several clauses with the same middle dot, partition then surge then unavailable", () => {
+    expect(updateStrategyText({ rollingUpdate: { partition: 1, maxUnavailable: 1, maxSurge: 1 } })).toBe(
+      "RollingUpdate · partition 1 · surge 1 · unavailable 1",
+    );
   });
 });
 
