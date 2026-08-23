@@ -7,28 +7,34 @@
  * typed on a *summary row* the backend built (`PodSummary`, `DeploymentSummary`
  * …). A detail pane holds a `K8sObject` instead, and has no row to ask. This
  * module answers the same questions off the object, reusing the rules rather
- * than restating them: `phaseKind` for a phase word's tone, `containerStateText`
- * for a waiting container's.
+ * than restating them: `phaseKind` for a phase word's tone, `waitingKind` for a
+ * stuck container's.
  *
- * The word, the tone and the flag are decided together, in one branch per kind.
+ * The word, the tone and the flag are decided together — see `Verdict` below.
  * That is deliberate: they were once derived by separate functions, and a
  * `Succeeded` pod ended up with a green pill and a red "needs attention" dot at
  * the same time. Two readings of one fact can disagree; one reading cannot.
  */
-import { containerStateText, phaseKind, type HealthKind } from "./k8sHealth";
+import { phaseKind, waitingKind, type HealthKind } from "./k8sHealth";
 import { asArray, asRecord, str } from "./k8sRaw";
 import type { K8sObject } from "./manifest";
 
-export interface ResourceStatusLine {
+/** A status word with the tone and the dot that go with it. */
+export interface StatusVerdict {
   /**
    * The kind's own status word — "Running", "Degraded", "Pending",
-   * "Succeeded", "Failed", "Complete", "Suspended", "Ready,SchedulingDisabled".
-   * One kind's vocabulary is not another's; this is whatever that kind calls
-   * the state it is in.
+   * "Succeeded", "Failed", "CrashLoopBackOff", "Complete", "Suspended",
+   * "Ready,SchedulingDisabled". One kind's vocabulary is not another's; this
+   * is whatever that kind calls the state it is in.
    */
   status: string;
   /** Tone for the word, and for the unhealthy dot when `flagged`. */
   health: HealthKind;
+  /** Whether the resource needs attention — a list row's dot, or the detail header's. */
+  flagged: boolean;
+}
+
+export interface ResourceStatusLine extends StatusVerdict {
   /**
    * The whole ready phrase, its noun included — "9/12 ready", "1/1 ready",
    * "3/3 complete" — for rendering verbatim, or `null` where the kind has no
@@ -36,13 +42,46 @@ export interface ResourceStatusLine {
    * every kind: a Job counts completions, not readiness.
    */
   readyText: string | null;
-  /**
-   * Whether the resource needs attention — the header's leading dot. Never
-   * true for a state whose own tone is `success`, and never derived
-   * independently of `health`.
-   */
-  flagged: boolean;
 }
+
+/**
+ * The six (tone, dot) pairs a status word may carry, and the ONLY place in
+ * srelens where a tone and a flag are written side by side. Every branch below
+ * picks one of these by name and supplies a word; none of them can pair a
+ * green pill with a red dot, because there is no verdict that says that.
+ *
+ * The pairs are not derivable from the tone alone, which is why they are
+ * enumerated rather than computed: a running Job is amber and NOT flagged
+ * (`jobFlagged` says only a failure earns the dot — still running is not yet
+ * wrong), while a Pending pod is amber and IS flagged.
+ */
+const WELL = { health: "success", flagged: false } as const;
+/** Deliberately at rest: scaled to zero, suspended. Nothing to see. */
+const AT_REST = { health: "neutral", flagged: false } as const;
+/** Working, and expected to be: an active Job. Amber, but no dot. */
+const IN_FLIGHT = { health: "warning", flagged: false } as const;
+/** On its way, or held back — worth a look but not a failure. */
+const UNSETTLED = { health: "warning", flagged: true } as const;
+const BROKEN = { health: "danger", flagged: true } as const;
+/** A word we do not know. No colour it has not earned, but still a dot: not
+ *  recognising a state is not the same as knowing it is fine. */
+const UNREADABLE = { health: "neutral", flagged: true } as const;
+
+type Verdict =
+  | typeof WELL
+  | typeof AT_REST
+  | typeof IN_FLIGHT
+  | typeof UNSETTLED
+  | typeof BROKEN
+  | typeof UNREADABLE;
+
+const verdict = (status: string, v: Verdict): StatusVerdict => ({ status, ...v });
+
+const line = (status: string, v: Verdict, readyText: string | null): ResourceStatusLine => ({
+  status,
+  ...v,
+  readyText,
+});
 
 /** A count off `status`/`spec`, absent meaning zero (as the backend's list summaries read it). */
 function count(value: unknown): number {
@@ -61,9 +100,9 @@ function count(value: unknown): number {
  */
 function scaledStatus(ready: number, desired: number, zeroWord: string): ResourceStatusLine {
   const readyText = `${ready}/${desired} ready`;
-  if (desired === 0) return { status: zeroWord, health: "neutral", readyText, flagged: false };
-  if (ready < desired) return { status: "Degraded", health: "danger", readyText, flagged: true };
-  return { status: "Running", health: "success", readyText, flagged: false };
+  if (desired === 0) return line(zeroWord, AT_REST, readyText);
+  if (ready < desired) return line("Degraded", BROKEN, readyText);
+  return line("Running", WELL, readyText);
 }
 
 /**
@@ -92,40 +131,59 @@ function daemonSetStatus(object: K8sObject): ResourceStatusLine {
 const TERMINAL_POD_PHASES = ["Succeeded", "Failed"];
 
 /**
- * A pod's phase, or the reason a container is stuck waiting.
+ * `podFlagged`'s rule as a verdict: anything the phase table does not call
+ * healthy earns the dot, and keeps its own tone while doing so.
+ */
+function phaseVerdict(phase: string): Verdict {
+  const health = phaseKind(phase);
+  if (health === "success") return WELL;
+  if (health === "warning") return UNSETTLED;
+  if (health === "danger") return BROKEN;
+  return UNREADABLE;
+}
+
+/**
+ * A pod's status word, tone and dot, from the two facts a list row and a
+ * fetched object can both supply: the phase, and the reason a container is
+ * waiting (`""` when none is).
  *
- * `status.phase` alone says "Running" for a pod whose only container is in
- * `CrashLoopBackOff`, which is the opposite of what the reader needs; kubectl
- * shows the waiting reason for the same reason. The tone of that reason comes
- * from `containerStateText`, which already draws the BackOff/other line — this
- * takes its verdict rather than restating it.
+ * `status.phase` alone is not enough, and this is not a nicety: a pod whose
+ * only container sits in `CrashLoopBackOff` still reports phase `Running`, so
+ * anything reading the phase by itself draws a crash-looping pod green and
+ * healthy. kubectl shows the waiting reason for exactly this reason, and so do
+ * we — in the list and in the detail header, through this one function, so the
+ * two can never say different things about the same pod.
  *
  * A terminal pod is left alone: its containers are terminated, and a stale
  * waiting entry must not drag a finished pod back to unhealthy.
  */
-function podStatus(object: K8sObject): ResourceStatusLine {
+export function podStatus(phase: string, waitingReason = ""): StatusVerdict {
+  const word = phase || "Unknown";
+  if (waitingReason && !TERMINAL_POD_PHASES.includes(word)) {
+    return verdict(waitingReason, waitingKind(waitingReason) === "danger" ? BROKEN : UNSETTLED);
+  }
+  return verdict(word, phaseVerdict(word));
+}
+
+/**
+ * The same reading, off a fetched Pod: pull the phase and the first waiting
+ * reason out of the object — the two fields `summarise_pod` puts on a
+ * `PodSummary` — and hand them to `podStatus`, then add the ready count only
+ * a detail header shows.
+ */
+function podStatusLine(object: K8sObject): ResourceStatusLine {
   const status = asRecord(object.status);
   const statuses = asArray(status.containerStatuses).map(asRecord);
   const ready = statuses.filter((c) => c.ready === true).length;
   // No container statuses at all means the kubelet has not reported yet —
   // "0/0 ready" would read as a fact when it is an absence.
   const readyText = statuses.length > 0 ? `${ready}/${statuses.length} ready` : null;
-
-  const phase = str(status.phase) || "Unknown";
-  const waiting = TERMINAL_POD_PHASES.includes(phase)
-    ? undefined
-    : statuses.find((c) => str(asRecord(asRecord(c.state).waiting).reason) !== "");
-  if (waiting) {
-    const reason = str(asRecord(asRecord(waiting.state).waiting).reason);
-    const health = containerStateText(waiting).kind;
-    return { status: reason, health, readyText, flagged: health !== "success" };
-  }
-
-  const health = phaseKind(phase);
-  // `podFlagged`'s rule exactly: anything the phase table does not call
-  // healthy earns the dot, so a `Succeeded` pod's green pill and its (absent)
-  // dot can never disagree.
-  return { status: phase, health, readyText, flagged: health !== "success" };
+  // First waiting container, in container order — the same one the backend
+  // summarises onto a row.
+  const waiting = statuses
+    .map((c) => str(asRecord(asRecord(c.state).waiting).reason))
+    .find((reason) => reason !== "");
+  return { ...podStatus(str(status.phase), waiting), readyText };
 }
 
 /**
@@ -139,9 +197,9 @@ function jobStatus(object: K8sObject): ResourceStatusLine {
   // An unset `completions` means one, per the Job API's own default.
   const completions = spec.completions != null ? count(spec.completions) : 1;
   const readyText = `${count(status.succeeded)}/${completions} complete`;
-  if (count(status.failed) > 0) return { status: "Failed", health: "danger", readyText, flagged: true };
-  if (count(status.active) > 0) return { status: "Active", health: "warning", readyText, flagged: false };
-  return { status: "Complete", health: "success", readyText, flagged: false };
+  if (count(status.failed) > 0) return line("Failed", BROKEN, readyText);
+  if (count(status.active) > 0) return line("Active", IN_FLIGHT, readyText);
+  return line("Complete", WELL, readyText);
 }
 
 /**
@@ -151,9 +209,7 @@ function jobStatus(object: K8sObject): ResourceStatusLine {
  */
 function cronJobStatus(object: K8sObject): ResourceStatusLine {
   const suspended = asRecord(object.spec).suspend === true;
-  return suspended
-    ? { status: "Suspended", health: "neutral", readyText: null, flagged: false }
-    : { status: "Active", health: "success", readyText: null, flagged: false };
+  return suspended ? line("Suspended", AT_REST, null) : line("Active", WELL, null);
 }
 
 /**
@@ -164,17 +220,15 @@ function cronJobStatus(object: K8sObject): ResourceStatusLine {
  * Cordoning is appended the way kubectl prints it, and warns: the list already
  * badges `SchedulingDisabled` in the warning tone, and a node that is refusing
  * new pods is a thing the reader wants marked. A node that is also NotReady
- * keeps the worse of the two tones.
+ * keeps the worse of the two verdicts.
  */
 function nodeStatus(object: K8sObject): ResourceStatusLine {
   const conditions = asArray(asRecord(object.status).conditions).map(asRecord);
   const ready = conditions.find((c) => str(c.type) === "Ready");
   const word = ready === undefined ? "Unknown" : str(ready.status) === "True" ? "Ready" : "NotReady";
-  const readiness = phaseKind(word);
-  const cordoned = asRecord(object.spec).unschedulable === true;
-  if (!cordoned) return { status: word, health: readiness, readyText: null, flagged: readiness !== "success" };
-  const health = readiness === "danger" ? "danger" : "warning";
-  return { status: `${word},SchedulingDisabled`, health, readyText: null, flagged: true };
+  const readiness = phaseVerdict(word);
+  if (asRecord(object.spec).unschedulable !== true) return line(word, readiness, null);
+  return line(`${word},SchedulingDisabled`, readiness === BROKEN ? BROKEN : UNSETTLED, null);
 }
 
 /**
@@ -194,7 +248,7 @@ function nodeStatus(object: K8sObject): ResourceStatusLine {
 export function resourceStatusLine(kind: string, object: K8sObject): ResourceStatusLine | null {
   switch (kind) {
     case "Pod":
-      return podStatus(object);
+      return podStatusLine(object);
     case "Deployment":
     case "StatefulSet":
     case "ReplicaSet":

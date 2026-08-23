@@ -72,6 +72,16 @@ export function orderPodConditions(conditions: Condition[]): Condition[] {
     .map(({ condition }) => condition);
 }
 
+/**
+ * A waiting container's tone: a back-off is a failure — the kubelet has already
+ * tried and given up for now — anything else is a container still on its way
+ * up. One rule, one home: `containerStateText` below tones its own waiting
+ * branch with it, and `podStatus` in `k8sStatus` tones a whole pod with it.
+ */
+export function waitingKind(reason: string): HealthKind {
+  return reason.includes("BackOff") ? "danger" : "warning";
+}
+
 /** Describe a container's runtime state, e.g. "running, ready". */
 export function containerStateText(st: Record<string, unknown>): { text: string; kind: HealthKind } {
   const state = asRecord(st.state);
@@ -79,7 +89,7 @@ export function containerStateText(st: Record<string, unknown>): { text: string;
   if ("running" in state) return { text: `running${ready}`, kind: "success" };
   if ("waiting" in state) {
     const reason = str(asRecord(state.waiting).reason) || "waiting";
-    return { text: `waiting - ${reason}`, kind: reason.includes("BackOff") ? "danger" : "warning" };
+    return { text: `waiting - ${reason}`, kind: waitingKind(reason) };
   }
   if ("terminated" in state) {
     const t = asRecord(state.terminated);

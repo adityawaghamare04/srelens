@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resourceStatusLine } from "./k8sStatus";
+import { podStatus, resourceStatusLine } from "./k8sStatus";
 import type { K8sObject } from "./manifest";
 
 /** A Deployment-shaped object: `spec.replicas` desired, the rest on `status`. */
@@ -369,5 +369,110 @@ describe("resourceStatusLine — kinds with no status line", () => {
     expect(resourceStatusLine("", {})).toBeNull();
     expect(() => resourceStatusLine("Pod", {})).not.toThrow();
     expect(() => resourceStatusLine("Deployment", {})).not.toThrow();
+  });
+});
+
+describe("podStatus — the one reading a list row and a fetched object share", () => {
+  it("gives a crash-looping pod the same verdict the header derives from the object", () => {
+    // The whole point of the shared function: `PodSummary` carries the phase
+    // and the waiting reason, `K8sObject` carries the container statuses those
+    // were summarised from, and both arrive here.
+    expect(podStatus("Running", "CrashLoopBackOff")).toEqual({
+      status: "CrashLoopBackOff",
+      health: "danger",
+      flagged: true,
+    });
+    const object: K8sObject = {
+      kind: "Pod",
+      status: {
+        phase: "Running",
+        containerStatuses: [{ name: "api", ready: false, state: { waiting: { reason: "CrashLoopBackOff" } } }],
+      },
+    };
+    const line = resourceStatusLine("Pod", object)!;
+    const { readyText, ...verdict } = line;
+    expect(verdict).toEqual(podStatus("Running", "CrashLoopBackOff"));
+    expect(readyText).toBe("0/1 ready");
+  });
+
+  it("warns rather than fails for a pod still pulling or creating", () => {
+    expect(podStatus("Pending", "ContainerCreating")).toEqual({
+      status: "ContainerCreating",
+      health: "warning",
+      flagged: true,
+    });
+    expect(podStatus("Pending", "ImagePullBackOff")).toEqual({
+      status: "ImagePullBackOff",
+      health: "danger",
+      flagged: true,
+    });
+  });
+
+  it("falls back to the phase when no container is waiting", () => {
+    expect(podStatus("Running", "")).toEqual({ status: "Running", health: "success", flagged: false });
+    expect(podStatus("Running")).toEqual({ status: "Running", health: "success", flagged: false });
+  });
+
+  it("keeps a finished pod finished, whatever a stale waiting entry says", () => {
+    expect(podStatus("Succeeded", "CrashLoopBackOff")).toEqual({
+      status: "Succeeded",
+      health: "success",
+      flagged: false,
+    });
+    expect(podStatus("Failed", "CrashLoopBackOff")).toEqual({
+      status: "Failed",
+      health: "danger",
+      flagged: true,
+    });
+  });
+
+  it("calls an empty phase Unknown rather than rendering a blank pill", () => {
+    expect(podStatus("", "")).toEqual({ status: "Unknown", health: "danger", flagged: true });
+  });
+
+  it("flags a phase word it does not recognise without inventing a colour for it", () => {
+    // `podFlagged`'s rule verbatim: anything the phase table does not call
+    // healthy earns the dot. The tone stays neutral because nothing has told
+    // us it is red.
+    expect(podStatus("Evicted", "")).toEqual({ status: "Evicted", health: "neutral", flagged: true });
+  });
+});
+
+describe("the tone and the dot are paired structurally", () => {
+  it("never draws a success-toned status with an unhealthy dot, across every kind and state", () => {
+    const objects: [string, K8sObject][] = [
+      ["Pod", pod({ phase: "Running", containerStatuses: [container("a", { running: {} }, true)] })],
+      ["Pod", pod({ phase: "Succeeded" })],
+      ["Pod", pod({ phase: "Pending" })],
+      ["Pod", pod({ phase: "Failed" })],
+      ["Deployment", deployment({ replicas: 3 }, { readyReplicas: 3 })],
+      ["Deployment", deployment({ replicas: 3 }, { readyReplicas: 1 })],
+      ["Deployment", deployment({ replicas: 0 }, {})],
+      ["StatefulSet", { kind: "StatefulSet", spec: { replicas: 1 }, status: { readyReplicas: 1 } }],
+      ["ReplicaSet", { kind: "ReplicaSet", spec: { replicas: 0 }, status: {} }],
+      ["DaemonSet", { kind: "DaemonSet", status: { desiredNumberScheduled: 2, numberReady: 2 } }],
+      ["DaemonSet", { kind: "DaemonSet", status: { desiredNumberScheduled: 2, numberReady: 0 } }],
+      ["Job", { kind: "Job", spec: {}, status: { succeeded: 1 } }],
+      ["Job", { kind: "Job", spec: {}, status: { active: 1 } }],
+      ["Job", { kind: "Job", spec: {}, status: { failed: 1 } }],
+      ["CronJob", { kind: "CronJob", spec: { suspend: true }, status: {} }],
+      ["CronJob", { kind: "CronJob", spec: {}, status: {} }],
+      ["Node", { kind: "Node", spec: {}, status: { conditions: [{ type: "Ready", status: "True" }] } }],
+      ["Node", { kind: "Node", spec: { unschedulable: true }, status: { conditions: [{ type: "Ready", status: "True" }] } }],
+      ["Node", { kind: "Node", spec: {}, status: { conditions: [] } }],
+    ];
+    for (const [kind, object] of objects) {
+      const line = resourceStatusLine(kind, object)!;
+      expect(line).not.toBeNull();
+      if (line.health === "success") {
+        expect({ kind, status: line.status, flagged: line.flagged }).toEqual({
+          kind,
+          status: line.status,
+          flagged: false,
+        });
+      }
+      // And a danger-toned state always earns the dot, in every direction.
+      if (line.health === "danger") expect(line.flagged).toBe(true);
+    }
   });
 });

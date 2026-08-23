@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { conditionKind, containerStateText, orderPodConditions, phaseKind } from "./k8sHealth";
+import { conditionKind, containerStateText, orderPodConditions, phaseKind, waitingKind } from "./k8sHealth";
 
 describe("orderPodConditions", () => {
   it("orders lifecycle conditions PodScheduled → Initialized → ContainersReady → Ready", () => {
@@ -177,5 +177,19 @@ describe("phaseKind", () => {
   it("leaves any word it does not recognise neutral rather than guessing a tone", () => {
     expect(phaseKind("CrashLoopBackOff")).toBe("neutral");
     expect(phaseKind("")).toBe("neutral");
+  });
+});
+
+describe("waitingKind", () => {
+  it("calls any back-off a failure — the kubelet has already tried and stopped", () => {
+    expect(waitingKind("CrashLoopBackOff")).toBe("danger");
+    expect(waitingKind("ImagePullBackOff")).toBe("danger");
+  });
+
+  it("calls a container still on its way up a warning", () => {
+    expect(waitingKind("ContainerCreating")).toBe("warning");
+    expect(waitingKind("PodInitializing")).toBe("warning");
+    expect(waitingKind("CreateContainerConfigError")).toBe("warning");
+    expect(waitingKind("")).toBe("warning");
   });
 });
