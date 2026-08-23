@@ -494,7 +494,14 @@ function KindList({
         <SideRail
           head="About this kind"
           width={CRD_RAIL_WIDTH}
-          rail={<AboutKind crd={crd} context={name} objects={rows.length} />}
+          // The count is what the TABLE beside it holds — narrowed by the
+          // namespace selection, not a cluster-wide total, because no such
+          // total is available without a second call and a number that
+          // disagreed with the rows under it would be worse than a narrow
+          // one. It is withheld entirely until the list has answered:
+          // `AboutKind` drops the row rather than drawing `Objects 0`, which
+          // is a wrong number a reader would believe.
+          rail={<AboutKind crd={crd} context={name} objects={showRows ? rows.length : undefined} />}
         >
           {/* The left pane's own head, as the design words it. `crd.kind` again
               — the slug is a plural DNS name and reads as one. */}

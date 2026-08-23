@@ -469,6 +469,20 @@ describe("Resources", () => {
     expect(within(rail).getByText(/kubectl --context prod-eu get widgets.example.com -A -o wide/)).toBeDefined();
   });
 
+  it("counts no objects until the list has answered, rather than saying nought", async () => {
+    // `Objects 0` while the rows are still in flight is not a small number,
+    // it is a wrong one — and it is the number a reader glances at and
+    // believes. The row waits for a count.
+    listCrds.mockResolvedValue({ crds: [WIDGETS] });
+    listCustomResource.mockReturnValue(new Promise(() => {}));
+
+    open("/k/widgets.example.com");
+
+    const rail = await screen.findByRole("complementary", { name: "About this kind" });
+    expect(railRow(rail, "Kind")).toBe("Widget");
+    expect(rail.textContent).not.toContain("Objects");
+  });
+
   it("heads the custom list's own pane with the kind, not the slug", async () => {
     listCrds.mockResolvedValue({ crds: [WIDGETS] });
     listCustomResource.mockResolvedValue({

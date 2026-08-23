@@ -1,14 +1,21 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { CrdRef } from "@srelens/core";
-import { KVList, KubectlPreview, Section } from "@srelens/ui-kit";
+import { Button, KVList, Section } from "@srelens/ui-kit";
+
+/** How long the copy button stays flipped, from the design's §12. */
+const COPIED_MS = 1400;
 
 export interface AboutKindProps {
   /** The CustomResourceDefinition this list's rows come from. */
   crd: CrdRef;
   /** The cluster context name, for the command a reader can take away. */
   context: string;
-  /** How many objects of this kind the list is showing. */
-  objects: number;
+  /**
+   * How many objects of this kind the list is showing, or `undefined` when
+   * there is no count yet. Optional for the same reason the version fields
+   * are: a row nothing is known for is left out, never drawn as a zero.
+   */
+  objects?: number;
 }
 
 /**
@@ -31,11 +38,14 @@ export interface AboutKindProps {
  * fixtures, not a rule — a rail that tells a reader a cluster-scoped kind is
  * namespaced is worse than one that says nothing.
  *
+ * **A ROW WITH NOTHING BEHIND IT IS LEFT OUT, NOT DRAWN EMPTY OR ZEROED.**
  * `versions` and `storageVersion` are both optional on `CrdRef` (an older
- * backend, or a ref hand-built in a test, arrives without them), so a row with
- * nothing behind it is LEFT OUT rather than drawn with a dash. A key with an
- * empty value invites the reader to conclude the CRD serves no versions, which
- * is not a thing a CRD can do.
+ * backend, or a ref hand-built in a test, arrives without them), and `objects`
+ * is absent until the list has answered. A key with an empty value invites the
+ * reader to conclude the CRD serves no versions, which is not a thing a CRD
+ * can do; `Objects 0` on a kind with forty of them is worse still, because
+ * zero is a number a reader will believe. An absent row asks a question. A
+ * wrong one answers it.
  *
  * The title comes from `crd.kind`. The design derives it from the slug by
  * upper-casing the first letter, which renders `servicemonitors` as
@@ -48,6 +58,25 @@ export interface AboutKindProps {
  * read as one undivided block.
  */
 export function AboutKind({ crd, context, objects }: AboutKindProps) {
+  const command = `kubectl --context ${context} get ${crd.name} -A -o wide`;
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+    } catch {
+      // No clipboard on a non-secure origin, and nothing to recover: the
+      // command is rendered in full beside the button and can be selected.
+    }
+  }
+
   const rows: Array<[key: string, value: ReactNode]> = [
     ["Kind", crd.kind],
     // Read, not assumed — see the note above.
@@ -55,7 +84,7 @@ export function AboutKind({ crd, context, objects }: AboutKindProps) {
   ];
   if (crd.versions?.length) rows.push(["Served versions", crd.versions.join(", ")]);
   if (crd.storageVersion) rows.push(["Storage version", crd.storageVersion]);
-  rows.push(["Objects", String(objects)]);
+  if (objects !== undefined) rows.push(["Objects", String(objects)]);
 
   return (
     <>
@@ -63,10 +92,31 @@ export function AboutKind({ crd, context, objects }: AboutKindProps) {
         <KVList rows={rows} />
       </Section>
       <Section title="Fetch it yourself">
-        {/* `crd.name` rather than `crd.plural`: the fully qualified
-            `<plural>.<group>` is what kubectl resolves unambiguously when two
-            operators have installed a kind of the same short name. */}
-        <KubectlPreview command={`kubectl --context ${context} get ${crd.name} -A -o wide`} />
+        {/*
+          NOT `KubectlPreview`, which the plan named. That component hard-codes
+          the words "Equivalent kubectl:" ahead of the command — no prop, no
+          slot, and two suites pin the string — and they are right where it was
+          built: inside a confirm dialog, beside an action the app is about to
+          perform on the reader's behalf, saying THIS IS WHAT WE ARE DOING.
+          Under "Fetch it yourself" there is no action to be equivalent to. The
+          command is the content, and announcing it as an equivalent to nothing
+          reads as a mistake. Forking the component or hiding its label from
+          out here would both be worse than composing the two kit pieces this
+          actually needs.
+
+          The command WRAPS rather than truncating, which is the one place this
+          departs from §12. That is `KubectlPreview`'s own finding, and it
+          applies harder in a 264px rail than in a dialog: a command you cannot
+          finish reading is not one you can retype, and the alternative — a
+          `title` holding a second copy — is the disclosure hole `PairList` and
+          `KV` both had removed.
+        */}
+        <div className="flex items-start gap-2">
+          <code className="code min-w-0 flex-1 break-words">{command}</code>
+          <Button variant="ghost" size="xs" onClick={() => void copy()}>
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
       </Section>
     </>
   );

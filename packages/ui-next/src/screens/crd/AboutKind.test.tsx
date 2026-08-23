@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { CrdRef } from "@srelens/core";
 import { AboutKind } from "./AboutKind";
 
@@ -71,6 +71,22 @@ describe("AboutKind", () => {
     expect(keys(about({ ...WIDGETS, versions: [] }))).toEqual(["Kind", "Scope", "Storage version", "Objects"]);
   });
 
+  it("leaves the count out entirely while the list has none to give", () => {
+    // `Objects 0` is not a small number, it is a WRONG one, and it is the
+    // number a reader glances at and believes. The same rule the version rows
+    // already follow: nothing behind it, nothing drawn.
+    const { container } = render(<AboutKind crd={WIDGETS} context="prod-eu" />);
+
+    expect(keys(container)).toEqual(["Kind", "Scope", "Served versions", "Storage version"]);
+    expect(container.textContent).not.toContain("Objects");
+  });
+
+  it("still says nought for a kind this cluster genuinely has none of", () => {
+    // A real zero is news — it is the answer to "is the operator doing
+    // anything?" — and must not be confused with not knowing yet.
+    expect(valueOf(about(WIDGETS, 0), "Objects")).toBe("0");
+  });
+
   it("names the real kind, not the slug with its first letter upper-cased", () => {
     // The design titles `servicemonitors` as `Servicemonitors`. The CRD says
     // `ServiceMonitor`, and that is the kind anyone types at kubectl.
@@ -95,6 +111,61 @@ describe("AboutKind", () => {
     expect(container.querySelector("code.code")?.textContent).toBe(
       "kubectl --context prod-eu get servicemonitors.monitoring.coreos.com -A -o wide",
     );
+  });
+
+  it("does not announce the command as an equivalent to anything", () => {
+    // `KubectlPreview` says "Equivalent kubectl:" ahead of the command, which
+    // is right beside an action the app is about to perform and wrong under
+    // "Fetch it yourself", where the command is the content and there is no
+    // action for it to be equivalent to.
+    expect(about(WIDGETS).textContent).not.toContain("Equivalent");
+  });
+
+  it("copies the command, and says so for a moment", async () => {
+    // jsdom ships no clipboard at all, so there is nothing to spy on.
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.useFakeTimers();
+    try {
+      about(WIDGETS);
+      // `fireEvent` rather than `userEvent`: the latter installs a clipboard
+      // stub of its own and drives its pointer sequence off timers, and this
+      // test has replaced one and frozen the other.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+      });
+
+      expect(writeText).toHaveBeenCalledWith(
+        "kubectl --context prod-eu get widgets.example.com -A -o wide",
+      );
+      expect(screen.getByRole("button", { name: "Copied" })).toBeDefined();
+
+      // And back again, so a second copy is offered rather than a stuck label.
+      await act(async () => {
+        vi.advanceTimersByTime(1400);
+      });
+      expect(screen.getByRole("button", { name: "Copy" })).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("survives a machine with no clipboard, leaving the command readable", async () => {
+    // A non-secure origin has no `navigator.clipboard`, and the command is
+    // still the thing the reader came for — it stays on screen, selectable,
+    // and the button does not lie about having copied anything.
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockRejectedValue(new Error("not a secure origin"));
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    const container = about(WIDGETS);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    });
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeDefined();
+    expect(container.querySelector("code.code")?.textContent).toContain("kubectl --context prod-eu");
   });
 
   it("renders its sections as siblings, so the rail rules between them", () => {
