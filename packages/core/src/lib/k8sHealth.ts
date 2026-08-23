@@ -61,11 +61,38 @@ export interface Condition {
  */
 const NEGATIVE_CONDITION = /Pressure|Unavailable|Fail|Dangling/i;
 
+/**
+ * Condition types whose `True` means "still working on it" — mapped to the one
+ * reason that means the work has landed.
+ *
+ * A Deployment's `Progressing` stays `True` after a rollout completes, so the
+ * status alone cannot tell an operator whether their change is out yet; only
+ * the reason can. The design mock draws both halves of the pair:
+ * `Progressing · True · ReplicaSetUpdated` amber in the degraded frame, and
+ * `Progressing · True · NewReplicaSetAvailable` green in the healthy one.
+ *
+ * Keyed by TYPE, and consulted only for the types listed here — the same
+ * reason string can appear on a condition of another kind, where it means
+ * something else. Named by the completion reason rather than by the in-flight
+ * ones so a reason nobody has seen before reads amber: claiming a rollout has
+ * finished takes evidence, and being unsure of a rollout is the safe half of
+ * that bet.
+ */
+const COMPLETION_REASON: Record<string, string> = {
+  Progressing: "NewReplicaSetAvailable",
+};
+
 export function conditionKind(c: Condition): HealthKind {
   const negative = NEGATIVE_CONDITION.test(c.type);
   if (c.status === "Unknown") return "warning";
   const good = c.status === "True" ? !negative : negative;
-  return good ? "success" : "danger";
+  if (!good) return "danger";
+  // Only ever softens a green to amber. A reason may not repaint a condition
+  // the status has already condemned — that is the polarity trap, and it is
+  // how a stalled `Progressing: False` would talk its way back to healthy.
+  const landed = COMPLETION_REASON[c.type];
+  if (landed && c.status === "True" && c.reason && c.reason !== landed) return "warning";
+  return "success";
 }
 
 // The pod lifecycle, in the order kubelet reports it.
