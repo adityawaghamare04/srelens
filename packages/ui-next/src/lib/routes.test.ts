@@ -3,7 +3,7 @@ import { describe as suite, it, expect } from "vitest";
 import { describe, isBuiltInKind, screenFor } from "./routes";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
-import { Resources } from "../screens/Resources";
+import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
 
 suite("isBuiltInKind", () => {
@@ -127,15 +127,28 @@ suite("screenFor", () => {
     expect(screenFor("/k/widgets.example.com")).toBe(Resources);
   });
 
-  it("does not resolve a detail route to the list screen, even though they share a prefix", () => {
+  it("resolves a detail route to the detail screen, not the list screen they share a prefix with", () => {
     // /k/pods (a list) and /k/Pod/default/web-1 (a detail) share the "/k/"
     // prefix. Get this wrong and every detail route in the app renders the
-    // list screen as if the resource's name were just another kind slug. No
-    // detail screen is registered yet (Task 15 adds it here), so this must
-    // resolve to no screen at all rather than to Resources.
+    // list screen as if the resource's name were just another kind slug.
     expect(screenFor("/k/pods")).toBe(Resources);
-    expect(screenFor("/k/Pod/default/web-1")).toBeNull();
-    expect(screenFor("/k/Node/-/worker-1")).toBeNull();
+    expect(screenFor("/k/Pod/default/web-1")).toBe(ResourceDetailScreen);
+    // The cluster-scoped sentinel is a namespace segment like any other, so a
+    // Node's route resolves the same way a Pod's does.
+    expect(screenFor("/k/Node/-/worker-1")).toBe(ResourceDetailScreen);
+  });
+
+  it("keeps a custom resource's detail route on the detail screen", () => {
+    // A CRD's kind can be anything, including something that reads like a
+    // slug — the segment COUNT is what tells a detail route from a list one.
+    expect(screenFor("/k/Widget/default/left")).toBe(ResourceDetailScreen);
+    expect(screenFor("/k/widgets.example.com")).toBe(Resources);
+  });
+
+  it("resolves a detail route whose name needed encoding", () => {
+    // `detailRoute` percent-encodes every segment; a name with a slash in it
+    // would otherwise split into six and match nothing at all.
+    expect(screenFor("/k/Pod/default/web%2F1")).toBe(ResourceDetailScreen);
   });
 
   it("still refuses a route with no screen", () => {

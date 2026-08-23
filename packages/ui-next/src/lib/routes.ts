@@ -3,7 +3,7 @@ import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { parseDetailRoute } from "./detailRoute";
 import { AppLog } from "../screens/AppLog";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
-import { Resources } from "../screens/Resources";
+import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
 
 /**
@@ -140,10 +140,9 @@ export function screenFor(route: string): ScreenComponent | null {
   // `/k/` prefix with a LIST route (`/k/<slug>`, three) — the more specific
   // match must win here, ahead of the prefix loop below, or a detail route
   // would render the LIST screen (`Resources`) as if the resource's own name
-  // were just another kind slug. No detail screen is registered yet — Task 15
-  // adds it here, once one exists — so this resolves to no screen at all in
-  // the meantime, same as any other route nothing has claimed.
-  if (parseDetailRoute(route)) return null;
+  // were just another kind slug. Matched by parse rather than by adding a
+  // second `/k/` entry to `PREFIXED`, which cannot tell the two apart at all.
+  if (parseDetailRoute(route)) return ResourceDetailScreen;
   for (const [prefix, screen] of PREFIXED) {
     // A bare prefix names no resource; `/k/` is not a route.
     if (route.startsWith(prefix) && route.length > prefix.length) return screen;

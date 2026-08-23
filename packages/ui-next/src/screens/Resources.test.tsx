@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,6 +16,7 @@ const {
   podMetrics,
   useNamespaceOptions,
   deleteResource,
+  getObject,
 } = vi.hoisted(() => ({
   watchResource: vi.fn(),
   listCrds: vi.fn(),
@@ -25,6 +26,10 @@ const {
   podMetrics: vi.fn(),
   useNamespaceOptions: vi.fn(),
   deleteResource: vi.fn(async (): Promise<{ ok?: boolean; error?: string }> => ({ ok: true })),
+  // The one read behind both detail hosts (`useObject`). Counting its calls
+  // is the only way to say "the peek did not refetch" — a rendered heading
+  // looks identical whether or not a second round trip went out.
+  getObject: vi.fn(),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => ({
@@ -36,7 +41,34 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   nodeMetrics: (...a: unknown[]) => nodeMetrics(...a),
   podMetrics: (...a: unknown[]) => podMetrics(...a),
   deleteResource,
+  getObject: (...a: unknown[]) => getObject(...a),
 }));
+
+/**
+ * `ResourceDetail` itself, unchanged — wrapped only to record the props each
+ * host hands it. R-5 says the peek and the tab mount the same component with
+ * the same props, and the only way to assert that structurally (rather than
+ * by eyeballing two rendered trees) is to capture what each host passed.
+ *
+ * `createElement` rather than JSX inside the factory: `vi.mock` factories are
+ * hoisted above this module's own imports, and the JSX runtime binding is not
+ * guaranteed to be initialised when the factory runs.
+ */
+const { detailProps } = vi.hoisted(() => ({
+  detailProps: [] as Array<Record<string, unknown>>,
+}));
+
+vi.mock("./detail/ResourceDetail", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./detail/ResourceDetail")>();
+  const { createElement } = await import("react");
+  return {
+    ...actual,
+    ResourceDetail: (props: Record<string, unknown>) => {
+      detailProps.push({ ...props });
+      return createElement(actual.ResourceDetail, props as never);
+    },
+  };
+});
 
 vi.mock("@srelens/core/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@srelens/core/react")>()),
@@ -58,8 +90,8 @@ proto.hasPointerCapture ??= () => false;
 proto.setPointerCapture ??= () => {};
 proto.releasePointerCapture ??= () => {};
 
-import type { ClusterContext, CrdRef } from "@srelens/core";
-import { Resources } from "./Resources";
+import type { ClusterContext, CrdRef, K8sObject } from "@srelens/core";
+import { ResourceDetailScreen, Resources } from "./Resources";
 import { ConsoleProvider, useConsole } from "../console";
 import * as store from "../lib/tabsStore";
 import { defaultState } from "../lib/tabs";
@@ -123,6 +155,19 @@ beforeEach(() => {
   nodeMetrics.mockResolvedValue({ metrics: [] });
   podMetrics.mockResolvedValue({ metrics: [] });
   useNamespaceOptions.mockReturnValue({ namespaces: ["default", "billing"], scope: "", error: "" });
+  // Every row resolves to an object that names itself, so a pane's heading
+  // (which comes from the props) and its body (which comes from this read)
+  // can be told apart when they disagree.
+  getObject.mockImplementation(
+    async (_context: string, kind: string, namespace: string | null, name: string) => ({
+      object: {
+        kind,
+        apiVersion: "v1",
+        metadata: { name, ...(namespace ? { namespace } : {}) },
+      } satisfies K8sObject,
+    }),
+  );
+  detailProps.length = 0;
 
   resetContexts();
   setContexts([CTX]);
@@ -183,6 +228,43 @@ function open(route: string) {
       <AskPeek />
     </ConsoleProvider>,
   );
+}
+
+/**
+ * The detail pane, in whichever host is on screen. `Inspector` is the only
+ * thing in the app that renders `section.pane`; `Panel` renders `section.card`.
+ */
+const peekPane = () => document.querySelector("section.pane");
+
+/** The pane's heading — the subject it CLAIMS to be showing (from its props). */
+const paneName = () => peekPane()?.querySelector("h2")?.textContent ?? null;
+
+/** The pane's body — the subject it is ACTUALLY showing (from `getObject`). */
+const paneBody = () => peekPane()?.querySelector(".pane-body")?.textContent ?? "";
+
+/**
+ * A row of the LIST, by the name in its identifier cell.
+ *
+ * Matched the way `rowNames` reads them rather than by `getByText`: once the
+ * peek is filled it holds the same name in its heading and in its Properties
+ * panel, and a bare text query then finds three elements and throws.
+ */
+const row = (name: string) =>
+  Array.from(document.querySelectorAll<HTMLTableRowElement>("tbody tr.tbl-row")).find(
+    (tr) => tr.querySelector("td:not(.tbl-check)")?.textContent === name,
+  )!;
+
+/** The props the most recently rendered `ResourceDetail` was handed. */
+const lastDetailProps = () => ({ ...detailProps[detailProps.length - 1] });
+
+/**
+ * Open a detail route in a tab and render the screen registered for it — the
+ * way `Body` does. The tab host takes the same `{ route }` prop every screen
+ * does; everything it shows is parsed back out of that string.
+ */
+function openDetailTab(route: string) {
+  store.openTab(route);
+  return render(<ResourceDetailScreen route={route} />);
 }
 
 /** Open the column picker and hand back its panel. */
@@ -724,5 +806,209 @@ describe("Resources", () => {
 
     await waitFor(() => expect(deleteResource).toHaveBeenCalledTimes(1));
     expect(deleteResource).toHaveBeenCalledWith("prod-eu", "Pod", "billing", "web-0");
+  });
+});
+
+/**
+ * The two hosts the detail pane is mounted in: the peek beside the list, and
+ * the full tab the detail route resolves to. R-5 — they are the same pane, so
+ * everything here that holds for one must hold for the other.
+ */
+describe("the detail pane's two hosts", () => {
+  it("fills the peek from a row click, and opens no tab doing it", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    expect(peekPane()).toBeNull();
+    const before = store.currentWorkspace().tabs.map((t) => t.route);
+
+    fireEvent.click(row("web-1"));
+
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+    // A single click peeks; it never navigates. Opening a tab from it would
+    // make scanning a list a pile of tabs the reader never asked for.
+    expect(store.currentWorkspace().tabs.map((t) => t.route)).toEqual(before);
+  });
+
+  it("dismisses the peek on request", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Close inspector" }));
+
+    await waitFor(() => expect(peekPane()).toBeNull());
+    // The table is still there — dismissing the peek is not leaving the list.
+    expect(rowNames()).toEqual(["web-1", "api-7"]);
+  });
+
+  it("does not refetch when the peek is already showing that row", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneBody()).toContain("web-1"));
+    expect(getObject).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(row("web-1"));
+    // A second read would be issued from an effect, so let every pending one
+    // run before counting: this must fail on a refetch, not race past it.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(paneName()).toBe("web-1");
+    expect(getObject).toHaveBeenCalledTimes(1);
+  });
+
+  it("never pairs one row's heading with another row's body, and keeps one pane across the switch", async () => {
+    // Settled assertions cannot see this: RTL flushes effects synchronously,
+    // so a bad frame is overwritten before `waitFor` resolves. A real browser
+    // paints whatever was committed. This records every committed frame the
+    // way `ResourceDetail.test.tsx` does, one layer out — the peek host is
+    // where a wrong `key`, or state split across two updates, would defeat
+    // the gate that component already has.
+    const frames: Array<{ heading: string | null; body: string }> = [];
+    function FrameProbe() {
+      useLayoutEffect(() => {
+        frames.push({ heading: paneName(), body: paneBody() });
+      });
+      return null;
+    }
+
+    store.openTab("/k/pods");
+    render(
+      <ConsoleProvider>
+        <Resources route="/k/pods" />
+        <AskPeek />
+        <FrameProbe />
+      </ConsoleProvider>,
+    );
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneBody()).toContain("web-1"));
+    const paneNode = peekPane();
+    frames.length = 0;
+
+    fireEvent.click(row("api-7"));
+    await waitFor(() => expect(paneBody()).toContain("api-7"));
+    expect(paneName()).toBe("api-7");
+
+    // The same pane instance, not a fresh one: remounting per row would throw
+    // away the reader's selected tab on every click, and would paper over
+    // `ResourceDetail`'s own target gate rather than honour it.
+    expect(peekPane()).toBe(paneNode);
+
+    const mismatched = frames.filter((frame) => {
+      if (!frame.heading) return false;
+      const other = frame.heading === "web-1" ? "api-7" : "web-1";
+      return frame.body.includes(other) && !frame.body.includes(frame.heading);
+    });
+    expect(mismatched).toEqual([]);
+  });
+
+  it("shows the error, not a blank pane, for a row whose resource has gone", async () => {
+    getObject.mockResolvedValue({ error: 'pods "web-1" not found' });
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    fireEvent.click(row("web-1"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Could not load Pod default/web-1");
+    expect(alert.textContent).toContain("not found");
+  });
+
+  it("keeps a click on a row's own controls out of the peek", async () => {
+    // Both live inside the `<tr>` the peek gesture is bound to. Checking a
+    // row is not looking at it, and asking about a row is not looking at it
+    // either — either one filling the peek is a bubbling bug.
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select default/web-1" }));
+    expect(peekPane()).toBeNull();
+
+    await userEvent.click(
+      within(row("web-1")).getByRole("button", { name: /What is web-1 using right now\?/ }),
+    );
+    expect(peekPane()).toBeNull();
+
+    // The row menu is a right-click, which produces no click at all — pinned
+    // so a future trigger button inside the row cannot quietly start peeking.
+    fireEvent.contextMenu(row("web-1"));
+    // By role: the checkbox above put a Delete on the bulk bar too, and the
+    // menu's own item is the one this is about.
+    expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeTruthy();
+    expect(peekPane()).toBeNull();
+  });
+
+  it("opens the detail route's own screen for a full tab, reading the subject off the route", async () => {
+    openDetailTab("/k/Pod/default/web-1");
+
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+    expect(getObject).toHaveBeenCalledWith("prod-eu", "Pod", "default", "web-1");
+    // The tab host is the whole tab — it offers no close of its own, because
+    // closing a tab is the strip's job.
+    expect(screen.queryByRole("button", { name: "Close inspector" })).toBeNull();
+  });
+
+  it("reads a cluster-scoped detail route's null namespace off the sentinel", async () => {
+    openDetailTab("/k/Node/-/worker-1");
+
+    await waitFor(() => expect(paneName()).toBe("worker-1"));
+    expect(getObject).toHaveBeenCalledWith("prod-eu", "Node", null, "worker-1");
+  });
+
+  it("prompts for a cluster rather than reading anything when the workspace has none", async () => {
+    setContexts([]);
+    store.setState(defaultState([]));
+
+    openDetailTab("/k/Pod/default/web-1");
+
+    expect(screen.getByText(/pick a cluster/i)).toBeTruthy();
+    expect(getObject).not.toHaveBeenCalled();
+  });
+
+  it("mounts the same component with the same props in both hosts", async () => {
+    // Structural, not visual: both hosts push into the same recorder, so the
+    // component is literally one function, and the two prop objects are
+    // compared value by value.
+    const list = open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+    const fromPeek = lastDetailProps();
+    list.unmount();
+
+    detailProps.length = 0;
+    openDetailTab("/k/Pod/default/web-1");
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+    const fromTab = lastDetailProps();
+
+    // `onClose` is the one prop allowed to differ: the peek is dismissible,
+    // the tab is closed by the strip.
+    expect(typeof fromPeek.onClose).toBe("function");
+    expect(fromTab.onClose).toBeUndefined();
+    delete fromPeek.onClose;
+    delete fromTab.onClose;
+
+    expect(fromPeek).toEqual({ context: "prod-eu", kind: "Pod", namespace: "default", name: "web-1" });
+    expect(fromTab).toEqual(fromPeek);
+  });
+
+  it("offers the same panes in both hosts for the same resource", async () => {
+    const list = open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+    const peekTabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    expect(peekTabs).toContain("YAML");
+    list.unmount();
+
+    openDetailTab("/k/Pod/default/web-1");
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(peekTabs);
   });
 });
