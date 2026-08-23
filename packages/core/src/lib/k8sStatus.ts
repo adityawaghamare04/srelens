@@ -276,6 +276,29 @@ function nodeStatusLine(object: K8sObject): ResourceStatusLine {
 }
 
 /**
+ * An event's tone — the ONE rule for it, replacing two hand-paired ones: the
+ * classic list's danger/info and the detail pane's warning/neutral. Per the
+ * design (mock-full-design §B.2): `Warning` is danger and bold; everything
+ * else — `Normal`, or a type this cluster invented — reads plain.
+ *
+ * Reuses the same six-pair table above rather than writing a seventh: a
+ * `Warning` is exactly {@link BROKEN}'s (danger, dot-worthy) pair, and
+ * everything else is exactly {@link AT_REST}'s (neutral, nothing to see)
+ * pair. `bad` is that pair's `flagged`, renamed because an event has no
+ * status word of its own to hang a dot off — it names only whether the WORD
+ * is worth colouring, which is what the kit's `StatusPill` calls `tinted`.
+ *
+ * An unrecognised type is deliberately read the SAME as `Normal`, not as
+ * {@link UNREADABLE} — a resource's "I don't know this word" verdict, which
+ * still earns a dot. A cluster that invents an event type is not thereby in
+ * trouble, and colouring it would train the reader to ignore red.
+ */
+export function eventVerdict(type: string): { health: HealthKind; bad: boolean } {
+  const v = type === "Warning" ? BROKEN : AT_REST;
+  return { health: v.health, bad: v.flagged };
+}
+
+/**
  * The status line for a fetched resource, or `null` for a kind that has none.
  *
  * `kind` is passed rather than read off `object.kind` for the same reason the

@@ -1,6 +1,7 @@
 import { createElement, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   K8S_KIND,
+  eventVerdict,
   getManifest,
   listCrds,
   listEvents,
@@ -18,6 +19,7 @@ import {
   CodeEditor,
   ErrorState,
   LoadingState,
+  statusTone,
   Table,
   type Column,
   type TabItem,
@@ -635,11 +637,16 @@ function YamlPane({
   );
 }
 
-const EVENT_COLUMNS: Column<EventSummary>[] = [
+export const EVENT_COLUMNS: Column<EventSummary>[] = [
   {
     key: "type",
     header: "Type",
-    render: (e) => <Badge tone={e.type === "Warning" ? "warn" : "muted"}>{e.type}</Badge>,
+    // The tone comes from core's one rule for an event, not from a literal
+    // comparison against "Warning" written here — see `eventVerdict`. This
+    // moves a Warning's badge from the old hand-paired "warn" (amber) to
+    // "sev" (red/danger), which is the point: the design tones Warning
+    // danger, not merely worth a look.
+    render: (e) => <Badge tone={statusTone(eventVerdict(e.type).health)}>{e.type}</Badge>,
   },
   { key: "reason", header: "Reason" },
   { key: "object", header: "Object" },

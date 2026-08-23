@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cronJobStatus, jobStatus, nodeStatus, podStatus, resourceStatusLine, scaledStatus } from "./k8sStatus";
+import { cronJobStatus, eventVerdict, jobStatus, nodeStatus, podStatus, resourceStatusLine, scaledStatus } from "./k8sStatus";
 import type { K8sObject } from "./manifest";
 
 /** A Deployment-shaped object: `spec.replicas` desired, the rest on `status`. */
@@ -514,6 +514,18 @@ describe("the tone and the dot are paired structurally", () => {
  * tests assert exactly that — the verdict, and its identity with the line the
  * object path produces. (#331)
  */
+describe("eventVerdict", () => {
+  it("colours a Warning and leaves a Normal plain", () => {
+    expect(eventVerdict("Warning")).toEqual({ health: "danger", bad: true });
+    expect(eventVerdict("Normal")).toEqual({ health: "neutral", bad: false });
+  });
+
+  it("reads an unknown type as unremarkable rather than alarming", () => {
+    expect(eventVerdict("")).toEqual({ health: "neutral", bad: false });
+    expect(eventVerdict("Something")).toEqual({ health: "neutral", bad: false });
+  });
+});
+
 describe("the row reading and the object reading are one verdict", () => {
   /** Everything but the ready phrase, which only a header shows. */
   const asVerdict = ({ status, health, flagged }: { status: string; health: string; flagged: boolean }) => ({
