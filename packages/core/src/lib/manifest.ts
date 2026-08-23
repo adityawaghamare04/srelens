@@ -375,6 +375,13 @@ export interface ResourceRow {
 
 export interface EventSummary {
   name: string;
+  /**
+   * Which namespace the event came from; empty for a cluster-scoped one.
+   *
+   * A field of its own rather than something read back out of `name`, whose
+   * `<namespace>/<name>` shape is there to key the table, not to be parsed.
+   */
+  namespace: string;
   type: string;
   reason: string;
   object: string;

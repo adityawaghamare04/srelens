@@ -5,13 +5,16 @@ import type { KindDescriptor, ListRow } from "./types";
 /**
  * One row of the events table.
  *
- * Field for field, core's `EventSummary` — plus `ListRow`'s optional
- * `namespace`, which the backend does not send and {@link eventNamespace}
- * recovers from the key it does send. Declared here rather than as
- * `EventSummary & ListRow` so the screen and the by-reason rail name one type,
- * and so the watch's payload is checked against it rather than assumed.
+ * Field for field, core's `EventSummary`. `namespace` is redeclared required,
+ * narrowing `ListRow`'s optional one: the backend sends it on every event —
+ * empty for a cluster-scoped one, which is an answer and not an absence — so
+ * no reader of a row needs a branch for it being missing. Declared here rather
+ * than as `EventSummary & ListRow` so the screen and the by-reason rail name
+ * one type, and so the watch's payload is checked against it rather than
+ * assumed.
  */
 export interface EventRow extends ListRow {
+  namespace: string;
   type: string;
   reason: string;
   object: string;
@@ -20,7 +23,7 @@ export interface EventRow extends ListRow {
   age: string;
 }
 
-/** What separates a kind from a name, and a namespace from an event's name. */
+/** What separates a kind from a name in `EventSummary.object`. */
 const SEPARATOR = "/";
 
 /** No value where the design expects one — the same em dash `columns.tsx` uses. */
@@ -30,21 +33,23 @@ const NONE = "—";
 const OBJECT_MAX_WIDTH = 220;
 
 /**
- * Which namespace an event came from.
+ * Which namespace an event came from. Empty for a cluster-scoped one (an event
+ * about a Node), which is a real answer and not a missing one.
  *
- * `EventSummary` has no namespace field: the backend keys a namespaced event
- * `<namespace>/<name>` — the Event's own object name is only unique within its
- * namespace — and that key is the only place the namespace survives the trip.
- * A cluster-scoped event (one about a Node) has no prefix and no namespace,
- * which is a real answer, not a missing one.
+ * This once recovered the namespace by splitting `row.name`, which the backend
+ * keys as `<namespace>/<name>`. That worked, and rested on "an event's own name
+ * can never contain a slash" — true, but a rule written down nowhere. The
+ * backend now reports the namespace outright, so this reads it: a key's shape
+ * is the key's business, and nothing in the UI should depend on it.
  *
- * Exported because the screen needs the same reading for a row's detail route,
- * and two ways of splitting one key is two chances to split it differently.
+ * Kept as a function, and kept exported, though it now returns a field. The
+ * screen, the Namespace column and the by-reason rail were all pointed here on
+ * purpose so this change would be invisible to them; inlining it would give the
+ * next change to where a namespace comes from three call sites to find instead
+ * of one.
  */
 export function eventNamespace(row: EventRow): string {
-  if (row.namespace) return row.namespace;
-  const cut = row.name.indexOf(SEPARATOR);
-  return cut === -1 ? "" : row.name.slice(0, cut);
+  return row.namespace;
 }
 
 /**

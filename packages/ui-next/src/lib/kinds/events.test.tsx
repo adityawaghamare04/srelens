@@ -15,6 +15,7 @@ import {
 
 const event = (over: Partial<EventRow> = {}): EventRow => ({
   name: "shop/web-0.17a",
+  namespace: "shop",
   type: "Warning",
   reason: "BackOff",
   object: "Pod/web-0",
@@ -55,11 +56,12 @@ describe("the events descriptor", () => {
 
   it("takes the watch's own payload as a row, field for field", () => {
     const summary: EventSummary = {
-      name: "shop/web-0.17a", type: "Normal", reason: "Pulled",
+      name: "shop/web-0.17a", namespace: "shop", type: "Normal", reason: "Pulled",
       object: "Pod/web-0", message: "already present", age: "4m", count: 1,
     };
     const row: EventRow = summary;
     expect(row.count).toBe(1);
+    expect(row.namespace).toBe("shop");
   });
 });
 
@@ -104,19 +106,22 @@ describe("the Namespace cell", () => {
     expect(cell("namespace", event({ namespace: "checkout" })).textContent).toBe("checkout");
   });
 
-  it("falls back to the namespace the watch keys the event by", () => {
-    // The backend names a namespaced event `<ns>/<name>`; nothing else on an
-    // EventSummary says which namespace it came from.
-    expect(cell("namespace", event({ name: "shop/web-0.17a" })).textContent).toBe("shop");
-    expect(eventNamespace(event({ name: "shop/web-0.17a" }))).toBe("shop");
+  it("reads the field, and never splits the key, however the key is spelled", () => {
+    // The row key stays `<namespace>/<name>` — it has a job, and this no longer
+    // reads anything out of it. A row whose key and field disagree is the only
+    // way to tell the two apart, so it is the assertion worth making.
+    expect(eventNamespace(event({ name: "shop/web-0.17a", namespace: "checkout" }))).toBe("checkout");
+    expect(cell("namespace", event({ name: "shop/web-0.17a", namespace: "checkout" })).textContent).toBe("checkout");
+    expect(eventNamespace(event({ name: "web-0.17a", namespace: "shop" }))).toBe("shop");
   });
 
-  it("shows an em dash for an event with no namespace at all, never the word undefined", () => {
-    expect(cell("namespace", event({ name: "node-a.17b" })).textContent).toBe("—");
+  it("shows an em dash for a cluster-scoped event, never the word undefined", () => {
+    expect(cell("namespace", event({ name: "node-a.17b", namespace: "" })).textContent).toBe("—");
+    expect(eventNamespace(event({ name: "node-a.17b", namespace: "" }))).toBe("");
   });
 
-  it("sorts and filters on the namespace it shows, not on the raw key", () => {
-    expect(column("namespace").getValue!(event({ name: "shop/web-0.17a" }))).toBe("shop");
+  it("sorts and filters on the namespace it shows", () => {
+    expect(column("namespace").getValue!(event({ namespace: "shop" }))).toBe("shop");
   });
 });
 
