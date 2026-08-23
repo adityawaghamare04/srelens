@@ -234,139 +234,35 @@ describe("GenericBody", () => {
     });
   });
 
-  describe("Labels", () => {
-    const LABELLED = object(
-      "Lease",
-      {},
-      {},
-      { name: "l", namespace: "default", labels: { app: "checkout", tier: "backend" } },
-    );
-
-    it("gets a block of its own rather than a row squeezed into a fact list", () => {
-      render(<GenericBody kind="Lease" object={LABELLED} context="ctx" />);
-      expect(screen.getByRole("heading", { level: 3, name: "Labels" })).toBeDefined();
-      expect(screen.getByText("app=")).toBeDefined();
-      expect(screen.getByText("checkout")).toBeDefined();
-    });
-
-    it("wraps a long value instead of truncating it", () => {
-      // `PairList` no longer writes the value into a `title`, so wrapping is
-      // the only way a long label can be read at all.
-      const { container } = render(<GenericBody kind="Lease" object={LABELLED} context="ctx" />);
-      const rows = [...container.querySelectorAll(".pairs li")];
-      expect(rows).toHaveLength(2);
-      for (const row of rows) expect(row.className).not.toContain("truncate");
-      expect(container.querySelector(".pairs .v.break-all")).not.toBeNull();
-    });
-  });
-
-  describe("Annotations", () => {
-    it("shows them expanded, with no toggle, on an ordinary kind", () => {
+  /**
+   * Labels, Annotations and the Secret annotation gate all moved off this
+   * wrapper and onto the pane that draws it — see `ResourceDetail.test`'s
+   * "Labels and Annotations, which the host places", where every one of the
+   * properties that used to be asserted here is asserted through the real
+   * render path instead.
+   *
+   * They moved because the two hosts lay them out differently: the peek stacks
+   * them under the rest of the body and the full tab reads them side by side.
+   * A body rendering its own could only ever produce one of those, and the
+   * three copies that used to exist (here, `PodBody`, `WorkloadBody`) were
+   * exactly the arrangement that let a security gate rest on a membership list
+   * two files away.
+   */
+  describe("Labels and Annotations", () => {
+    it("renders neither, so the host can place them", () => {
       render(
         <GenericBody
           kind="ConfigMap"
-          object={object("ConfigMap", {}, {}, { name: "cm-1", annotations: { "srelens.io/note": "hello" } })}
+          object={object("ConfigMap", {}, {}, {
+            name: "cm-1",
+            labels: { app: "checkout" },
+            annotations: { "srelens.io/note": "hello" },
+          })}
           context="ctx"
         />,
       );
-      expect(screen.getByRole("heading", { level: 3, name: "Annotations" })).toBeDefined();
-      expect(screen.getByText("hello")).toBeDefined();
-      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
-    });
-  });
-
-  describe("the annotations secrecy gate, which survives on Secret alone", () => {
-    // Obviously-fake fixture text — never anything that reads as a real
-    // manifest or credential.
-    const FIXTURE_VALUE = "fixture-only-not-a-real-last-applied-manifest";
-
-    // A `kubectl apply`-managed Secret: `last-applied-configuration` holds
-    // the ENTIRE applied manifest, including the base64 `data` map —
-    // `k8s.getObject`'s Secret redaction never touches `metadata.annotations`,
-    // so this fixture is the exact shape the finding was about.
-    const KUBECTL_MANAGED_SECRET = object(
-      "Secret",
-      {},
-      {},
-      {
-        name: "managed-secret",
-        namespace: "default",
-        annotations: { "kubectl.kubernetes.io/last-applied-configuration": FIXTURE_VALUE },
-      },
-    );
-
-    it("keeps the annotation value out of the document until expanded, then shows it, then hides it again", async () => {
-      render(<GenericBody kind="Secret" object={KUBECTL_MANAGED_SECRET} context="ctx" />);
-
-      // Not as text, not as a title/aria-label/data-*, not anywhere in the
-      // markup — nothing under the toggle is mounted at all yet.
-      expect(documentContains(FIXTURE_VALUE)).toBe(false);
-      expect(screen.queryByText(FIXTURE_VALUE)).toBeNull();
-
-      const toggle = screen.getByRole("button", { name: "Show 1 annotation" });
-      await userEvent.click(toggle);
-      await waitFor(() => expect(documentContains(FIXTURE_VALUE)).toBe(true));
-
-      await userEvent.click(screen.getByRole("button", { name: "Hide" }));
-      expect(documentContains(FIXTURE_VALUE)).toBe(false);
-    });
-
-    it("never carries the value in the toggle's own title or accessible name", () => {
-      render(<GenericBody kind="Secret" object={KUBECTL_MANAGED_SECRET} context="ctx" />);
-      const toggle = screen.getByRole("button", { name: "Show 1 annotation" });
-      expect(toggle.getAttribute("title")).toBeNull();
-      expect(toggle.getAttribute("aria-label")).toBeNull();
-      // The accessible name itself (asserted via `getByRole`'s `name` match
-      // above) is the count-only "Show 1 annotation" text, not the value.
-    });
-
-    it("gates Secret and nothing else — every other kind's annotations are open, as the design draws them", () => {
-      // Asserted on an ORDINARY annotation, deliberately. The applied-manifest
-      // key cannot show this any more: the shared `AnnotationLines` holds that
-      // one key back on every kind for legibility, so using it here would
-      // prove nothing about the gate.
-      const configMap = object(
-        "ConfigMap",
-        {},
-        {},
-        { name: "cm-1", namespace: "default", annotations: { "srelens.io/last-applied-by": "dana@acme.io" } },
-      );
-      render(<GenericBody kind="ConfigMap" object={configMap} context="ctx" />);
-      expect(documentContains("dana@acme.io")).toBe(true);
-      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
-    });
-
-    it("still gates a Secret whose applied manifest the shared rule would have withheld anyway", () => {
-      // The two rules must not be confused for one. `AnnotationLines` drops
-      // `last-applied-configuration` for legibility and would happen to drop
-      // this value too — but a Secret never reaches it. The gate is what keeps
-      // the value out of the document, and it is still the gate doing it.
-      render(<GenericBody kind="Secret" object={KUBECTL_MANAGED_SECRET} context="ctx" />);
-      expect(documentContains(FIXTURE_VALUE)).toBe(false);
-      expect(screen.getByRole("button", { name: "Show 1 annotation" })).toBeDefined();
-    });
-
-    it("withholds an ordinary kind's applied manifest for length, and says where to read it", () => {
-      // A legibility rule, not redaction: a manifest on one line buries every
-      // other annotation in a 352px pane. The shorter annotation beside it is
-      // still printed in full.
-      const configMap = object(
-        "ConfigMap",
-        {},
-        {},
-        {
-          name: "cm-1",
-          namespace: "default",
-          annotations: {
-            "kubectl.kubernetes.io/last-applied-configuration": FIXTURE_VALUE,
-            "srelens.io/last-applied-by": "dana@acme.io",
-          },
-        },
-      );
-      render(<GenericBody kind="ConfigMap" object={configMap} context="ctx" />);
-      expect(documentContains(FIXTURE_VALUE)).toBe(false);
-      expect(screen.getByText(/kubectl.kubernetes.io\/last-applied-configuration/).textContent).toMatch(/YAML/);
-      expect(documentContains("dana@acme.io")).toBe(true);
+      expect(screen.queryByRole("heading", { level: 3, name: "Labels" })).toBeNull();
+      expect(screen.queryByRole("heading", { level: 3, name: "Annotations" })).toBeNull();
     });
   });
 

@@ -54,9 +54,13 @@ vi.mock("@srelens/core", async (importOriginal) => ({
  * hoisted above this module's own imports, and the JSX runtime binding is not
  * guaranteed to be initialised when the factory runs.
  */
-const { detailProps, detailFrames } = vi.hoisted(() => ({
+const { detailProps, detailFrames, tabProps } = vi.hoisted(() => ({
   detailProps: [] as Array<Record<string, unknown>>,
   detailFrames: [] as Array<{ heading: string | null; body: string }>,
+  /** The same, for the OTHER host. R-5 is retired and the full tab is its own
+   *  screen, so it is its own component and its own recorder — what the two
+   *  must still agree on is the SUBJECT, which is what is compared. */
+  tabProps: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("./detail/ResourceDetail", async (importOriginal) => {
@@ -83,6 +87,18 @@ vi.mock("./detail/ResourceDetail", async (importOriginal) => {
         });
       });
       return createElement(actual.ResourceDetail, props as never);
+    },
+  };
+});
+
+vi.mock("./detail/ResourceTab", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./detail/ResourceTab")>();
+  const { createElement } = await import("react");
+  return {
+    ...actual,
+    ResourceTab: (props: Record<string, unknown>) => {
+      tabProps.push({ ...props });
+      return createElement(actual.ResourceTab, props as never);
     },
   };
 });
@@ -194,6 +210,7 @@ beforeEach(() => {
   );
   detailProps.length = 0;
   detailFrames.length = 0;
+  tabProps.length = 0;
 
   resetContexts();
   setContexts([CTX]);
@@ -258,13 +275,17 @@ function open(route: string) {
 }
 
 /**
- * The detail pane, in whichever host is on screen. `Inspector` is the only
- * thing in the app that renders `section.pane`; `Panel` renders `section.card`.
+ * The detail, in whichever host is on screen — they are two screens now, not
+ * one pane in two frames (R-5 is retired). `Inspector` is the only thing in
+ * the app that renders `section.pane` (`Panel` renders `section.card`), and
+ * `ResourceTab` marks its own root.
  */
-const peekPane = () => document.querySelector("section.pane");
+const peekPane = () => document.querySelector("section.pane, [data-slot='resource-tab']");
 
-/** The pane's heading — the subject it CLAIMS to be showing (from its props). */
-const paneName = () => peekPane()?.querySelector("h2")?.textContent ?? null;
+/** The heading — the subject the host CLAIMS to be showing (from its props).
+ *  An `h2` in the peek, which sits inside a screen; an `h1` in the tab, which
+ *  is the page. */
+const paneName = () => peekPane()?.querySelector("h1, h2")?.textContent ?? null;
 
 /** The pane's body — the subject it is ACTUALLY showing (from `getObject`). */
 const paneBody = () => peekPane()?.querySelector(".pane-body")?.textContent ?? "";
@@ -590,6 +611,31 @@ describe("Resources", () => {
     await waitFor(() =>
       expect(watchResource.mock.calls.some((call) => call[1] === "team-a")).toBe(true),
     );
+  });
+
+  it("explains a remembered selection that no longer exists, rather than showing an empty table with no reason", async () => {
+    useNamespaceOptions.mockReturnValue({ namespaces: ["default", "billing"], scope: "", error: "" });
+    act(() => setNamespaces(CTX.stableId, ["deleted-ns"]));
+
+    open("/k/pods");
+
+    expect(await screen.findByText("Remembered namespaces are gone")).toBeTruthy();
+    expect(screen.getByText(/deleted-ns/)).toBeTruthy();
+
+    // The alert's dismiss action is the recovery: back to "all namespaces",
+    // written through the same store a manual clear would use.
+    await userEvent.click(screen.getByRole("button", { name: "Show all namespaces" }));
+    await waitFor(() => expect(getView().namespaces.prod).toBeUndefined());
+  });
+
+  it("does not warn about a selection that is merely empty of this kind right now", async () => {
+    useNamespaceOptions.mockReturnValue({ namespaces: ["default", "billing"], scope: "", error: "" });
+    act(() => setNamespaces(CTX.stableId, ["billing"])); // real namespace, just no pods in it
+
+    open("/k/pods");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Namespaces" })).toBeTruthy());
+
+    expect(screen.queryByText("Remembered namespaces are gone")).toBeNull();
   });
 
   it("says the kind has none, distinctly from the filter matching none", async () => {
@@ -1038,10 +1084,18 @@ describe("the detail pane's two hosts", () => {
     expect(getObject).not.toHaveBeenCalled();
   });
 
-  it("mounts the same component with the same props in both hosts", async () => {
-    // Structural, not visual: both hosts push into the same recorder, so the
-    // component is literally one function, and the two prop objects are
-    // compared value by value.
+  /**
+   * R-5 IS RETIRED, and this is what replaced the test that pinned it.
+   *
+   * The old assertion captured both hosts' props, deleted exactly one key and
+   * compared the rest to a four-key literal — a sound way to say "one pane,
+   * two hosts", and a statement that is no longer true: the user's full-tab
+   * mock makes the tab its own screen. Deleting the test would have left the
+   * property that DID survive unwatched, so it says that instead: the two
+   * hosts are pointed at the very same subject, by the very same four facts,
+   * and only the peek's own two controls are the peek's.
+   */
+  it("points both hosts at the same subject, and gives only the peek its own controls", async () => {
     const list = open("/k/pods");
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
     fireEvent.click(row("web-1"));
@@ -1050,24 +1104,26 @@ describe("the detail pane's two hosts", () => {
     list.unmount();
 
     detailProps.length = 0;
-  detailFrames.length = 0;
+    detailFrames.length = 0;
+    tabProps.length = 0;
     openDetailTab("/k/Pod/default/web-1");
     await waitFor(() => expect(paneName()).toBe("web-1"));
-    const fromTab = lastDetailProps();
+    const fromTab = { ...tabProps[tabProps.length - 1] };
 
-    // `peek` is the ONE prop allowed to differ, and it stayed one when the
-    // header grew a second peek-only affordance: it carries both of the peek
-    // host's controls — dismiss, and promote to a tab — so a host cannot hand
-    // over one without the other, and the tab host hands over neither.
+    // Both of the peek host's controls ride in one object, so a host cannot
+    // hand over one without the other — dismiss, and promote to a tab.
     const peekControls = fromPeek.peek as { onClose?: unknown; onOpenTab?: unknown };
     expect(typeof peekControls.onClose).toBe("function");
     expect(typeof peekControls.onOpenTab).toBe("function");
-    expect(fromTab.peek).toBeUndefined();
     delete fromPeek.peek;
-    delete fromTab.peek;
 
-    expect(fromPeek).toEqual({ context: "prod-eu", kind: "Pod", namespace: "default", name: "web-1" });
-    expect(fromTab).toEqual(fromPeek);
+    // The subject itself: the same four facts, value by value, whichever
+    // screen is drawing it. A tab that resolved its own context, or read the
+    // kind off the route differently from the list, is exactly how one
+    // resource becomes two.
+    const subject = { context: "prod-eu", kind: "Pod", namespace: "default", name: "web-1" };
+    expect(fromPeek).toEqual(subject);
+    expect(fromTab).toEqual(subject);
   });
 
   it("promotes the peeked row to its own tab, at the very route a double click opens", async () => {
@@ -1103,19 +1159,33 @@ describe("the detail pane's two hosts", () => {
     expect(screen.queryByRole("button", { name: "Open tab" })).toBeNull();
   });
 
-  it("offers the same panes in both hosts for the same resource", async () => {
+  it("offers the same data panes in both hosts, under the names each screen gives them", async () => {
+    // Not the same STRIP any more: the design's full tab heads its first pane
+    // Overview and folds the containers table into it, where the peek calls it
+    // Details and gives Containers a tab of its own. What must still hold is
+    // that neither host offers a pane the other cannot reach — the panes are
+    // the kind's, and only their labels and their grouping are the screen's.
     const list = open("/k/pods");
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
     fireEvent.click(row("web-1"));
     await paneReadyFor("web-1");
     const peekTabs = paneTabs();
+    expect(peekTabs).toContain("Details");
     expect(peekTabs).toContain("YAML");
+    expect(peekTabs).toContain("Events");
     list.unmount();
 
     openDetailTab("/k/Pod/default/web-1");
     await paneReadyFor("web-1");
 
-    expect(paneTabs()).toEqual(peekTabs);
+    const tabTabs = paneTabs();
+    expect(tabTabs).toContain("Overview");
+    expect(tabTabs).not.toContain("Details");
+    // Every pane the peek offers beyond its first is offered here too, by the
+    // same name.
+    for (const label of peekTabs.filter((t) => t !== "Details" && t !== "Containers")) {
+      expect(tabTabs).toContain(label);
+    }
   });
 });
 

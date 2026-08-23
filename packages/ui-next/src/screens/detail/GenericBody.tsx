@@ -9,13 +9,7 @@ import {
   type K8sObject,
 } from "@srelens/core";
 import { KV, Section } from "@srelens/ui-kit";
-import {
-  AnnotationsSection,
-  ConditionsSection,
-  LabelsSection,
-  RelatedPodsSection,
-  StringList,
-} from "./sections";
+import { ConditionsSection, RelatedPodsSection, StringList } from "./sections";
 
 /**
  * The four kinds classic's `ObjectDetail` special-cases with their own
@@ -94,6 +88,15 @@ function IdentitySection({ object }: { object: K8sObject }) {
  * the rules then land in the right places on their own — nothing counts blocks
  * or is told which one is first.
  *
+ * Labels and Annotations are NOT here. They close every kind's detail, so
+ * they are the host's to place rather than the body's — the peek stacks them
+ * under the rest and the full tab reads them side by side, and a body that
+ * rendered them itself could only ever produce one of those. They used to be
+ * rendered in three files (here, `PodBody`, `WorkloadBody`), guarded in the
+ * third by a `SELF_DESCRIBING_KINDS` check whose only job was to stop them
+ * appearing twice; placing them once, above, retires that guard along with
+ * the class of bug it was watching for. (#331)
+ *
  * `ResourceDetail` wraps every kind's Details pane in this component; for the
  * four `SELF_DESCRIBING_KINDS` it passes through `children` untouched, since
  * those kinds' own bodies already show the facts this wrapper would otherwise
@@ -128,8 +131,6 @@ export function GenericBody({
         <RelatedPodsSection context={context} namespace={namespace} selector={podSelector} />
       )}
       <ConditionsSection conditions={conditions} />
-      <LabelsSection labels={meta.labels ?? {}} />
-      <AnnotationsSection kind={kind} annotations={meta.annotations ?? {}} />
     </>
   );
 }

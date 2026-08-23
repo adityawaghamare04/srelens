@@ -9,10 +9,13 @@ import {
   latestRestartTime,
   mountText,
   orderPodConditions,
+  podContainerStatuses,
   portText,
   probeChips,
   resourceStatusLine,
+  resourceSummary,
   resourceText,
+  restartTotal,
   str,
   summarizeAffinity,
   timestampWithAge,
@@ -30,7 +33,7 @@ import {
   Table,
   type Column,
 } from "@srelens/ui-kit";
-import { AnnotationsSection, ConditionsSection, LabelsSection, StringList } from "./sections";
+import { ConditionsSection, StringList } from "./sections";
 
 /**
  * Kubernetes' own labels for a pod volume's source kind, keyed on which field
@@ -142,15 +145,11 @@ function FactsSection({ object }: { object: K8sObject }) {
     .map((secret) => str(asRecord(secret).name))
     .filter(Boolean);
   const containerStatuses = asArray(status.containerStatuses).map(asRecord);
-  const allContainerStatuses = [
-    ...asArray(status.initContainerStatuses).map(asRecord),
-    ...containerStatuses,
-    ...asArray(status.ephemeralContainerStatuses).map(asRecord),
-  ];
-  const podRestartCount = allContainerStatuses.reduce(
-    (total, containerStatus) => total + Number(containerStatus.restartCount ?? 0),
-    0,
-  );
+  // Core's read, not a second one: the full tab's Restarts tile shows the very
+  // same number, and two reduces over one field is how two surfaces start
+  // disagreeing about how often a pod has restarted.
+  const allContainerStatuses = podContainerStatuses(status);
+  const podRestartCount = restartTotal(allContainerStatuses);
   const podLastRestart = latestRestartTime(allContainerStatuses);
   const containersReady = containerStatuses.filter((c) => c.ready === true).length;
   const created = str(meta.creationTimestamp);
@@ -264,17 +263,19 @@ function PodVolumesSection({ object }: { object: K8sObject }) {
  * rule on both sides. A block with nothing to say renders nothing at all, and
  * the rules land in the right places on their own.
  *
- * Conditions, Labels and Annotations close the pane rather than following the
- * facts immediately as the design frame draws them. The frame has no
- * Scheduling or Volumes block to place, and `GenericBody` already ends every
- * other kind's Details this way — so a reader moving between kinds finds the
- * same three blocks in the same place.
+ * Conditions close the body rather than following the facts immediately as the
+ * design frame draws them. The frame has no Scheduling or Volumes block to
+ * place, and `GenericBody` already ends every other kind's Details this way —
+ * so a reader moving between kinds finds the same block in the same place.
+ *
+ * Labels and Annotations are not here at all: they close every kind, so the
+ * host places them (see `GenericBody`'s note). The peek stacks them under
+ * this; the full tab reads them side by side.
  *
  * The container list lives on the Containers pane instead
  * (`PodContainersBody`, below), which is what `panes.containers` exists for.
  */
 export function PodDetailsBody({ object }: { object: K8sObject }) {
-  const meta = object.metadata ?? {};
   const status = asRecord(object.status);
   const conditions = asArray(status.conditions) as unknown as Condition[];
 
@@ -283,8 +284,6 @@ export function PodDetailsBody({ object }: { object: K8sObject }) {
     <SchedulingSection key="scheduling" object={object} />,
     <PodVolumesSection key="volumes" object={object} />,
     <ConditionsSection key="conditions" conditions={orderPodConditions(conditions)} />,
-    <LabelsSection key="labels" labels={meta.labels ?? {}} />,
-    <AnnotationsSection key="annotations" kind="Pod" annotations={meta.annotations ?? {}} />,
   ];
 
   return <>{sections}</>;
@@ -429,5 +428,110 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
         statuses={statusesByName(status.ephemeralContainerStatuses)}
       />
     </>
+  );
+}
+
+/** One row of the Overview's containers table: the spec entry beside the
+ *  status the kubelet reports for it, matched by name. */
+interface ContainerRow {
+  container: Record<string, unknown>;
+  status?: Record<string, unknown>;
+}
+
+/**
+ * The one probe a summary row has room for.
+ *
+ * Readiness first because it is the probe that decides whether the container
+ * is in service, which is what a reader scanning a row is asking about;
+ * liveness and startup stand in when there is no readiness probe, so a
+ * container that has one of them still says so. `probeChips` is core's single
+ * rendering of a probe — the peek's Containers pane prints the very same
+ * clauses down a column, and a second phrasing here would be a second answer
+ * to "what does it check".
+ */
+function probeSummary(container: Record<string, unknown>): string {
+  for (const key of ["readinessProbe", "livenessProbe", "startupProbe"]) {
+    const probe = asRecord(container[key]);
+    if (Object.keys(probe).length > 0) return probeChips(probe).join(" ");
+  }
+  return "—";
+}
+
+const CONTAINER_COLUMNS: Column<ContainerRow>[] = [
+  { key: "name", header: "Name", render: (r) => <span className="font-mono">{str(r.container.name)}</span> },
+  { key: "image", header: "Image", render: (r) => <span className="font-mono">{str(r.container.image) || "—"}</span> },
+  {
+    key: "ports",
+    header: "Ports",
+    render: (r) => {
+      const ports = asArray(r.container.ports).map(asRecord);
+      return ports.length > 0 ? ports.map(portText).join(", ") : "—";
+    },
+  },
+  // `cpu · memory` in one cell, the design's own form — `resourceSummary` is
+  // core's compact rendering of the very two fields the peek's rows name in
+  // full through `resourceText`.
+  {
+    key: "requests",
+    header: "Requests",
+    render: (r) => resourceSummary(asRecord(asRecord(r.container.resources).requests)),
+  },
+  {
+    key: "limits",
+    header: "Limits",
+    render: (r) => resourceSummary(asRecord(asRecord(r.container.resources).limits)),
+  },
+  { key: "probe", header: "Probe", render: (r) => probeSummary(r.container) },
+  {
+    key: "state",
+    header: "State",
+    // The word AND its tone are `containerStateText`'s. Nothing here pairs a
+    // state with a colour: that table exists once, in core, and every
+    // container state in srelens is read through it.
+    render: (r) => {
+      if (!r.status) return "—";
+      const state = containerStateText(r.status);
+      return <StatusPill status={state.text} kind={state.kind} tinted />;
+    },
+  },
+];
+
+/**
+ * A pod's containers as one table, the way the full tab reads them inline on
+ * Overview — name, image, ports, requests, limits, probe, state.
+ *
+ * Deliberately NOT a second {@link PodContainersBody}. That pane is one block
+ * per container and prints everything a container has: its environment, its
+ * mounts, its command, all three probes, when the current run started and when
+ * the last one ended. This is a summary a reader scans across, which is what
+ * the design asks a page-wide surface for, and it is why the peek keeps
+ * Containers as a tab of its own while the tab folds it into Overview.
+ *
+ * Every cell is a shared derivation — `portText`, `resourceSummary`,
+ * `probeChips`, `containerStateText` — so the two renderings cannot come to
+ * disagree about what a container is doing, only about how much of it they
+ * show.
+ *
+ * Init and ephemeral containers are not here. The design's table is the pod's
+ * app containers, and the peek's pane is where a finished migration step or an
+ * attached debug container is read in full.
+ */
+export function PodContainersTable({ object }: { object: K8sObject }) {
+  const spec = asRecord(object.spec);
+  const containers = asArray(spec.containers).map(asRecord);
+  if (containers.length === 0) return null;
+  const statuses = statusesByName(asRecord(object.status).containerStatuses);
+  const rows: ContainerRow[] = containers.map((container) => ({
+    container,
+    status: statuses.get(str(container.name)),
+  }));
+  return (
+    <Section title="Containers">
+      <Table
+        columns={CONTAINER_COLUMNS}
+        data={rows}
+        getRowKey={(r) => str(r.container.name)}
+      />
+    </Section>
   );
 }

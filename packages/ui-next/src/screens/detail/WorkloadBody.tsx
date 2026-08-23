@@ -13,9 +13,7 @@ import {
 } from "@srelens/core";
 import { KV, LoadingState, PairList, Section, Table, type Column } from "@srelens/ui-kit";
 import {
-  AnnotationsSection,
   ConditionsSection,
-  LabelsSection,
   RelatedPodsSection,
   StringList,
 } from "./sections";
@@ -289,10 +287,12 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
  * div — or a bare `LoadingState` — between two of them quietly removes the
  * rule on both sides. A block with nothing to say renders nothing at all.
  *
- * Conditions, Labels and Annotations are rendered here ONLY for the
- * `SELF_DESCRIBING_KINDS` — the same gate related pods use, and for the same
- * reason: a DaemonSet is wrapped by `GenericBody`, which supplies all three,
- * so rendering them here too would show each of them twice.
+ * Conditions are rendered here ONLY for the `SELF_DESCRIBING_KINDS` — the same
+ * gate related pods use, and for the same reason: a DaemonSet is wrapped by
+ * `GenericBody`, which supplies them, so rendering them here too would show
+ * them twice. Labels and Annotations are no longer rendered by any body at
+ * all; the host places them once, which is what retired their half of this
+ * guard.
  *
  * `kind` is the route's, handed down by `ResourceDetail` — not `object.kind`,
  * which this read until the whole-branch review. The API server happens to
@@ -328,7 +328,6 @@ export function WorkloadDetailsBody({
   const hasSelector = Object.keys(selector).length > 0;
   const selfDescribing = SELF_DESCRIBING_KINDS.has(kind);
   const conditions = asArray(asRecord(object.status).conditions) as unknown as Condition[];
-  const annotations = meta.annotations ?? {};
   const revisions = useDeployRevisions(context, namespace, name, kind === "Deployment");
 
   return (
@@ -342,13 +341,7 @@ export function WorkloadDetailsBody({
       {hasSelector && namespace && selfDescribing && (
         <RelatedPodsSection context={context} namespace={namespace} selector={selector} />
       )}
-      {selfDescribing && (
-        <>
-          <ConditionsSection conditions={conditions} />
-          <LabelsSection labels={meta.labels ?? {}} />
-          <AnnotationsSection kind={kind} annotations={annotations} />
-        </>
-      )}
+      {selfDescribing && <ConditionsSection conditions={conditions} />}
     </>
   );
 }

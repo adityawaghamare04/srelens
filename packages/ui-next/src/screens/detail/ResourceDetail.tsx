@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createElement, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   K8S_KIND,
   ageFromTimestamp,
@@ -10,6 +10,7 @@ import {
   type DynamicGvk,
   type EventSummary,
   type K8sObject,
+  type ResourceStatusLine,
 } from "@srelens/core";
 import {
   Alert,
@@ -17,6 +18,7 @@ import {
   Button,
   CodeEditor,
   ErrorState,
+  FactGrid,
   Inspector,
   LoadingState,
   Table,
@@ -30,11 +32,12 @@ import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
 import { ConfigDetailsBody } from "./ConfigBody";
 import { CronJobDetailsBody } from "./CronJobBody";
-import { DetailFooter } from "./DetailFooter";
+import { DetailActions } from "./DetailActions";
 import { GenericBody } from "./GenericBody";
 import { JobDetailsBody } from "./JobBody";
 import { NodeDetailsBody } from "./NodeBody";
-import { PodContainersBody, PodDetailsBody } from "./PodBody";
+import { PodContainersBody, PodContainersTable, PodDetailsBody } from "./PodBody";
+import { AnnotationsSection, LabelsSection } from "./sections";
 import { SecretDetailsBody } from "./SecretBody";
 import { ServiceDetailsBody } from "./ServiceBody";
 import { WorkloadDetailsBody } from "./WorkloadBody";
@@ -199,6 +202,20 @@ const CONTAINERS_BODY: Record<string, PaneBody> = {
  *  `panes.metrics`. */
 const METRICS_BODY: Record<string, PaneBody> = {};
 
+/**
+ * The full tab's INLINE containers table — the same kinds as
+ * {@link CONTAINERS_BODY}, in the summary form the design draws on Overview.
+ *
+ * A kind opts into containers ONCE, through its descriptor's
+ * `panes.containers`; these two tables only say what a container looks like on
+ * each surface. A kind that sets the flag and has no entry here shows no
+ * table rather than a broken one, which is the same answer the peek gives for
+ * a missing `CONTAINERS_BODY`.
+ */
+const CONTAINERS_TABLE: Record<string, (props: { object: K8sObject }) => ReactNode> = {
+  Pod: PodContainersTable,
+};
+
 type LoadStatus = "loading" | "ready" | "error";
 
 interface LoadState<T> {
@@ -209,7 +226,9 @@ interface LoadState<T> {
 
 /**
  * A pane's own data, loaded only once that pane has actually been opened for
- * the CURRENT `target` — `enabled` is the caller's "the reader has looked at
+ * the CURRENT `target`. Exported for the full tab, whose metric strip fetches
+ * pod usage under the very same rule — one lazy, target-gated load, not a
+ * second one written to look like it — `enabled` is the caller's "the reader has looked at
  * this, for this subject" signal, not "the object is ready". A peek fills on
  * nearly every row click; fetching the manifest and the events eagerly on
  * every one of those, when a reader usually looks at neither, is two wasted
@@ -235,7 +254,7 @@ interface LoadState<T> {
  * first commit after `target` changes, with no dependency on effect
  * ordering that a future refactor could quietly undo.
  */
-function useLoad<T>(
+export function useLoad<T>(
   enabled: boolean,
   target: readonly [string, string, string | null, string],
   load: () => Promise<{ data?: T; error?: string }>,
@@ -284,7 +303,10 @@ function useLoad<T>(
 }
 
 /**
- * The design's third header line, for a kind that has one.
+ * The design's third header line, for a kind that has one. The peek's; the
+ * full tab draws the same verdict as a strip of metric tiles instead, off the
+ * very same `ResourceStatusLine` — {@link useDetailPanes} reads it once and
+ * hands it to whichever host is drawing, so the two can never disagree.
  *
  * `resourceStatusLine` decides the word, its tone and the unhealthy dot
  * together, off the fetched object; the age is not in its answer because it
@@ -307,10 +329,9 @@ function useLoad<T>(
  *   the age asks for a tone.
  */
 function statusHeader(
-  kind: string,
+  line: ResourceStatusLine | null,
   object: K8sObject,
 ): Pick<InspectorProps, "status" | "statusKind" | "facts" | "flagged"> {
-  const line = resourceStatusLine(kind, object);
   if (!line) return {};
   const facts: InspectorProps["facts"] = [];
   if (line.readyText) facts.push({ label: "Progress", value: line.readyText });
@@ -348,24 +369,60 @@ const PANE_YAML = "yaml";
 const PANE_EVENTS = "events";
 
 /**
- * The detail shell: one subject, identified at the top, its panes beneath.
- *
- * Mounted in two hosts per the spec's R-5 ruling — a peek pane inside the
- * list, and a full tab of its own — rendering the very same component with
- * the very same props, so a pane opened one way and reached the other way is
- * never a different pane. The peek passes `peek`; the tab does not; that is
- * the ONLY thing either host varies, and the design's two peek-only header
- * controls both live inside that one object rather than beside it (see
- * {@link ResourceDetailPeek}). Everything on screen comes from `useObject`,
- * the single read both hosts share, which is what makes it impossible for the
- * peek and the tab to disagree about what they show.
- *
- * Which extra panes a kind offers (Containers, Metrics) comes off its
- * `KindDescriptor` — never a branch on `kind` in this component. The
- * Details/Containers/Metrics pane bodies are per-kind content that Tasks
- * 10-13 port in; see the `*_BODY` tables above for the seam they fill.
+ * Which of the two surfaces is drawing. Not a look — a different screen: the
+ * peek is a column beside a list and the tab is a page, and the design draws
+ * them differently on purpose (see `mock-detail-fulltab.md`).
  */
-export function ResourceDetail({ context, kind, namespace, name, peek }: ResourceDetailProps) {
+export type DetailHost = "peek" | "tab";
+
+/** Everything a host needs to draw one subject, and nothing about how. */
+export interface DetailPanes {
+  object?: K8sObject;
+  status: ReturnType<typeof useObject>["status"];
+  error?: string;
+  /** The kind's own row actions and extra panes, or `undefined` for a CRD. */
+  descriptor: ReturnType<typeof descriptorFor>;
+  /** Core's one verdict on this subject — the peek's status line and the
+   *  tab's metric strip are two renderings of it, never two readings. */
+  statusLine: ResourceStatusLine | null;
+  tabs: TabItem[];
+  active: string;
+  selectTab: (id: string) => void;
+  /** The active pane, ready to seat in whatever chrome the host draws. */
+  pane: ReactNode;
+}
+
+/**
+ * One subject's panes: what to fetch, when to fetch it, which panes a kind
+ * offers, and what each of them renders — everything about a resource detail
+ * except what it looks like.
+ *
+ * THE HOSTS ARE NOT ONE PANE ANY MORE. Spec rule R-5 said the peek and the
+ * full tab were the same component differing by one prop; the user's full-tab
+ * mock retired it, and they now have their own chrome, their own tab labels
+ * and their own Overview layout. What survives is the discipline underneath
+ * it, and it lives here: one read of the object, one lazy-load rule per pane,
+ * one target gate, one table of per-kind bodies. A fact shown in both places
+ * is derived once, so the two can differ in how they read and never in what
+ * they say.
+ *
+ * `host` reaches only three decisions — the first pane's label, whether
+ * Containers is a tab of its own or a table inline on Overview, and how the
+ * facts are laid out. Everything else below is the same code for both.
+ */
+export function useDetailPanes({
+  context,
+  kind,
+  namespace,
+  name,
+  host,
+}: {
+  context: string;
+  kind: string;
+  namespace: string | null;
+  name: string;
+  host: DetailHost;
+}): DetailPanes {
   const { object, status, error } = useObject(context, kind, namespace, name);
   const [activeTab, setActiveTab] = useState<string>(PANE_DETAILS);
 
@@ -406,8 +463,12 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
 
   const slug = SLUG_BY_K8S_KIND[kind];
   const descriptor = slug ? descriptorFor(slug) : undefined;
+  // A tab of its own in the peek; inline on the full tab's Overview, which is
+  // where the design puts it. Either way it is the kind's descriptor that says
+  // the kind HAS containers — never a branch on the kind's name here.
   const hasContainers = descriptor?.panes?.containers ?? false;
   const hasMetrics = descriptor?.panes?.metrics ?? false;
+  const inPeek = host === "peek";
 
   // Gated on `openedPanes` alone, NOT also on `status === "ready"`: a
   // subject change cycles `status` through "loading" and back to "ready"
@@ -417,7 +478,7 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
   // object's own readiness doesn't gate this fetch — `getManifest` and
   // `listEvents` don't depend on `useObject` having succeeded, and while the
   // object is loading or has errored the pane isn't visible anyway (the
-  // early returns below short-circuit before any tab renders).
+  // hosts' own early returns short-circuit before any tab renders).
   const target = [context, kind, namespace, name] as const;
   // `getManifest` needs a CRD's group/version/plural to resolve a
   // custom-resource manifest — see `resolveCrdGvk`'s own doc comment for why
@@ -453,6 +514,121 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
     listEvents(context, namespace, { kind, name }).then((r) => ({ data: r.events, error: r.error })),
   );
 
+  // `Details Containers YAML Events Metrics` in the peek; `Overview YAML
+  // Events Metrics` in the tab, where the containers table is inline. Metrics
+  // trails the panes every kind has because it is the one nothing offers yet —
+  // `METRICS_BODY` is empty and no descriptor sets `panes.metrics` — and
+  // getting the order right now is cheaper than remembering it later, when the
+  // first kind to opt in would otherwise land it in the wrong place. Relations
+  // and Drill, which the full-tab mock also names, are deferred and have no
+  // body at all: a strip names a pane only when there is something behind it.
+  const tabs: TabItem[] = [
+    { id: PANE_DETAILS, label: inPeek ? "Details" : "Overview" },
+    ...(inPeek && hasContainers ? [{ id: PANE_CONTAINERS, label: "Containers" }] : []),
+    { id: PANE_YAML, label: "YAML" },
+    { id: PANE_EVENTS, label: "Events" },
+    ...(hasMetrics ? [{ id: PANE_METRICS, label: "Metrics" }] : []),
+  ];
+  // Falls back to Details rather than pointing at a tab that isn't offered —
+  // relevant when a kind's panes shrink under a mounted shell, and when the
+  // reader promotes a peek that was showing Containers into a tab that has no
+  // such pane.
+  const active = tabs.some((t) => t.id === activeTab) ? activeTab : PANE_DETAILS;
+
+  const DetailsBody = DETAILS_BODY[kind];
+  const ContainersBody = CONTAINERS_BODY[kind];
+  const MetricsBody = METRICS_BODY[kind];
+  const meta = object?.metadata ?? {};
+
+  // The per-kind body, identical in both hosts. Only its surroundings differ.
+  const body = object && (
+    <GenericBody kind={kind} object={object} context={context}>
+      {DetailsBody && <DetailsBody kind={kind} object={object} context={context} />}
+    </GenericBody>
+  );
+  // Labels and Annotations close every kind's detail, so the HOST places them
+  // rather than each body rendering its own — the peek stacks them under the
+  // rest and the tab reads them side by side, and a body that drew them itself
+  // could only ever produce one of those. `kind` stays required on
+  // `AnnotationsSection` for the reason its own comment gives: a Secret's
+  // annotation can be the secret, and no caller may get that gate by default.
+  const labels = <LabelsSection labels={meta.labels ?? {}} />;
+  const annotations = <AnnotationsSection kind={kind} annotations={meta.annotations ?? {}} />;
+
+  let pane: ReactNode = null;
+  if (object) {
+    if (active === PANE_DETAILS) {
+      pane = inPeek ? (
+        // A flat run of sibling sections, which is what draws the hairlines
+        // between them (`.section + .section`). Nothing may be wrapped around
+        // any one of them.
+        <>
+          {body}
+          {labels}
+          {annotations}
+        </>
+      ) : (
+        <FactGrid>
+          {body}
+          {/* Inline, per the mock, and only for a kind whose descriptor says
+              it has containers — the same fact the peek turns into a tab. */}
+          {hasContainers && CONTAINERS_TABLE[kind] !== undefined &&
+            createElement(CONTAINERS_TABLE[kind], { object })}
+          {/* Two columns, and each wrapped, so neither section is the other's
+              adjacent sibling — `.section + .section` would otherwise rule
+              down the middle of the row instead of across it. */}
+          <div data-slot="metadata-pair" className="rule-t grid grid-cols-2">
+            <div>{labels}</div>
+            <div className="rule-l">{annotations}</div>
+          </div>
+        </FactGrid>
+      );
+    } else if (active === PANE_CONTAINERS) {
+      pane = ContainersBody ? <ContainersBody kind={kind} object={object} context={context} /> : null;
+    } else if (active === PANE_METRICS) {
+      pane = MetricsBody ? <MetricsBody kind={kind} object={object} context={context} /> : null;
+    }
+  }
+  if (active === PANE_YAML) {
+    pane = <YamlPane state={yamlState} kind={kind} namespace={namespace} name={name} redacted={isSecret} />;
+  } else if (active === PANE_EVENTS) {
+    pane = <EventsPane state={eventsState} kind={kind} namespace={namespace} name={name} />;
+  }
+
+  return {
+    object,
+    status,
+    error,
+    descriptor,
+    statusLine: object ? resourceStatusLine(kind, object) : null,
+    tabs,
+    active,
+    selectTab,
+    pane,
+  };
+}
+
+/**
+ * The detail PEEK: one subject, identified at the top, its panes beneath, its
+ * actions along the bottom — the pane `mock-detail-pane.md` draws, inside the
+ * resource list.
+ *
+ * It used to be both hosts. Spec rule R-5 said the peek and the full tab were
+ * the same component with the same props, and that was true of the pane the
+ * first mock drew; the user's second mock draws the tab as a different screen
+ * — a breadcrumb header, actions in the header row, a metric strip, a
+ * three-column fact grid — and retired the rule. `ResourceTab` is that screen.
+ *
+ * What the two still share is everything that is not a look, and it is shared
+ * through {@link useDetailPanes} rather than by being written twice: one read
+ * of the object, one lazy-load rule per pane, one target gate, one table of
+ * per-kind bodies, one set of actions. So a fact can be laid out differently
+ * in the two hosts and cannot be derived differently.
+ */
+export function ResourceDetail({ context, kind, namespace, name, peek }: ResourceDetailProps) {
+  const { object, status, error, descriptor, statusLine, tabs, active, selectTab, pane } =
+    useDetailPanes({ context, kind, namespace, name, host: "peek" });
+
   const subtitle = namespace ? `${kind} · ${namespace}` : kind;
   // Offered on every state, not only the settled one: a resource that is slow
   // to load, or that failed to, is exactly the one a reader wants in a tab of
@@ -477,28 +653,9 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
     );
   }
 
-  // `Details Containers YAML Events Metrics`, the design's order. Metrics
-  // trails the two panes every kind has because it is the one nothing offers
-  // yet — `METRICS_BODY` is empty and no descriptor sets `panes.metrics` — and
-  // getting the order right now is cheaper than remembering it later, when the
-  // first kind to opt in would otherwise land it in the wrong place.
-  const tabs: TabItem[] = [
-    { id: PANE_DETAILS, label: "Details" },
-    ...(hasContainers ? [{ id: PANE_CONTAINERS, label: "Containers" }] : []),
-    { id: PANE_YAML, label: "YAML" },
-    { id: PANE_EVENTS, label: "Events" },
-    ...(hasMetrics ? [{ id: PANE_METRICS, label: "Metrics" }] : []),
-  ];
-  // Falls back to Details rather than pointing at a tab that isn't offered —
-  // relevant if a kind's panes could ever shrink under a mounted shell.
-  const active = tabs.some((t) => t.id === activeTab) ? activeTab : PANE_DETAILS;
-
-  const DetailsBody = DETAILS_BODY[kind];
-  const ContainersBody = CONTAINERS_BODY[kind];
-  const MetricsBody = METRICS_BODY[kind];
   // Read once: the header draws the verdict, and the footer's Ask asks a
   // different question of an unhealthy subject than of a healthy one.
-  const header = statusHeader(kind, object);
+  const header = statusHeader(statusLine, object);
 
   return (
     <Inspector
@@ -511,14 +668,14 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
       onTabChange={selectTab}
       tabsLabel="Resource views"
       onClose={peek?.onClose}
-      // The design's bar, on both hosts. Nothing about it comes from `peek`:
-      // the peek and the tab are one pane (R-5), and a footer that arrived by
-      // a route only one of them had would be the second thing they disagreed
-      // about. It is not offered on the loading or error states above —
-      // Suspend/Resume reads the object's own `spec`, and half of these
-      // actions are writes against something the pane could not even read.
+      // The design's bar. Nothing about it comes from `peek`: the actions a
+      // subject offers are the kind's, not the host's, and the full tab draws
+      // the very same row in its header through the very same component. It is
+      // not offered on the loading or error states above — Suspend/Resume
+      // reads the object's own `spec`, and half of these actions are writes
+      // against something the pane could not even read.
       footer={
-        <DetailFooter
+        <DetailActions
           context={context}
           kind={kind}
           namespace={namespace}
@@ -532,17 +689,7 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
         />
       }
     >
-      {active === PANE_DETAILS && (
-        <GenericBody kind={kind} object={object} context={context}>
-          {DetailsBody && <DetailsBody kind={kind} object={object} context={context} />}
-        </GenericBody>
-      )}
-      {active === PANE_CONTAINERS && (ContainersBody ? <ContainersBody kind={kind} object={object} context={context} /> : null)}
-      {active === PANE_METRICS && (MetricsBody ? <MetricsBody kind={kind} object={object} context={context} /> : null)}
-      {active === PANE_YAML && (
-        <YamlPane state={yamlState} kind={kind} namespace={namespace} name={name} redacted={isSecret} />
-      )}
-      {active === PANE_EVENTS && <EventsPane state={eventsState} kind={kind} namespace={namespace} name={name} />}
+      {pane}
     </Inspector>
   );
 }

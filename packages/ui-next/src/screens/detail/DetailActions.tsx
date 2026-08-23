@@ -8,7 +8,7 @@ import { useRowMenu } from "../ResourceMenu";
 
 /**
  * How many of the kind's own actions stay on the bar before the rest fold into
- * the overflow.
+ * the overflow, in the peek's footer.
  *
  * Two, because the design draws two — `Logs` and then `Edit` on a Deployment,
  * `Logs` and then `Shell` on a Pod — and because the bar shares a pane that is
@@ -18,6 +18,18 @@ import { useRowMenu } from "../ResourceMenu";
  * without anything here naming one.
  */
 const ON_BAR = 2;
+
+/**
+ * The same count for the full tab's header row, which the design draws with
+ * four — `Logs`, `Shell`, `Debug`, `Edit` beside `Ask` and the overflow.
+ *
+ * A number rather than a second component, because that is the whole of the
+ * difference between the two: the actions, their order, their icons, their
+ * confirms and their kubectl previews are the row menu's, in both hosts. What
+ * changes between a 260px footer and a window-wide header is how many of them
+ * fit.
+ */
+const ON_HEADER_BAR = 4;
 
 /**
  * The shorter words the design puts on the bar, for the three entries whose
@@ -64,7 +76,7 @@ function toBarActions(items: ContextMenuItem[]): ActionBarAction[] {
   return actions;
 }
 
-export interface DetailFooterProps {
+export interface DetailActionsProps {
   context: string;
   kind: string;
   namespace: string | null;
@@ -83,10 +95,25 @@ export interface DetailFooterProps {
   /** CronJob only: `spec.suspend`, so Suspend/Resume is labelled the right way
    *  round. `useRowMenu` reads it off the row, as it does for a list. */
   suspended?: boolean;
+  /**
+   * Which host is drawing the row. The peek's footer gives `Ask` whatever the
+   * kind's own actions leave and keeps two of them on the bar; the full tab's
+   * header sizes `Ask` like every other control and has room for four.
+   *
+   * The two hosts are no longer one pane (R-5 is retired), but their actions
+   * still are — so what varies is a layout, named here once, rather than a
+   * second list of the same verbs somewhere else.
+   */
+  host?: "peek" | "tab";
 }
 
 /**
- * The design's footer: a wide `Ask`, the kind's own actions, an overflow.
+ * The design's action row: `Ask`, the kind's own actions, an overflow.
+ *
+ * Drawn along the bottom of the peek and along the top of the full tab — the
+ * design puts it in a footer in one and in the header in the other — which is
+ * a placement the host chooses, not two sets of actions. `host` says which
+ * layout, and nothing else about this row varies between them.
  *
  * Every action in it is the list's row menu, unchanged — `useRowMenu` already
  * owns Follow logs, Open shell, Port forward, Edit, Copy as kubectl,
@@ -108,7 +135,16 @@ export interface DetailFooterProps {
  * through {@link askQuestion} — one phrasing per gesture, wherever it is
  * drawn.
  */
-export function DetailFooter({ context, kind, namespace, name, actions, flagged, suspended }: DetailFooterProps) {
+export function DetailActions({
+  context,
+  kind,
+  namespace,
+  name,
+  actions,
+  flagged,
+  suspended,
+  host = "peek",
+}: DetailActionsProps) {
   const { ask } = useConsole();
   const { items, dialog } = useRowMenu({ context, kind, actions });
 
@@ -122,17 +158,20 @@ export function DetailFooter({ context, kind, namespace, name, actions, flagged,
   };
   const question = askQuestion(name, flagged);
   const Sparkle = Icons.ask;
+  const inPeek = host === "peek";
 
   return (
     <>
-      {/* Wide, per the design: it takes whatever the kind's own actions leave.
+      {/* Wide in the peek, per the design: it takes whatever the kind's own
+          actions leave. In the tab's header row it is a control like any
+          other, because the row is not the only thing on that line.
           The visible word is short and the same on every subject, so the
           question goes in the accessible name, where it says what will
           actually be sent — the same split `AskChip` makes. */}
       <Button
         type="button"
         size="sm"
-        className="flex-1 justify-center"
+        className={inPeek ? "flex-1 justify-center" : undefined}
         aria-label={`Ask: ${question}`}
         title={`Ask: ${question}`}
         onClick={() => ask(question)}
@@ -140,7 +179,11 @@ export function DetailFooter({ context, kind, namespace, name, actions, flagged,
         <Sparkle size={12} aria-hidden="true" />
         Ask
       </Button>
-      <ActionBar actions={toBarActions(items(row))} label={`${kind} actions`} max={ON_BAR} />
+      <ActionBar
+        actions={toBarActions(items(row))}
+        label={`${kind} actions`}
+        max={inPeek ? ON_BAR : ON_HEADER_BAR}
+      />
       {dialog}
     </>
   );

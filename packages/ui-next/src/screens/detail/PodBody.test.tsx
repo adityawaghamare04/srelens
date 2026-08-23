@@ -324,43 +324,19 @@ describe("PodDetailsBody", () => {
     });
   });
 
+  /**
+   * Labels and Annotations are no longer this body's, and the pane they are
+   * drawn on is where they are pinned now — `ResourceDetail.test`'s "Labels
+   * and Annotations, which the host places". They moved because the two hosts
+   * lay them out differently (the peek stacks them, the full tab reads them
+   * side by side) and a body that rendered its own could only ever produce
+   * one of those. The Secret gate moved with them, whole.
+   */
   describe("Labels and Annotations", () => {
-    it("gives each its own headed block of full-width key=value lines", () => {
-      const { container } = render(<PodDetailsBody object={FULL_POD} />);
-      expect(screen.getByRole("heading", { name: "Labels" })).toBeDefined();
-      expect(screen.getByRole("heading", { name: "Annotations" })).toBeDefined();
-      expect(screen.getByText("app=")).toBeDefined();
-      expect(screen.getByText("web")).toBeDefined();
-      expect(screen.getByText("kubectl.kubernetes.io/note=")).toBeDefined();
-      expect(screen.getByText("deployed via ci")).toBeDefined();
-      // Not rows in the fact list, where a pair had a third of the pane.
-      expect(factLabels(container)).not.toContain("Labels");
-      expect(container.querySelector("li.truncate")).toBeNull();
-    });
-
-    it("withholds the applied-manifest annotation through the shared helper", () => {
-      const manifest = `{"kind":"Pod","spec":{"containers":[{"name":"app"}]}}`;
-      const { container } = render(
-        <PodDetailsBody
-          object={pod(
-            {},
-            {},
-            {
-              name: "web-1",
-              annotations: { "kubectl.kubernetes.io/last-applied-configuration": manifest, app: "web" },
-            },
-          )}
-        />,
-      );
-      expect(container.innerHTML).not.toContain("containers");
-      expect(screen.getByText(/last-applied-configuration/).textContent).toMatch(/YAML/);
-      expect(screen.getByText("web")).toBeDefined();
-    });
-
-    it("omits both blocks when the pod carries neither", () => {
-      render(<PodDetailsBody object={pod({}, {}, { name: "bare-1" })} />);
-      expect(screen.queryByText("Labels")).toBeNull();
-      expect(screen.queryByText("Annotations")).toBeNull();
+    it("renders neither, so the host can place them", () => {
+      render(<PodDetailsBody object={FULL_POD} />);
+      expect(screen.queryByRole("heading", { name: "Labels" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Annotations" })).toBeNull();
     });
   });
 

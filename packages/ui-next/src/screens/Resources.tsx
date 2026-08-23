@@ -35,6 +35,7 @@ import { openTab } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
 import { ResourceDetail } from "./detail/ResourceDetail";
+import { ResourceTab } from "./detail/ResourceTab";
 import { ResourceBulk } from "./ResourceBulk";
 import { useRowMenu } from "./ResourceMenu";
 import {
@@ -455,10 +456,13 @@ function KindList({
 /**
  * The resource detail route's screen — the peek's other host.
  *
- * One tab, one resource, filled edge to edge by the very same
- * `ResourceDetail` the list's peek mounts, with the very same props bar
- * `peek` (R-5) — the object holding the peek's own close and its "Open tab",
- * neither of which means anything to a pane that IS the tab.
+ * One tab, one resource, filled edge to edge by `ResourceTab`: the design's
+ * own full-tab screen, which is NOT the peek at a wider width. Spec rule R-5
+ * said it was, and the user's mock of this tab retired it — a breadcrumb
+ * header with the actions on the same line, a metric strip, a three-column
+ * fact grid, the containers table inline on Overview. What the two hosts
+ * still share, they share through `useDetailPanes`: one read of the object,
+ * one lazy-load rule per pane, the same per-kind bodies, the same actions.
  *
  * Everything it shows comes out of the route string:
  * `/k/<kind>/<namespace>/<name>` already carries the Kubernetes kind — not
@@ -466,10 +470,10 @@ function KindList({
  * `customDescriptorFor` mints a CRD's route from `crd.kind` too — so there is
  * nothing to look up and nothing to keep in step with the list.
  *
- * No `Screen` wrapper: `Inspector` already heads the pane with the
- * resource's name and kind, and the tab strip titles the tab with the same
- * name (`describe`). A toolbar above it would say everything twice and cost
- * the pane a strip's worth of height.
+ * No `Screen` wrapper: `ResourceTab` already heads the page with the
+ * resource's name and its breadcrumb, and the window's tab strip titles the
+ * tab with the same name (`describe`). A toolbar above it would say
+ * everything twice and cost the page a strip's worth of height.
  */
 export function ResourceDetailScreen({ route }: { route: string }) {
   const context = useActiveContext();
@@ -499,7 +503,7 @@ export function ResourceDetailScreen({ route }: { route: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ResourceDetail
+      <ResourceTab
         context={context.name}
         kind={parts.kind}
         namespace={parts.namespace}

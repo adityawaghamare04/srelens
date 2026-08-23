@@ -60,6 +60,7 @@ vi.mock("@srelens/ui-kit", async (importOriginal) => {
 
 import { ConsoleProvider, useConsole } from "../../console";
 import { ResourceDetail } from "./ResourceDetail";
+import { ResourceTab } from "./ResourceTab";
 
 /** Every question the console was handed, in order. */
 const asked: string[] = [];
@@ -117,6 +118,17 @@ const CONFIGMAP: K8sObject = {
 function documentContains(value: string): boolean {
   return document.body.innerHTML.includes(value);
 }
+
+/**
+ * Every fact the body derived, by its LABEL.
+ *
+ * By label rather than by markup on purpose: the peek reads its facts down a
+ * two-column list and the full tab reads them across three columns of
+ * label-above-value, so the two hosts' DOM differs by design. What must not
+ * differ is which facts were derived at all.
+ */
+const factLabels = (): string[] =>
+  Array.from(document.querySelectorAll(".kv-k")).map((el) => el.textContent ?? "");
 
 // Obviously-fake fixture text — never anything that reads as a real
 // credential, per this screen's secrecy ruling.
@@ -532,26 +544,195 @@ describe("ResourceDetail", () => {
     expect(mismatched).toEqual([]);
   });
 
-  it("behaves identically in both hosts, apart from the peek's own controls", async () => {
-    getObject.mockResolvedValue({ object: POD });
-    const props = { context: "ctx", kind: "Pod", namespace: "default", name: "web-1" } as const;
+  /**
+   * R-5 IS RETIRED. It said the peek and the full tab were the same pane with
+   * the same props, and the user's full-tab mock says otherwise: a breadcrumb
+   * header, actions on the header row, a metric strip, a three-column fact
+   * grid, Overview rather than Details, and no Containers tab.
+   *
+   * What is asserted here is what replaced it — the discipline underneath the
+   * rule rather than the rule. The two hosts draw ONE subject from ONE read
+   * through ONE set of per-kind bodies, so they can differ in how a fact reads
+   * and cannot differ in what it says. Deleting these tests along with the
+   * rule would have left that unwatched, which is the property that actually
+   * matters.
+   */
+  describe("what the two hosts still share, now that they are two screens", () => {
+    const props = { context: "ctx", kind: "Pod", namespace: "checkout", name: "cart-session-store-0" } as const;
 
-    const withClose = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
-    await waitFor(() => expect(withClose.getByRole("tab", { name: "YAML" })).toBeDefined());
-    expect(withClose.getByRole("button", { name: "Close inspector" })).toBeDefined();
-    const tabsWithClose = withClose.getAllByRole("tab").map((t) => t.textContent);
-    // Scoped to the subject's own heading by name, not `getByRole("heading")`
-    // bare: the Details pane's per-kind body (Task 10 on) can render its own
-    // titled panels (`Panel`'s own `h2`, e.g. "Properties"), so more than one
-    // heading is on screen once real content lands there.
-    const headingWithClose = withClose.getByRole("heading", { name: "web-1" }).textContent;
-    withClose.unmount();
+    it("reads the subject once in either host, through the same call", async () => {
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
 
-    const withoutClose = render(<ResourceDetail {...props} />);
-    await waitFor(() => expect(withoutClose.getByRole("tab", { name: "YAML" })).toBeDefined());
-    expect(withoutClose.queryByRole("button", { name: "Close inspector" })).toBeNull();
-    expect(withoutClose.getAllByRole("tab").map((t) => t.textContent)).toEqual(tabsWithClose);
-    expect(withoutClose.getByRole("heading", { name: "web-1" }).textContent).toEqual(headingWithClose);
+      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
+      expect(getObject).toHaveBeenCalledTimes(1);
+      const fromPeek = getObject.mock.calls[0];
+      asPeek.unmount();
+
+      getObject.mockClear();
+      const asTab = render(<ResourceTab {...props} />);
+      await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
+      expect(getObject).toHaveBeenCalledTimes(1);
+      expect(getObject.mock.calls[0]).toEqual(fromPeek);
+    });
+
+    it("renders the same per-kind body for the same subject, however it is laid out", async () => {
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
+
+      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
+      // Every fact the body derived, by its label. Two layouts of one list —
+      // a two-column run in the peek, three columns of label-above-value in
+      // the tab — so the LABELS are what must match, not the markup.
+      const inPeek = factLabels();
+      expect(inPeek).toContain("Status");
+      expect(inPeek).toContain("Containers ready");
+      asPeek.unmount();
+
+      const asTab = render(<ResourceTab {...props} />);
+      await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
+      // The tab folds the containers table into Overview, so it says strictly
+      // more; what it must never do is say less, or say it differently.
+      for (const label of inPeek) expect(factLabels()).toContain(label);
+    });
+
+    it("neither refetches a pane it has already opened, and neither fetches one it has not", async () => {
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
+
+      const asTab = render(<ResourceTab {...props} />);
+      await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
+      // Lazy: nothing behind YAML or Events has been asked for yet.
+      expect(getManifest).not.toHaveBeenCalled();
+      expect(listEvents).not.toHaveBeenCalled();
+
+      await userEvent.click(asTab.getByRole("tab", { name: "YAML" }));
+      await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1));
+      await userEvent.click(asTab.getByRole("tab", { name: "Overview" }));
+      await userEvent.click(asTab.getByRole("tab", { name: "YAML" }));
+      // Coming back is not a new subject.
+      expect(getManifest).toHaveBeenCalledTimes(1);
+    });
+
+    it("is the peek alone that offers the peek's own two controls", async () => {
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      descriptorFor.mockReturnValue(baseDescriptor());
+
+      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
+      expect(asPeek.getByRole("button", { name: "Close inspector" })).toBeDefined();
+      expect(asPeek.getByRole("button", { name: "Open tab" })).toBeDefined();
+      asPeek.unmount();
+
+      // The tab IS the tab: closing it is the window strip's job, and an
+      // "Open tab" there would open a second copy of what you are reading.
+      const asTab = render(<ResourceTab {...props} />);
+      await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
+      expect(asTab.queryByRole("button", { name: "Close inspector" })).toBeNull();
+      expect(asTab.queryByRole("button", { name: "Open tab" })).toBeNull();
+    });
+  });
+
+  /**
+   * Labels and Annotations, and the gate that keeps a Secret's annotation out
+   * of the document.
+   *
+   * These were asserted three times over — through `GenericBody`, `PodBody`
+   * and `WorkloadBody` — because all three rendered their own copy of the
+   * blocks. Two of those copies had no `Secret` branch at all, and were safe
+   * only because the kinds they served happened not to include Secret: a
+   * security gate resting on a membership list two files away. The blocks now
+   * belong to the HOST, so they are asserted once, here, through the pane a
+   * reader actually sees.
+   */
+  describe("Labels and Annotations, which the host places", () => {
+    // Obviously-fake fixture text — never anything that reads as a real
+    // manifest or credential.
+    const FIXTURE_VALUE = "fixture-only-not-a-real-last-applied-manifest";
+    const APPLIED = "kubectl.kubernetes.io/last-applied-configuration";
+
+    const withMeta = (kind: string, meta: Record<string, unknown>): K8sObject => ({
+      kind,
+      apiVersion: "v1",
+      metadata: { name: "subject-1", namespace: "default", ...meta },
+    });
+
+    async function open(kind: string, meta: Record<string, unknown>) {
+      getObject.mockResolvedValue({ object: withMeta(kind, meta) });
+      const view = render(<ResourceDetail context="ctx" kind={kind} namespace="default" name="subject-1" />);
+      await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
+      return view;
+    }
+
+    it("gives each its own headed block of full-width key=value lines", async () => {
+      const { container } = await open("ConfigMap", {
+        labels: { app: "checkout" },
+        annotations: { "srelens.io/note": "hello" },
+      });
+      expect(screen.getByRole("heading", { level: 3, name: "Labels" })).toBeDefined();
+      expect(screen.getByRole("heading", { level: 3, name: "Annotations" })).toBeDefined();
+      expect(screen.getByText("app=")).toBeDefined();
+      expect(screen.getByText("checkout")).toBeDefined();
+      // Not truncated: `PairList` writes no `title`, so wrapping is the only
+      // way a long value can be read at all.
+      expect(container.querySelector("li.truncate")).toBeNull();
+      expect(container.querySelector(".pairs .v.break-all")).not.toBeNull();
+    });
+
+    it("draws neither block for an object carrying neither", async () => {
+      await open("ConfigMap", {});
+      expect(screen.queryByRole("heading", { level: 3, name: "Labels" })).toBeNull();
+      expect(screen.queryByRole("heading", { level: 3, name: "Annotations" })).toBeNull();
+    });
+
+    it("shows annotations expanded, with no toggle, on an ordinary kind", async () => {
+      await open("ConfigMap", { annotations: { "srelens.io/last-applied-by": "dana@acme.io" } });
+      expect(documentContains("dana@acme.io")).toBe(true);
+      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
+    });
+
+    it("keeps a Secret's annotation value out of the document until asked, then hides it again", async () => {
+      // A `kubectl apply`-managed Secret: `last-applied-configuration` holds
+      // the ENTIRE applied manifest, base64 `data` map and all, and
+      // `k8s.getObject`'s Secret redaction never touches
+      // `metadata.annotations`.
+      await open("Secret", { annotations: { [APPLIED]: FIXTURE_VALUE } });
+
+      // Not as text, not as a title/aria-label/data-*, not anywhere in the
+      // markup — nothing under the toggle is mounted at all.
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+
+      const toggle = screen.getByRole("button", { name: "Show 1 annotation" });
+      expect(toggle.getAttribute("title")).toBeNull();
+      expect(toggle.getAttribute("aria-label")).toBeNull();
+
+      await userEvent.click(toggle);
+      await waitFor(() => expect(documentContains(FIXTURE_VALUE)).toBe(true));
+
+      await userEvent.click(screen.getByRole("button", { name: "Hide" }));
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+    });
+
+    it("gates Secret and nothing else", async () => {
+      // The two rules must not be confused for one. `AnnotationLines` holds
+      // the applied manifest back on EVERY kind, for legibility; the gate is a
+      // different rule and applies to Secret alone. Asserted on an ordinary
+      // annotation, so the legibility rule cannot stand in for the gate.
+      await open("Pod", { annotations: { "srelens.io/last-applied-by": "dana@acme.io" } });
+      expect(documentContains("dana@acme.io")).toBe(true);
+      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
+    });
+
+    it("withholds an ordinary kind's applied manifest for length, and says where to read it", async () => {
+      await open("ConfigMap", {
+        annotations: { [APPLIED]: FIXTURE_VALUE, "srelens.io/last-applied-by": "dana@acme.io" },
+      });
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+      expect(screen.getByText(new RegExp(APPLIED.replace(/\//g, "\\/"))).textContent).toMatch(/YAML/);
+      expect(documentContains("dana@acme.io")).toBe(true);
+    });
   });
 
   describe("the Secret YAML pane's redaction", () => {
@@ -961,22 +1142,32 @@ describe("ResourceDetail", () => {
       expect(queryByRole("button", { name: "More actions" })).toBeNull();
     });
 
-    it("is the same footer in the peek and in the tab", async () => {
+    it("offers the same actions in the tab's header row, only more of them on the bar", async () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(podDescriptor());
       const props = { context: "ctx", kind: "Pod", namespace: "checkout", name: "cart-session-store-0" } as const;
 
       const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
       await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
-      const inPeek = barWords();
-      expect(inPeek).toEqual(["Ask", "Logs", "Shell", "More actions"]);
+      expect(barWords()).toEqual(["Ask", "Logs", "Shell", "More actions"]);
       asPeek.unmount();
 
-      const asTab = render(<ResourceDetail {...props} />);
-      await waitFor(() => expect(asTab.getByRole("tab", { name: "Details" })).toBeDefined());
-      // R-5: one pane, two hosts. The footer is not one of the things `peek`
-      // is allowed to vary.
-      expect(barWords()).toEqual(inPeek);
+      // The design puts this row in a footer in the peek and in the header in
+      // the tab, and gives the wider surface four of the kind's own actions
+      // instead of two. The ACTIONS are the row menu's in both — the placement
+      // and the count are the only things the host decides.
+      const asTab = render(<ResourceTab {...props} />);
+      await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
+      const header = document.querySelector("[data-slot='tab-actions']") as HTMLElement;
+      expect(Array.from(header.querySelectorAll("button")).map((b) => b.textContent)).toEqual([
+        "Ask",
+        "Logs",
+        "Shell",
+        "Forward",
+        "Edit",
+        "More actions",
+      ]);
+      expect(document.querySelector("section.pane > footer")).toBeNull();
     });
 
     /**

@@ -44,6 +44,53 @@ export function resourceText(r: Record<string, unknown>): string {
   return `CPU: ${str(r.cpu) || "—"}, Memory: ${str(r.memory) || "—"}`;
 }
 
+/**
+ * The same two fields as {@link resourceText}, compact: `250m · 512Mi`.
+ *
+ * Two forms of one fact, deliberately, and side by side so neither can be
+ * written a third time somewhere else. `resourceText` names its halves because
+ * it fills the value column of a key/value row, where "250m · 512Mi" beside
+ * the word "Requests" says nothing about which half is which. A table cell
+ * under a REQUESTS heading has the column heading doing that work and no room
+ * to say it twice.
+ */
+export function resourceSummary(r: Record<string, unknown>): string {
+  return `${str(r.cpu) || "—"} · ${str(r.memory) || "—"}`;
+}
+
+/**
+ * Every container status a pod reports, in the order a reader meets them:
+ * init containers, then the app containers, then any ephemeral debug
+ * container attached later.
+ *
+ * Takes the pod's `status`, not the pod, because that is what every caller
+ * already has in hand and because this module is about containers, not about
+ * whole objects. An empty answer is a real one: no statuses at all means the
+ * kubelet has not reported yet, which is an absence rather than a zero.
+ */
+export function podContainerStatuses(status: unknown): Record<string, unknown>[] {
+  const st = asRecord(status);
+  return [
+    ...asArray(st.initContainerStatuses).map(asRecord),
+    ...asArray(st.containerStatuses).map(asRecord),
+    ...asArray(st.ephemeralContainerStatuses).map(asRecord),
+  ];
+}
+
+/**
+ * How many times a pod's containers have restarted, all told.
+ *
+ * A count that is not a number contributes nothing rather than poisoning the
+ * total: `Number(undefined)` is NaN, and a NaN reaching a metric tile renders
+ * as "NaN", which reads as a fault in srelens rather than in the payload.
+ */
+export function restartTotal(statuses: readonly Record<string, unknown>[]): number {
+  return statuses.reduce((total, st) => {
+    const n = Number(st.restartCount ?? 0);
+    return Number.isFinite(n) ? total + n : total;
+  }, 0);
+}
+
 /** "NAME=value" or "NAME=<secret/configMap/field>" for an env entry. */
 export function envText(e: unknown): string {
   const r = asRecord(e);

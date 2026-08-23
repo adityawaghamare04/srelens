@@ -7,6 +7,9 @@ import {
   resourceText,
   envText,
   mountText,
+  podContainerStatuses,
+  resourceSummary,
+  restartTotal,
   tolerationText,
 } from "./k8sContainer";
 
@@ -268,5 +271,55 @@ describe("tolerationText", () => {
     expect(tolerationText({ key: "dedicated", value: "gpu", effect: "NoSchedule" })).toBe(
       "dedicated=gpu → NoSchedule",
     );
+  });
+});
+
+/**
+ * The pod-wide reads a header, a fact list and a metric tile all want, in one
+ * place. `PodBody` derived both of these inline and the full tab needed the
+ * same two numbers — a second copy of a reduce is how two surfaces start
+ * disagreeing about how many times a pod has restarted.
+ */
+describe("podContainerStatuses", () => {
+  it("reads init, app and ephemeral statuses in that order", () => {
+    expect(
+      podContainerStatuses({
+        initContainerStatuses: [{ name: "migrate" }],
+        containerStatuses: [{ name: "app" }],
+        ephemeralContainerStatuses: [{ name: "debugger" }],
+      }).map((s) => s.name),
+    ).toEqual(["migrate", "app", "debugger"]);
+  });
+
+  it("answers an empty list for a pod the kubelet has not reported on", () => {
+    expect(podContainerStatuses({})).toEqual([]);
+    expect(podContainerStatuses(undefined)).toEqual([]);
+  });
+});
+
+describe("restartTotal", () => {
+  it("adds up every container's restarts", () => {
+    expect(restartTotal([{ restartCount: 3 }, { restartCount: 2 }])).toBe(5);
+  });
+
+  it("reads a missing count as none, not as a gap", () => {
+    expect(restartTotal([{ name: "app" }])).toBe(0);
+  });
+
+  it("ignores a count that is not a number rather than answering NaN", () => {
+    // A NaN would render as "NaN" in a metric tile, which reads as a fault in
+    // srelens rather than in the payload.
+    expect(restartTotal([{ restartCount: "many" }, { restartCount: 2 }])).toBe(2);
+  });
+});
+
+describe("resourceSummary", () => {
+  it("reads cpu and memory as one compact value", () => {
+    expect(resourceSummary({ cpu: "250m", memory: "512Mi" })).toBe("250m · 512Mi");
+  });
+
+  it("stands an em dash in for a half that was never set", () => {
+    expect(resourceSummary({ memory: "512Mi" })).toBe("— · 512Mi");
+    expect(resourceSummary({})).toBe("— · —");
   });
 });

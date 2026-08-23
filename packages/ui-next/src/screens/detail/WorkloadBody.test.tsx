@@ -376,7 +376,7 @@ describe("WorkloadDetailsBody", () => {
     });
   });
 
-  describe("Conditions, Labels and Annotations", () => {
+  describe("Conditions, and what the body no longer draws", () => {
     it("shows each condition's status and reason, not a bare pill", () => {
       const { container } = render(<WorkloadDetailsBody object={CHECKOUT_API} context="ctx" />);
       expect(factLabels(container, "Conditions")).toEqual(["Available", "Progressing"]);
@@ -394,48 +394,16 @@ describe("WorkloadDetailsBody", () => {
       expect(screen.queryByText("Conditions")).toBeNull();
     });
 
-    it("gives Labels and Annotations their own headed blocks of key=value lines", () => {
-      const { container } = render(<WorkloadDetailsBody object={CHECKOUT_API} context="ctx" />);
-      expect(screen.getByRole("heading", { name: "Labels" })).toBeDefined();
-      expect(screen.getByRole("heading", { name: "Annotations" })).toBeDefined();
-      expect(screen.getAllByText("app.kubernetes.io/name=")).toHaveLength(2); // label and selector
-      expect(screen.getByText("deployment.kubernetes.io/revision=")).toBeDefined();
-      expect(factLabels(container)).not.toContain("Labels");
-      expect(container.querySelector("li.truncate")).toBeNull();
+    // Labels and Annotations are no longer this body's — the host places them,
+    // so the peek can stack them and the full tab can read them side by side.
+    // Pinned on the pane instead: `ResourceDetail.test`'s "Labels and
+    // Annotations, which the host places".
+    it("renders neither Labels nor Annotations, leaving both to the host", () => {
+      render(<WorkloadDetailsBody object={CHECKOUT_API} context="ctx" />);
+      expect(screen.queryByRole("heading", { name: "Labels" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Annotations" })).toBeNull();
     });
 
-    it("withholds the applied-manifest annotation through the shared helper", () => {
-      const manifest = `{"kind":"Deployment","spec":{"replicas":12}}`;
-      const { container } = render(
-        <WorkloadDetailsBody
-          object={workload(
-            "Deployment",
-            { replicas: 1, selector: { matchLabels: {} } },
-            {},
-            {
-              name: "web",
-              namespace: "default",
-              annotations: { "kubectl.kubernetes.io/last-applied-configuration": manifest, app: "web" },
-            },
-          )}
-          context="ctx"
-        />,
-      );
-      expect(container.innerHTML).not.toContain("replicas");
-      expect(screen.getByText(/last-applied-configuration/).textContent).toMatch(/YAML/);
-      expect(screen.getByText("web")).toBeDefined();
-    });
-
-    it("omits both blocks when the workload carries neither", () => {
-      render(
-        <WorkloadDetailsBody
-          object={workload("Deployment", { replicas: 1, selector: { matchLabels: {} } })}
-          context="ctx"
-        />,
-      );
-      expect(screen.queryByText("Labels")).toBeNull();
-      expect(screen.queryByText("Annotations")).toBeNull();
-    });
   });
 
   describe("related pods", () => {
