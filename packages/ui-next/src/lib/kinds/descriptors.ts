@@ -16,6 +16,7 @@ import {
   limitRangeColumns,
   networkPolicyColumns,
   nodeColumns,
+  nodeFlagged,
   podColumns,
   podFlagged,
   pvColumns,
@@ -165,6 +166,11 @@ const TYPED: Partial<Record<ResourceKind, KindDescriptor<ListRow>>> = {
     scope: "cluster",
     load: loadNodes,
     actions: {},
+    // Same variance cast every function on this table already needs:
+    // `flagged` only reads `status`/`unschedulable`, fields `ListRow` does not
+    // promise. Present so a NotReady or cordoned node's row asks the same
+    // question its detail pane asks — both read core's `nodeStatus`.
+    flagged: nodeFlagged as (row: ListRow) => boolean,
   },
   configmaps: {
     k8sKind: "ConfigMap",

@@ -1,8 +1,12 @@
 import {
   ageSortValue,
+  cronJobStatus,
   formatStorageSize,
+  jobStatus,
+  nodeStatus,
   phaseKind,
   podStatus,
+  scaledStatus,
   type ClusterRoleBindingSummary,
   type ClusterRoleSummary,
   type ConfigMapSummary,
@@ -25,9 +29,10 @@ import {
   type ServiceAccountSummary,
   type ServiceSummary,
   type StatefulSetSummary,
+  type StatusVerdict,
   type StorageClassSummary,
 } from "@srelens/core";
-import { Badge, StatusPill, type Column, type StatusKind, type Tone } from "@srelens/ui-kit";
+import { Badge, StatusPill, type Column, type Tone } from "@srelens/ui-kit";
 
 export type PodRow = PodSummary & { cpu?: number; memory?: number };
 export type NodeRow = NodeSummary & { cpu?: number; memory?: number };
@@ -105,15 +110,36 @@ export const podColumns: Column<PodRow>[] = [
   { key: "image", header: "Image", sortable: false, render: (p) => p.image || "—" },
 ];
 
-/** "N/M" is short of desired when N < M — how Deployment and StatefulSet
- *  both report readiness. */
-function readyShort(ready: string): boolean {
+/**
+ * "N/M" as the two numbers behind it — how Deployment and StatefulSet both
+ * report readiness, where DaemonSet reports a pair of bare numbers.
+ *
+ * An unparseable string yields `NaN`s, which {@link scaledStatus} reads as
+ * neither zero-desired nor short — the same "no dot" answer the previous
+ * `readyShort` gave for the same input.
+ */
+function readyCounts(ready: string): [ready: number, desired: number] {
   const [have, want] = ready.split("/").map(Number);
-  return Number.isFinite(have) && Number.isFinite(want) && have < want;
+  return [have, want];
 }
 
+/**
+ * The verdict for one workload row: its status word, the tone that word is
+ * drawn in, and whether it earns the unhealthy dot — all three from core's
+ * {@link scaledStatus}, which is the same function the detail header asks
+ * about the same object.
+ *
+ * This is what the design's Workloads table got wrong. It kept its own table
+ * pairing "Progressing" with amber and "Available" with green, so a degraded
+ * Deployment read amber "Progressing" in the row and red "Degraded" in the
+ * header a double-click away, with the row's own red dot beside the amber
+ * word. One reading cannot disagree with itself. (#331)
+ */
+export const deploymentVerdict = (row: DeploymentSummary): StatusVerdict =>
+  scaledStatus("Deployment", ...readyCounts(row.ready));
+
 /** The design's unhealthy dot for a Deployment: fewer ready than desired. */
-export const deploymentFlagged = (row: DeploymentSummary): boolean => readyShort(row.ready);
+export const deploymentFlagged = (row: DeploymentSummary): boolean => deploymentVerdict(row).flagged;
 
 export const deploymentColumns: Column<DeploymentSummary>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -124,8 +150,12 @@ export const deploymentColumns: Column<DeploymentSummary>[] = [
   { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
+/** A StatefulSet's verdict — the same rule, off the same "N/M" string. */
+export const statefulSetVerdict = (row: StatefulSetSummary): StatusVerdict =>
+  scaledStatus("StatefulSet", ...readyCounts(row.ready));
+
 /** The design's unhealthy dot for a StatefulSet: fewer ready than desired. */
-export const statefulSetFlagged = (row: StatefulSetSummary): boolean => readyShort(row.ready);
+export const statefulSetFlagged = (row: StatefulSetSummary): boolean => statefulSetVerdict(row).flagged;
 
 export const statefulSetColumns: Column<StatefulSetSummary>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -136,9 +166,13 @@ export const statefulSetColumns: Column<StatefulSetSummary>[] = [
   { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
-/** The design's unhealthy dot for a DaemonSet: fewer ready than desired —
- *  numeric fields here, unlike Deployment/StatefulSet's "N/M" string. */
-export const daemonSetFlagged = (row: DaemonSetSummary): boolean => row.ready < row.desired;
+/** A DaemonSet's verdict — numeric fields here, unlike Deployment/StatefulSet's
+ *  "N/M" string, and its own zero word ("Not scheduled") which core supplies. */
+export const daemonSetVerdict = (row: DaemonSetSummary): StatusVerdict =>
+  scaledStatus("DaemonSet", row.ready, row.desired);
+
+/** The design's unhealthy dot for a DaemonSet: fewer ready than desired. */
+export const daemonSetFlagged = (row: DaemonSetSummary): boolean => daemonSetVerdict(row).flagged;
 
 export const daemonSetColumns: Column<DaemonSetSummary>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -151,9 +185,13 @@ export const daemonSetColumns: Column<DaemonSetSummary>[] = [
   { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
 
+/** A Job's verdict, through core's own rule: a failure outranks an in-flight
+ *  pod, and a running Job is amber without earning a dot. */
+export const jobVerdict = (row: JobSummary): StatusVerdict => jobStatus(row.failed, row.active);
+
 /** The design's unhealthy dot for a Job: any failed pod. Unambiguous — the
  *  same `failed` count already drives the Status column's red pill below. */
-export const jobFlagged = (row: JobSummary): boolean => row.failed > 0;
+export const jobFlagged = (row: JobSummary): boolean => jobVerdict(row).flagged;
 
 export const jobColumns: Column<JobSummary>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -163,15 +201,18 @@ export const jobColumns: Column<JobSummary>[] = [
     key: "status",
     header: "Status",
     render: (j) => {
-      const [status, kind]: [string, StatusKind] =
-        j.failed > 0 ? ["Failed", "danger"] : j.active > 0 ? ["Active", "warning"] : ["Complete", "success"];
-      return <StatusPill status={status} kind={kind} />;
+      const { status, health } = jobVerdict(j);
+      return <StatusPill status={status} kind={health} />;
     },
   },
   { key: "duration", header: "Duration", align: "end", render: (j) => j.duration || "—" },
   { key: "owner", header: "Owner", render: (j) => j.owner || "—" },
   { key: "age", header: "Age", sortable: true, align: "end", getSortValue: ageSortValue },
 ];
+
+/** A CronJob's verdict: suspended or not, which is the whole of its health —
+ *  core deliberately gives it no unhealthy state, the Jobs it spawns have it. */
+export const cronJobVerdict = (row: CronJobSummary): StatusVerdict => cronJobStatus(row.suspended);
 
 export const cronJobColumns: Column<CronJobSummary>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -180,8 +221,10 @@ export const cronJobColumns: Column<CronJobSummary>[] = [
   {
     key: "suspended",
     header: "State",
-    render: (c) =>
-      c.suspended ? <StatusPill status="Suspended" kind="neutral" /> : <StatusPill status="Active" kind="success" />,
+    render: (c) => {
+      const { status, health } = cronJobVerdict(c);
+      return <StatusPill status={status} kind={health} />;
+    },
   },
   { key: "active", header: "Active", align: "end" },
   { key: "lastSchedule", header: "Last run", render: (c) => c.lastSchedule || "—" },
@@ -190,6 +233,20 @@ export const cronJobColumns: Column<CronJobSummary>[] = [
 
 /** "warning" / "neutral" classic badge variants, remapped onto the kit's `Tone`. */
 const BADGE_TONE: Record<string, Tone> = { warning: "warn", neutral: "muted" };
+
+/**
+ * A Node's verdict, off the two facts a row carries: the readiness word the
+ * backend already derived, and whether the node is cordoned.
+ *
+ * Its `flagged` is what the design's unhealthy dot and the row's `Ask` chip
+ * turn on. Without it a NotReady node's row asked "What is X using right
+ * now?" while its own detail pane — reading `resourceStatusLine`, the same
+ * verdict — asked "Why is X unhealthy?". The pane's read is the right one.
+ * (#331)
+ */
+export const nodeVerdict = (row: NodeRow): StatusVerdict => nodeStatus(row.status, row.unschedulable);
+
+export const nodeFlagged = (row: NodeRow): boolean => nodeVerdict(row).flagged;
 
 export const nodeColumns: Column<NodeRow>[] = [
   { key: "name", header: "Name", sortable: true },

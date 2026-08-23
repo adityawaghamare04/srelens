@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { podStatus, resourceStatusLine } from "./k8sStatus";
+import { cronJobStatus, jobStatus, nodeStatus, podStatus, resourceStatusLine, scaledStatus } from "./k8sStatus";
 import type { K8sObject } from "./manifest";
 
 /** A Deployment-shaped object: `spec.replicas` desired, the rest on `status`. */
@@ -504,5 +504,90 @@ describe("the tone and the dot are paired structurally", () => {
     // without this, a verdict could stop being produced by anything and no
     // test would notice.
     expect([...reached].sort()).toEqual([...new Set(Object.values(LEGAL_VERDICTS))].sort());
+  });
+});
+
+/**
+ * The row-facing half of the same verdicts. A list row carries counts and no
+ * object; a detail header carries an object and no row. Both have to say the
+ * same thing about one workload, so both go through one function and these
+ * tests assert exactly that — the verdict, and its identity with the line the
+ * object path produces. (#331)
+ */
+describe("the row reading and the object reading are one verdict", () => {
+  /** Everything but the ready phrase, which only a header shows. */
+  const asVerdict = ({ status, health, flagged }: { status: string; health: string; flagged: boolean }) => ({
+    status,
+    health,
+    flagged,
+  });
+
+  it("scaledStatus reads a Deployment the way its own header does", () => {
+    for (const [ready, desired] of [[9, 12], [3, 3], [0, 0], [0, 5]] as const) {
+      expect(scaledStatus("Deployment", ready, desired)).toEqual(
+        asVerdict(resourceStatusLine("Deployment", deployment({ replicas: desired }, { readyReplicas: ready }))!),
+      );
+    }
+  });
+
+  it("gives a DaemonSet matching no node its own zero word, not the replica one", () => {
+    expect(scaledStatus("DaemonSet", 0, 0)).toEqual({
+      status: "Not scheduled",
+      health: "neutral",
+      flagged: false,
+    });
+    expect(scaledStatus("Deployment", 0, 0).status).toBe("Scaled down");
+    expect(scaledStatus("StatefulSet", 0, 0).status).toBe("Scaled down");
+  });
+
+  it("jobStatus reads a Job the way its own header does", () => {
+    const job = (status: Record<string, unknown>): K8sObject => ({
+      kind: "Job",
+      metadata: { name: "nightly", namespace: "batch" },
+      spec: { completions: 1 },
+      status,
+    });
+    for (const [failed, active] of [[1, 0], [0, 2], [0, 0], [2, 3]] as const) {
+      expect(jobStatus(failed, active)).toEqual(
+        asVerdict(resourceStatusLine("Job", job({ failed, active, succeeded: 0 }))!),
+      );
+    }
+    // A failure outranks an in-flight pod: a Job with both is Failed, not Active.
+    expect(jobStatus(2, 3).status).toBe("Failed");
+  });
+
+  it("cronJobStatus reads a CronJob the way its own header does", () => {
+    for (const suspend of [true, false]) {
+      expect(cronJobStatus(suspend)).toEqual(
+        asVerdict(
+          resourceStatusLine("CronJob", {
+            kind: "CronJob",
+            metadata: { name: "nightly", namespace: "batch" },
+            spec: { suspend },
+            status: {},
+          })!,
+        ),
+      );
+    }
+  });
+
+  it("nodeStatus reads a Node the way its own header does, cordoned or not", () => {
+    const node = (ready: string, unschedulable: boolean): K8sObject => ({
+      kind: "Node",
+      metadata: { name: "node-a" },
+      spec: unschedulable ? { unschedulable: true } : {},
+      status: { conditions: [{ type: "Ready", status: ready }] },
+    });
+    for (const [word, ready] of [["Ready", "True"], ["NotReady", "False"]] as const) {
+      for (const unschedulable of [false, true]) {
+        expect(nodeStatus(word, unschedulable)).toEqual(asVerdict(resourceStatusLine("Node", node(ready, unschedulable))!));
+      }
+    }
+    // Both readings a list row can hold are flagged, which is what the row
+    // chip's own question turns on: a NotReady node asked from the row and
+    // from the pane must send the same question.
+    expect(nodeStatus("NotReady", false).flagged).toBe(true);
+    expect(nodeStatus("Ready", true).flagged).toBe(true);
+    expect(nodeStatus("Ready", false).flagged).toBe(false);
   });
 });

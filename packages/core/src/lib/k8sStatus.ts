@@ -77,16 +77,20 @@ type Verdict =
 
 const verdict = (status: string, v: Verdict): StatusVerdict => ({ status, ...v });
 
-const line = (status: string, v: Verdict, readyText: string | null): ResourceStatusLine => ({
-  status,
-  ...v,
-  readyText,
-});
-
 /** A count off `status`/`spec`, absent meaning zero (as the backend's list summaries read it). */
 function count(value: unknown): number {
   const n = Number(value ?? 0);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * The word a kind uses when nothing at all is desired. Only core knows which
+ * kind uses which: a Deployment at zero replicas is "Scaled down", a DaemonSet
+ * matching no node is "Not scheduled", and a caller that picked its own word
+ * would be a second table of the same fact.
+ */
+function zeroWord(kind: string): string {
+  return kind === "DaemonSet" ? "Not scheduled" : "Scaled down";
 }
 
 /**
@@ -97,12 +101,25 @@ function count(value: unknown): number {
  * Nothing desired is not a failure — a Deployment scaled to zero, or a
  * DaemonSet whose selector matches no node, is doing exactly what it was
  * asked. The list's flagged rules agree: `0 < 0` is false, so no dot.
+ *
+ * Exported on the two bare counts, not on an object, for the same reason
+ * {@link podStatus} is: a list row carries the counts and no object at all
+ * (`DeploymentSummary.ready` is the string "1/3", `DaemonSetSummary` a pair of
+ * numbers), and the row's pill has to say what the header says about the same
+ * workload. It did not — the Workloads table paired "Progressing"/amber and
+ * "Available"/green by hand while this returned "Degraded"/red and
+ * "Scaled down"/neutral for the identical object, so double-clicking a row
+ * contradicted it. (#331)
  */
-function scaledStatus(ready: number, desired: number, zeroWord: string): ResourceStatusLine {
-  const readyText = `${ready}/${desired} ready`;
-  if (desired === 0) return line(zeroWord, AT_REST, readyText);
-  if (ready < desired) return line("Degraded", BROKEN, readyText);
-  return line("Running", WELL, readyText);
+export function scaledStatus(kind: string, ready: number, desired: number): StatusVerdict {
+  if (desired === 0) return verdict(zeroWord(kind), AT_REST);
+  if (ready < desired) return verdict("Degraded", BROKEN);
+  return verdict("Running", WELL);
+}
+
+/** {@link scaledStatus} with the ready phrase only a detail header shows. */
+function scaledLine(kind: string, ready: number, desired: number): ResourceStatusLine {
+  return { ...scaledStatus(kind, ready, desired), readyText: `${ready}/${desired} ready` };
 }
 
 /**
@@ -115,16 +132,16 @@ function scaledStatus(ready: number, desired: number, zeroWord: string): Resourc
  * `DeploymentSummary.ready` reads the same field, so the header and the list
  * agree on one number.
  */
-function replicaStatus(object: K8sObject): ResourceStatusLine {
+function replicaStatusLine(kind: string, object: K8sObject): ResourceStatusLine {
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
-  return scaledStatus(count(status.readyReplicas), count(spec.replicas), "Scaled down");
+  return scaledLine(kind, count(status.readyReplicas), count(spec.replicas));
 }
 
 /** A DaemonSet counts nodes, not replicas: `numberReady` of `desiredNumberScheduled`. */
-function daemonSetStatus(object: K8sObject): ResourceStatusLine {
+function daemonSetStatusLine(object: K8sObject): ResourceStatusLine {
   const status = asRecord(object.status);
-  return scaledStatus(count(status.numberReady), count(status.desiredNumberScheduled), "Not scheduled");
+  return scaledLine("DaemonSet", count(status.numberReady), count(status.desiredNumberScheduled));
 }
 
 /** The phases past which a pod is finished, and a container state cannot speak for it. */
@@ -191,15 +208,20 @@ function podStatusLine(object: K8sObject): ResourceStatusLine {
  * `jobFlagged`): a failure is a failure, an in-flight Job is amber but is NOT
  * flagged — still running is not yet wrong — and anything else has finished.
  */
-function jobStatus(object: K8sObject): ResourceStatusLine {
+export function jobStatus(failed: number, active: number): StatusVerdict {
+  if (failed > 0) return verdict("Failed", BROKEN);
+  if (active > 0) return verdict("Active", IN_FLIGHT);
+  return verdict("Complete", WELL);
+}
+
+/** {@link jobStatus} off a fetched Job, plus the completion count a header shows. */
+function jobStatusLine(object: K8sObject): ResourceStatusLine {
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
   // An unset `completions` means one, per the Job API's own default.
   const completions = spec.completions != null ? count(spec.completions) : 1;
   const readyText = `${count(status.succeeded)}/${completions} complete`;
-  if (count(status.failed) > 0) return line("Failed", BROKEN, readyText);
-  if (count(status.active) > 0) return line("Active", IN_FLIGHT, readyText);
-  return line("Complete", WELL, readyText);
+  return { ...jobStatus(count(status.failed), count(status.active)), readyText };
 }
 
 /**
@@ -207,9 +229,13 @@ function jobStatus(object: K8sObject): ResourceStatusLine {
  * unhealthy state of its own (a CronJob deliberately has no `flagged` rule:
  * the health lives in the Jobs it spawns), and no ready count.
  */
-function cronJobStatus(object: K8sObject): ResourceStatusLine {
-  const suspended = asRecord(object.spec).suspend === true;
-  return suspended ? line("Suspended", AT_REST, null) : line("Active", WELL, null);
+export function cronJobStatus(suspended: boolean): StatusVerdict {
+  return suspended ? verdict("Suspended", AT_REST) : verdict("Active", WELL);
+}
+
+/** {@link cronJobStatus} off a fetched CronJob's own `spec.suspend`. */
+function cronJobStatusLine(object: K8sObject): ResourceStatusLine {
+  return { ...cronJobStatus(asRecord(object.spec).suspend === true), readyText: null };
 }
 
 /**
@@ -222,17 +248,31 @@ function cronJobStatus(object: K8sObject): ResourceStatusLine {
  * new pods is a thing the reader wants marked. A node that is also NotReady
  * keeps the worse of the two verdicts.
  */
-function nodeStatus(object: K8sObject): ResourceStatusLine {
-  const conditions = asArray(asRecord(object.status).conditions).map(asRecord);
-  const ready = conditions.find((c) => str(c.type) === "Ready");
-  const word = ready === undefined ? "Unknown" : str(ready.status) === "True" ? "Ready" : "NotReady";
-  const readiness = phaseVerdict(word);
-  if (asRecord(object.spec).unschedulable !== true) return line(word, readiness, null);
+export function nodeStatus(readiness: string, unschedulable: boolean): StatusVerdict {
+  const word = readiness || "Unknown";
+  const verdictForWord = phaseVerdict(word);
+  if (!unschedulable) return verdict(word, verdictForWord);
   // Compared on the tone, not on the constant's identity: everything else in
   // this file is safe by construction, and an identity check would be safe
   // only by coincidence — a `phaseVerdict` that ever returned a fresh
   // structurally-equal object would break this line silently.
-  return line(`${word},SchedulingDisabled`, readiness.health === "danger" ? BROKEN : UNSETTLED, null);
+  return verdict(
+    `${word},SchedulingDisabled`,
+    verdictForWord.health === "danger" ? BROKEN : UNSETTLED,
+  );
+}
+
+/**
+ * {@link nodeStatus} off a fetched Node: the readiness word the backend's
+ * `NodeSummary.status` carries, derived here from the `Ready` condition
+ * instead — True is "Ready", any other value "NotReady", no such condition at
+ * all "Unknown".
+ */
+function nodeStatusLine(object: K8sObject): ResourceStatusLine {
+  const conditions = asArray(asRecord(object.status).conditions).map(asRecord);
+  const ready = conditions.find((c) => str(c.type) === "Ready");
+  const word = ready === undefined ? "Unknown" : str(ready.status) === "True" ? "Ready" : "NotReady";
+  return { ...nodeStatus(word, asRecord(object.spec).unschedulable === true), readyText: null };
 }
 
 /**
@@ -256,15 +296,15 @@ export function resourceStatusLine(kind: string, object: K8sObject): ResourceSta
     case "Deployment":
     case "StatefulSet":
     case "ReplicaSet":
-      return replicaStatus(object);
+      return replicaStatusLine(kind, object);
     case "DaemonSet":
-      return daemonSetStatus(object);
+      return daemonSetStatusLine(object);
     case "Job":
-      return jobStatus(object);
+      return jobStatusLine(object);
     case "CronJob":
-      return cronJobStatus(object);
+      return cronJobStatusLine(object);
     case "Node":
-      return nodeStatus(object);
+      return nodeStatusLine(object);
     default:
       return null;
   }

@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import type { ReactElement } from "react";
+import { render } from "@testing-library/react";
+import { cronJobStatus, jobStatus, scaledStatus } from "@srelens/core";
 import {
   podColumns,
   deploymentColumns,
@@ -28,6 +31,12 @@ import {
   statefulSetFlagged,
   daemonSetFlagged,
   jobFlagged,
+  nodeFlagged,
+  cronJobVerdict,
+  daemonSetVerdict,
+  deploymentVerdict,
+  jobVerdict,
+  statefulSetVerdict,
   type PodRow,
 } from "./columns";
 import { customColumns } from "./custom";
@@ -265,6 +274,57 @@ describe("flagged rows — the design's unhealthy dot, per kind", () => {
     expect(jobFlagged(base)).toBe(false);
     expect(jobFlagged({ ...base, failed: 1 })).toBe(true);
     expect(jobFlagged({ ...base, active: 1 })).toBe(false);
+  });
+
+  // The row chip's question comes from this boolean and the detail footer's
+  // from `resourceStatusLine`; a Node had no `flagged` at all, so a NotReady
+  // node asked "what is it using?" from its row and "why is it unhealthy?"
+  // from its own pane. Both now read core's `nodeStatus`.
+  it("flags a Node that is NotReady or cordoned, and neither when it is healthy and schedulable", () => {
+    const base = { name: "n1", roles: "worker", version: "1.30", age: "9d", taints: 0 };
+    expect(nodeFlagged({ ...base, status: "Ready", unschedulable: false })).toBe(false);
+    expect(nodeFlagged({ ...base, status: "NotReady", unschedulable: false })).toBe(true);
+    expect(nodeFlagged({ ...base, status: "Ready", unschedulable: true })).toBe(true);
+    expect(nodeFlagged({ ...base, status: "Unknown", unschedulable: false })).toBe(true);
+  });
+});
+
+/**
+ * The pill a row draws and the word its own detail header draws are one
+ * verdict, not two that agree. Asserted per kind against core directly, so a
+ * second table of labels and tones cannot be reintroduced here without a
+ * failure. (#331)
+ */
+describe("a row's status pill is core's verdict, not a local table", () => {
+  it("reads Deployment, StatefulSet and DaemonSet through scaledStatus, zero word included", () => {
+    expect(deploymentVerdict({ name: "d", namespace: "ns", ready: "1/3", upToDate: 1, available: 1, age: "1d" }))
+      .toEqual(scaledStatus("Deployment", 1, 3));
+    expect(deploymentVerdict({ name: "d", namespace: "ns", ready: "0/0", upToDate: 0, available: 0, age: "1d" }).status)
+      .toBe("Scaled down");
+    expect(statefulSetVerdict({ name: "s", namespace: "ns", ready: "1/2", updated: 1, service: "", age: "1d" }))
+      .toEqual(scaledStatus("StatefulSet", 1, 2));
+    const ds = { name: "n", namespace: "ns", desired: 0, current: 0, ready: 0, upToDate: 0, available: 0, age: "1d" };
+    expect(daemonSetVerdict(ds)).toEqual(scaledStatus("DaemonSet", 0, 0));
+    // The zero word is the kind's own: a DaemonSet matching no node is not
+    // "Scaled down".
+    expect(daemonSetVerdict(ds).status).toBe("Not scheduled");
+  });
+
+  it("reads Job and CronJob through their own core verdicts", () => {
+    const job = { name: "j", namespace: "ns", completions: "1/1", active: 0, failed: 0, duration: "1m", owner: "", age: "1d" };
+    expect(jobVerdict({ ...job, failed: 2, active: 1 })).toEqual(jobStatus(2, 1));
+    expect(jobVerdict({ ...job, active: 1 })).toEqual(jobStatus(0, 1));
+    const cron = { name: "c", namespace: "ns", schedule: "* * * * *", active: 0, lastSchedule: "", age: "1d" };
+    expect(cronJobVerdict({ ...cron, suspended: true })).toEqual(cronJobStatus(true));
+    expect(cronJobVerdict({ ...cron, suspended: false })).toEqual(cronJobStatus(false));
+  });
+
+  it("draws the pill from that verdict rather than a literal pair", () => {
+    const statusColumn = jobColumns.find((c) => c.key === "status")!;
+    const job = { name: "j", namespace: "ns", completions: "0/1", active: 0, failed: 1, duration: "1m", owner: "", age: "1d" };
+    const rendered = render(statusColumn.render!(job) as ReactElement);
+    expect(rendered.container.querySelector(".status")?.textContent).toBe(jobStatus(1, 0).status);
+    expect(rendered.container.querySelector(".status")?.getAttribute("data-kind")).toBe(jobStatus(1, 0).health);
   });
 });
 
