@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { Condition } from "@srelens/core";
-import { ConditionsSection } from "./ConditionsSection";
+import { AnnotationLines, ConditionsSection, partitionAnnotations } from "./ConditionsSection";
 
 const DEPLOYMENT_CONDITIONS: Condition[] = [
   { type: "Available", status: "False", reason: "MinimumReplicasUnavailable" },
@@ -57,16 +57,20 @@ describe("ConditionsSection", () => {
     expect(tone(container, "Progressing")).toBe("");
   });
 
-  it("takes every tone from core's one heuristic, including where that heuristic is wrong", () => {
-    // `ReplicaFailure: False` is a Deployment's healthy state, and the design
-    // frame draws it ok-toned with an uncoloured name. core's `conditionKind`
-    // matches /Failed/ but not /Failure/, so it reads the row as danger and
-    // this section colours it. Pinned so the divergence is visible rather
-    // than silent: the fix belongs in `conditionKind`, where the list column
-    // and every other reader of a condition's tone would get it too, not in a
-    // second heuristic kept here.
+  it("leaves a healthy ReplicaFailure plain, the way the design frame draws it", () => {
+    // `ReplicaFailure: False` is a Deployment's healthy state. core's
+    // `conditionKind` used to match /Failed/ but not /Failure/ and read the
+    // row as danger, so this section coloured a healthy condition red; the
+    // fix landed in `conditionKind`, where the list column and every other
+    // reader of a condition's tone gets it too, rather than in a second
+    // heuristic here. Kept as the regression guard for that.
     const { container } = render(<ConditionsSection conditions={DEPLOYMENT_CONDITIONS} />);
-    expect(tone(container, "ReplicaFailure")).toBe("var(--sev)");
+    expect(tone(container, "ReplicaFailure")).toBe("");
+    // Frame A's row entire, now that it is reachable: a red `Available` over
+    // a plain `Progressing` over a plain `ReplicaFailure`, each beside its
+    // own toned dot.
+    const kinds = [...container.querySelectorAll(".status")].map((el) => el.getAttribute("data-kind"));
+    expect(kinds).toEqual(["danger", "success", "success"]);
   });
 
   it("says the state in words, never in colour alone", () => {
@@ -101,5 +105,59 @@ describe("ConditionsSection", () => {
     expect(screen.getByText("Initialized")).toBeDefined();
     expect(screen.getByText("Ready")).toBeDefined();
     expect(screen.getAllByText("True · —")).toHaveLength(2);
+  });
+});
+
+describe("AnnotationLines", () => {
+  const APPLIED = "kubectl.kubernetes.io/last-applied-configuration";
+  const MANIFEST = `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"checkout-api"},"spec":{"replicas":12}}`;
+
+  it("prints every annotation as a full-width key=value line", () => {
+    render(<AnnotationLines annotations={{ "checksum/config": "8f41c2a9", "srelens.io/last-applied-by": "dana@acme.io" }} />);
+    expect(screen.getByText("checksum/config=")).toBeDefined();
+    expect(screen.getByText("8f41c2a9")).toBeDefined();
+    expect(screen.getByText("dana@acme.io")).toBeDefined();
+  });
+
+  it("wraps long values instead of truncating them, since nothing else can read them now", () => {
+    // `PairList` no longer writes the value into a `title`, so a truncated
+    // row is a value nobody can read at all.
+    const { container } = render(<AnnotationLines annotations={{ note: "a".repeat(400) }} />);
+    expect(container.querySelector("li.truncate")).toBeNull();
+    expect(container.querySelector(".v.break-all")).not.toBeNull();
+  });
+
+  it("withholds the applied-manifest annotation and says where to read it", () => {
+    render(<AnnotationLines annotations={{ [APPLIED]: MANIFEST, "checksum/config": "8f41c2a9" }} />);
+    expect(screen.queryByText(MANIFEST)).toBeNull();
+    expect(screen.queryByText(`${APPLIED}=`)).toBeNull();
+    const note = screen.getByText(new RegExp(APPLIED));
+    expect(note.textContent).toMatch(/YAML/);
+    // The other annotations are untouched.
+    expect(screen.getByText("8f41c2a9")).toBeDefined();
+  });
+
+  it("keeps the withheld value out of the document entirely, not merely out of sight", () => {
+    const { container } = render(<AnnotationLines annotations={{ [APPLIED]: MANIFEST }} />);
+    expect(container.innerHTML).not.toContain("replicas");
+    expect(container.querySelector("[title]")).toBeNull();
+  });
+
+  it("says nothing about withholding when there is nothing to withhold", () => {
+    render(<AnnotationLines annotations={{ "checksum/config": "8f41c2a9" }} />);
+    expect(screen.queryByText(/not printed/)).toBeNull();
+  });
+
+  it("renders nothing at all for an object with no annotations", () => {
+    const { container } = render(<AnnotationLines annotations={{}} />);
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("names what it withheld, so a caller can render its own note", () => {
+    expect(partitionAnnotations({ [APPLIED]: MANIFEST, app: "web" })).toEqual({
+      shown: [["app", "web"]],
+      withheld: [APPLIED],
+    });
+    expect(partitionAnnotations({ app: "web" })).toEqual({ shown: [["app", "web"]], withheld: [] });
   });
 });
