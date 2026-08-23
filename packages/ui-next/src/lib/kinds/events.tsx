@@ -52,6 +52,35 @@ export function eventNamespace(row: EventRow): string {
   return row.namespace;
 }
 
+/** What an event is about: the object named in `EventSummary.object`. */
+export interface InvolvedObject {
+  /** The Kubernetes kind, as the API server spells it — `Pod`, not `pod`. */
+  kind: string;
+  /** The object's own name, which the table never lowercases. */
+  name: string;
+}
+
+/**
+ * The object an event is a report about, split out of the `<Kind>/<name>` the
+ * backend formats it as.
+ *
+ * `row.name` is the EVENT's key, not this — an event about `api-7` is itself
+ * called something like `billing/api-7.17a`, and opening that would open
+ * nothing. What a reader clicking a row wants is the pod.
+ *
+ * Exported and kept here beside {@link eventNamespace} for the same reason
+ * that one is: the screen's row click, the Object column and (next) the
+ * by-reason rail all read one value out of one string, and three splittings of
+ * it are three chances to split it differently. A value with no kind in front
+ * of it yields an empty kind rather than guessing one — there is no detail
+ * route to be had from a name alone, and the caller is the one that can say so.
+ */
+export function involvedObject(row: EventRow): InvolvedObject {
+  const cut = row.object.indexOf(SEPARATOR);
+  if (cut === -1) return { kind: "", name: row.object };
+  return { kind: row.object.slice(0, cut), name: row.object.slice(cut + SEPARATOR.length) };
+}
+
 /**
  * `Pod/web-1` as the design writes it: `pod/web-1`.
  *
@@ -59,10 +88,9 @@ export function eventNamespace(row: EventRow): string {
  * lowercasing one would render an object that cannot be looked up by what the
  * row shows. A value with no kind in front of it is left exactly as it is.
  */
-function objectPath(object: string): string {
-  const cut = object.indexOf(SEPARATOR);
-  if (cut === -1) return object;
-  return `${object.slice(0, cut).toLocaleLowerCase()}${object.slice(cut)}`;
+function objectPath(row: EventRow): string {
+  const { kind, name } = involvedObject(row);
+  return kind ? `${kind.toLocaleLowerCase()}${SEPARATOR}${name}` : name;
 }
 
 /**
@@ -95,11 +123,11 @@ export const eventColumns: Column<EventRow>[] = [
     // design gives only Message a title, but it truncates this one too, and a
     // truncated object with no way to read the rest is a cell you cannot use.
     render: (e) => (
-      <span className="path block truncate" style={{ maxWidth: OBJECT_MAX_WIDTH }} title={objectPath(e.object)}>
-        {objectPath(e.object)}
+      <span className="path block truncate" style={{ maxWidth: OBJECT_MAX_WIDTH }} title={objectPath(e)}>
+        {objectPath(e)}
       </span>
     ),
-    getValue: (e) => objectPath(e.object),
+    getValue: objectPath,
   },
   {
     key: "namespace",
