@@ -19,10 +19,10 @@ import {
 } from "@srelens/ui-kit";
 import { CUSTOM_RESOURCE_ACTIONS } from "../../lib/kinds/custom";
 import { formatCpu, formatMemory } from "../../lib/kinds/columns";
-import { useLoad, useDetailPanes } from "./ResourceDetail";
+import { useLoad, useDetailPanes } from "./ResourceDetailView";
 import { DetailActions } from "./DetailActions";
 
-export interface ResourceTabProps {
+export interface ResourceTabViewProps {
   context: string;
   /** The Kubernetes kind, as the route carries it — not the list's slug. */
   kind: string;
@@ -141,7 +141,7 @@ function metricTiles(
  * Each needs something that does not exist yet, and a tab named after an empty
  * pane is worse than an absent one.
  */
-export function ResourceTab({ context, kind, namespace, name }: ResourceTabProps) {
+export function ResourceTabView({ context, kind, namespace, name }: ResourceTabViewProps) {
   const { object, status, error, descriptor, statusLine, tabs, active, selectTab, pane } =
     useDetailPanes({ context, kind, namespace, name, host: "tab" });
 

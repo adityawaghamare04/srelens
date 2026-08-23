@@ -36,7 +36,7 @@ vi.mock("../../lib/kinds/descriptors", () => ({ descriptorFor }));
 
 import { ConsoleProvider } from "../../console";
 import { loadSectionFolds, setSectionOpen } from "../../lib/sectionFolds";
-import { ResourceTab } from "./ResourceTab";
+import { ResourceTabView } from "./ResourceTabView";
 
 function Wrapper({ children }: { children: ReactNode }) {
   return <ConsoleProvider>{children}</ConsoleProvider>;
@@ -122,7 +122,7 @@ const tabNames = () => screen.getAllByRole("tab").map((t) => t.textContent);
 
 async function openPod(props: Partial<{ kind: string; namespace: string | null; name: string }> = {}) {
   const view = render_(
-    <ResourceTab
+    <ResourceTabView
       context="prod-eu"
       kind={props.kind ?? "Pod"}
       namespace={props.namespace === undefined ? "checkout" : props.namespace}
@@ -142,7 +142,7 @@ async function expand(name: string) {
   await userEvent.click(screen.getByRole("button", { name }));
 }
 
-describe("ResourceTab — the full tab the design draws", () => {
+describe("ResourceTabView — the full tab the design draws", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getObject.mockResolvedValue({ object: POD });
@@ -337,7 +337,7 @@ describe("ResourceTab — the full tab the design draws", () => {
       const view = await openPod();
       expect(getManifest).not.toHaveBeenCalled();
       await view.rerender(
-        <ResourceTab context="prod-eu" kind="Pod" namespace="checkout" name="cart-session-store-1" />,
+        <ResourceTabView context="prod-eu" kind="Pod" namespace="checkout" name="cart-session-store-1" />,
       );
       expect(getManifest).not.toHaveBeenCalled();
     });

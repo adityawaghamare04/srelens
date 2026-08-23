@@ -133,7 +133,12 @@ export function StaleSelectionAlert({
   );
 }
 
-export interface ResourceTabView {
+/**
+ * One resource LIST tab's view state — its sort, its filter text and the
+ * column that filter names. Nothing to do with `ResourceTabView`, the screen
+ * that fills a tab with one resource; this is the list's.
+ */
+export interface ResourceListTabView {
   tabId: string;
   sort: TableSort | null;
   filter: string;
@@ -158,7 +163,7 @@ export interface ResourceTabView {
  * names can be hidden from another tab, in another workspace, while this one
  * is not even mounted, and both halves persist independently.
  */
-export function useResourceTabView<T>(route: string, columns: readonly Column<T>[]): ResourceTabView {
+export function useResourceTabView<T>(route: string, columns: readonly Column<T>[]): ResourceListTabView {
   const { tabs } = useTabs();
   const tabId = tabs.find((tab) => tab.route === route)?.id ?? "";
   const view = useTabView(tabId);

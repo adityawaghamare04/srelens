@@ -45,7 +45,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 }));
 
 /**
- * `ResourceDetail` itself, unchanged — wrapped only to record the props each
+ * `ResourceDetailView` itself, unchanged — wrapped only to record the props each
  * host hands it. R-5 says the peek and the tab mount the same component with
  * the same props, and the only way to assert that structurally (rather than
  * by eyeballing two rendered trees) is to capture what each host passed.
@@ -63,12 +63,12 @@ const { detailProps, detailFrames, tabProps } = vi.hoisted(() => ({
   tabProps: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("./detail/ResourceDetail", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./detail/ResourceDetail")>();
+vi.mock("./detail/ResourceDetailView", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./detail/ResourceDetailView")>();
   const { createElement, useLayoutEffect } = await import("react");
   return {
     ...actual,
-    ResourceDetail: (props: Record<string, unknown>) => {
+    ResourceDetailView: (props: Record<string, unknown>) => {
       detailProps.push({ ...props });
       // The frame probe lives HERE, wrapped directly around the pane, because
       // this is the only component that re-renders when the peek's subject
@@ -86,19 +86,19 @@ vi.mock("./detail/ResourceDetail", async (importOriginal) => {
           body: pane?.querySelector(".pane-body")?.textContent ?? "",
         });
       });
-      return createElement(actual.ResourceDetail, props as never);
+      return createElement(actual.ResourceDetailView, props as never);
     },
   };
 });
 
-vi.mock("./detail/ResourceTab", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./detail/ResourceTab")>();
+vi.mock("./detail/ResourceTabView", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./detail/ResourceTabView")>();
   const { createElement } = await import("react");
   return {
     ...actual,
-    ResourceTab: (props: Record<string, unknown>) => {
+    ResourceTabView: (props: Record<string, unknown>) => {
       tabProps.push({ ...props });
-      return createElement(actual.ResourceTab, props as never);
+      return createElement(actual.ResourceTabView, props as never);
     },
   };
 });
@@ -278,7 +278,7 @@ function open(route: string) {
  * The detail, in whichever host is on screen — they are two screens now, not
  * one pane in two frames (R-5 is retired). `Inspector` is the only thing in
  * the app that renders `section.pane` (`Panel` renders `section.card`), and
- * `ResourceTab` marks its own root.
+ * `ResourceTabView` marks its own root.
  */
 const peekPane = () => document.querySelector("section.pane, [data-slot='resource-tab']");
 
@@ -297,7 +297,7 @@ const paneTabs = () => screen.queryAllByRole("tab").map((tab) => tab.textContent
  * Settles on the pane's READY frame, by name.
  *
  * Neither `paneName()` nor `paneBody()` will do on its own, and that cost a
- * flake. `ResourceDetail` renders its loading `Inspector` with `name` straight
+ * flake. `ResourceDetailView` renders its loading `Inspector` with `name` straight
  * from props, and that frame's own `LoadingState` reads "Loading Pod
  * default/web-1" — so the heading AND the body already say "web-1" before
  * `getObject` has answered. What does not exist until it has is the tab strip,
@@ -333,7 +333,7 @@ const row = (name: string) =>
 const peekGrip = () => screen.getByRole("separator", { name: "Resize the resource details" });
 const peekWidth = () => (peekGrip().parentElement as HTMLElement).style.width;
 
-/** The props the most recently rendered `ResourceDetail` was handed. */
+/** The props the most recently rendered `ResourceDetailView` was handed. */
 const lastDetailProps = () => ({ ...detailProps[detailProps.length - 1] });
 
 /**
@@ -1005,7 +1005,7 @@ describe("the detail pane's two hosts", () => {
 
     // The same pane instance, not a fresh one: remounting per row would throw
     // away the reader's selected tab on every click, and would paper over
-    // `ResourceDetail`'s own target gate rather than honour it.
+    // `ResourceDetailView`'s own target gate rather than honour it.
     expect(peekPane()).toBe(paneNode);
 
     // The probe has to have seen something, or the assertion below is over an

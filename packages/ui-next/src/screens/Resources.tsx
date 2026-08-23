@@ -34,8 +34,8 @@ import { describe, isBuiltInKind } from "../lib/routes";
 import { openTab } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
-import { ResourceDetail } from "./detail/ResourceDetail";
-import { ResourceTab } from "./detail/ResourceTab";
+import { ResourceDetailView } from "./detail/ResourceDetailView";
+import { ResourceTabView } from "./detail/ResourceTabView";
 import { ResourceBulk } from "./ResourceBulk";
 import { useRowMenu } from "./ResourceMenu";
 import {
@@ -408,7 +408,7 @@ function KindList({
           )}
         </div>
         {peek && (
-          // Deliberately NOT keyed on the subject: `ResourceDetail` gates its
+          // Deliberately NOT keyed on the subject: `ResourceDetailView` gates its
           // own panes on the target it is rendering for, and remounting per
           // row would throw away the reader's selected pane on every click —
           // the one thing that component's own comments say must survive a
@@ -438,7 +438,7 @@ function KindList({
               onResize={setPeekWidth}
               onCommit={savePeekWidth}
             />
-            <ResourceDetail
+            <ResourceDetailView
               context={name}
               kind={descriptor.k8sKind}
               namespace={peek.namespace}
@@ -465,7 +465,7 @@ function KindList({
 /**
  * The resource detail route's screen — the peek's other host.
  *
- * One tab, one resource, filled edge to edge by `ResourceTab`: the design's
+ * One tab, one resource, filled edge to edge by `ResourceTabView`: the design's
  * own full-tab screen, which is NOT the peek at a wider width. Spec rule R-5
  * said it was, and the user's mock of this tab retired it — a breadcrumb
  * header with the actions on the same line, a metric strip, a three-column
@@ -479,7 +479,7 @@ function KindList({
  * `customDescriptorFor` mints a CRD's route from `crd.kind` too — so there is
  * nothing to look up and nothing to keep in step with the list.
  *
- * No `Screen` wrapper: `ResourceTab` already heads the page with the
+ * No `Screen` wrapper: `ResourceTabView` already heads the page with the
  * resource's name and its breadcrumb, and the window's tab strip titles the
  * tab with the same name (`describe`). A toolbar above it would say
  * everything twice and cost the page a strip's worth of height.
@@ -512,7 +512,7 @@ export function ResourceDetailScreen({ route }: { route: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ResourceTab
+      <ResourceTabView
         context={context.name}
         kind={parts.kind}
         namespace={parts.namespace}

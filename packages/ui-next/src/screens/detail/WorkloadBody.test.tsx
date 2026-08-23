@@ -28,7 +28,7 @@ import { GenericBody } from "./GenericBody";
 import { WorkloadDetailsBody as Body } from "./WorkloadBody";
 
 /**
- * The body under test, with the ROUTE's kind supplied the way `ResourceDetail`
+ * The body under test, with the ROUTE's kind supplied the way `ResourceDetailView`
  * supplies it. Defaulted from the fixture's own `kind` so the cases below read
  * as they did — that is plumbing for this file, not the `str(object.kind)`
  * re-derivation the body itself carried until the whole-branch review. One
@@ -396,7 +396,7 @@ describe("WorkloadDetailsBody", () => {
 
     // Labels and Annotations are no longer this body's — the host places them,
     // so the peek can stack them and the full tab can read them side by side.
-    // Pinned on the pane instead: `ResourceDetail.test`'s "Labels and
+    // Pinned on the pane instead: `ResourceDetailView.test`'s "Labels and
     // Annotations, which the host places".
     it("renders neither Labels nor Annotations, leaving both to the host", () => {
       render(<WorkloadDetailsBody object={CHECKOUT_API} context="ctx" />);

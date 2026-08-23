@@ -326,7 +326,7 @@ describe("PodDetailsBody", () => {
 
   /**
    * Labels and Annotations are no longer this body's, and the pane they are
-   * drawn on is where they are pinned now — `ResourceDetail.test`'s "Labels
+   * drawn on is where they are pinned now — `ResourceDetailView.test`'s "Labels
    * and Annotations, which the host places". They moved because the two hosts
    * lay them out differently (the peek stacks them, the full tab reads them
    * side by side) and a body that rendered its own could only ever produce

@@ -53,7 +53,7 @@ import { WorkloadDetailsBody } from "./WorkloadBody";
  * cannot pass one without the other, and `Resources.test`'s prop-by-prop
  * comparison of the two hosts still has exactly one prop to except.
  */
-export interface ResourceDetailPeek {
+export interface ResourceDetailViewPeek {
   /** Dismiss the peek. Also what its Escape key reaches. */
   onClose: () => void;
   /**
@@ -65,7 +65,7 @@ export interface ResourceDetailPeek {
   onOpenTab: () => void;
 }
 
-export interface ResourceDetailProps {
+export interface ResourceDetailViewProps {
   context: string;
   /** The Kubernetes kind ("Pod", "Deployment", ...) — the same value
    *  `detailRoute` and `useObject` take, not the list screen's slug. */
@@ -78,9 +78,9 @@ export interface ResourceDetailProps {
    * the two hosts apart: the peek and the tab are the same pane in two hosts
    * (R-5), and everything that varies between them is inside this object.
    * That is why the design's "Open tab" button did not arrive as a second
-   * top-level callback — see {@link ResourceDetailPeek}.
+   * top-level callback — see {@link ResourceDetailViewPeek}.
    */
-  peek?: ResourceDetailPeek;
+  peek?: ResourceDetailViewPeek;
 }
 
 /**
@@ -243,7 +243,7 @@ interface LoadState<T> {
  *
  * The returned value is GATED on the target the held data was fetched for
  * matching the `target` passed in THIS render — not merely reset by the
- * effect below, which only runs after commit and paint. `ResourceDetail`'s
+ * effect below, which only runs after commit and paint. `ResourceDetailView`'s
  * own subject-change reset (`openedPanes`) is safe because it happens
  * synchronously during render; this hook's settled data lives in its own
  * `useState`, and when the pane stays mounted across a subject change
@@ -625,7 +625,7 @@ export function useDetailPanes({
  * the same component with the same props, and that was true of the pane the
  * first mock drew; the user's second mock draws the tab as a different screen
  * — a breadcrumb header, actions in the header row, a metric strip, a
- * three-column fact grid — and retired the rule. `ResourceTab` is that screen.
+ * three-column fact grid — and retired the rule. `ResourceTabView` is that screen.
  *
  * What the two still share is everything that is not a look, and it is shared
  * through {@link useDetailPanes} rather than by being written twice: one read
@@ -633,7 +633,7 @@ export function useDetailPanes({
  * per-kind bodies, one set of actions. So a fact can be laid out differently
  * in the two hosts and cannot be derived differently.
  */
-export function ResourceDetail({ context, kind, namespace, name, peek }: ResourceDetailProps) {
+export function ResourceDetailView({ context, kind, namespace, name, peek }: ResourceDetailViewProps) {
   const { object, status, error, descriptor, statusLine, tabs, active, selectTab, pane } =
     useDetailPanes({ context, kind, namespace, name, host: "peek" });
 

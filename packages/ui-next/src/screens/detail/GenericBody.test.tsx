@@ -33,7 +33,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 import userEvent from "@testing-library/user-event";
 import { Section } from "@srelens/ui-kit";
 import { GenericBody, SELF_DESCRIBING_KINDS } from "./GenericBody";
-import { DETAILS_BODY } from "./ResourceDetail";
+import { DETAILS_BODY } from "./ResourceDetailView";
 
 function object(
   kind: string,
@@ -100,7 +100,7 @@ describe("GenericBody", () => {
   });
 
   describe("a kind with no specific body", () => {
-    // Lease has no `DETAILS_BODY` entry in `ResourceDetail` and is not one of
+    // Lease has no `DETAILS_BODY` entry in `ResourceDetailView` and is not one of
     // `SELF_DESCRIBING_KINDS` — exactly the ~23-kind case this task exists
     // to fix: no `children` at all, the wrapper alone must be a complete,
     // correct detail.
@@ -236,7 +236,7 @@ describe("GenericBody", () => {
 
   /**
    * Labels, Annotations and the Secret annotation gate all moved off this
-   * wrapper and onto the pane that draws it — see `ResourceDetail.test`'s
+   * wrapper and onto the pane that draws it — see `ResourceDetailView.test`'s
    * "Labels and Annotations, which the host places", where every one of the
    * properties that used to be asserted here is asserted through the real
    * render path instead.

@@ -295,7 +295,7 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
  * all; the host places them once, which is what retired their half of this
  * guard.
  *
- * `kind` is the route's, handed down by `ResourceDetail` — not `object.kind`,
+ * `kind` is the route's, handed down by `ResourceDetailView` — not `object.kind`,
  * which this read until the whole-branch review. The API server happens to
  * return `kind` on a single-object GET, so the two agreed; but the pane is
  * dispatched on the route's kind and a body that re-derives it is a second

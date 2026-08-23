@@ -98,7 +98,7 @@ function IdentitySection({ object }: { object: K8sObject }) {
  * appearing twice; placing them once, above, retires that guard along with
  * the class of bug it was watching for. (#331)
  *
- * `ResourceDetail` wraps every kind's Details pane in this component; for the
+ * `ResourceDetailView` wraps every kind's Details pane in this component; for the
  * four `SELF_DESCRIBING_KINDS` it passes through `children` untouched, since
  * those kinds' own bodies already show the facts this wrapper would otherwise
  * duplicate. Adding a kind to `DETAILS_BODY` nests it here automatically, and
