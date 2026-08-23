@@ -22,6 +22,7 @@ export { DrillCard, type DrillCardProps, type DrillStep } from "./DrillCard";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { ErrorState, type ErrorStateProps } from "./ErrorState";
 export { Eyebrow, type EyebrowProps } from "./Eyebrow";
+export { FactGrid, type FactGridProps } from "./FactGrid";
 export { Field, type FieldProps } from "./Field";
 export { FilterBar, type FilterBarProps } from "./FilterBar";
 export { IconButton, type IconButtonProps, type IconComponent } from "./IconButton";

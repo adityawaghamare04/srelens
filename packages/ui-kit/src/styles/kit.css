@@ -648,6 +648,35 @@
   }
   .kv-v.code { font-size: 0.6875rem; }
 
+  /* The same fact rows, read across a page instead of down a column.
+
+     `FactGrid` wraps a body it did not build — the peek and the full tab draw
+     one subject from one derivation — so every rule here is a descendant of
+     `.factgrid` and the peek's own rows are untouched by it existing. The
+     column count arrives as `--fact-cols` because a class per count is a class
+     the stylesheet has to enumerate. */
+  .factgrid { --fact-cols: 3; }
+  .factgrid .section {
+    display: grid;
+    grid-template-columns: repeat(var(--fact-cols), minmax(0, 1fr));
+    column-gap: 1.5rem;
+    align-content: start;
+  }
+  /* A heading, a table, a list of pods: everything that is not a pair takes
+     the whole width. A table in a third of a grid is not a narrower table. */
+  .factgrid .section > :not(.kv) { grid-column: 1 / -1; }
+  /* `Table` seats itself inside a `display: contents` wrapper, so the wrapper
+     never becomes a grid item and the rule above lands on nothing — it is the
+     TABLE that gets placed. Naming it directly is what keeps a Pod Volumes or
+     a related-pods table out of one column of three. */
+  .factgrid .section table { grid-column: 1 / -1; }
+  .factgrid .kv {
+    display: block;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent);
+  }
+  .factgrid .kv-k { margin-bottom: 0.1rem; }
+
   /* a quiet field label — sentence case, no tracking */
   .field-label {
     display: block;
@@ -905,6 +934,37 @@
      sideways at every ordinary width. Scoped by the attribute only `Tabs`
      emits, so `TabStrip` keeps the minimum it was written for. (#331) */
   .tabstrip[data-variant] .tab { min-width: 0; }
+
+  /* The third tab skin. The window chrome fills its active tab and the peek
+     raises a pill; a page does neither — the words sit on the surface and the
+     accent rules under the one you are reading. Added when the design asked
+     for it and not before, which is the only reason a design system is allowed
+     a third of anything. */
+  .utabs {
+    display: flex;
+    align-items: stretch;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--rule);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .utabs::-webkit-scrollbar { display: none; }
+  .utab {
+    position: relative;
+    padding: 0.4rem 0.55rem;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--ink-muted);
+    white-space: nowrap;
+  }
+  .utab:hover { color: var(--ink-soft); }
+  .utab[data-active="true"] {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+    font-weight: 600;
+  }
   .tab:hover { background: var(--field); }
   .tab[data-active="true"] {
     background: var(--surface);

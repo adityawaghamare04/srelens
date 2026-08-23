@@ -196,3 +196,36 @@ describe("the tab strip's minimum width", () => {
     expect(body).toContain("scrollbar-width: none");
   });
 });
+
+/**
+ * The third appearance, and the reason there is a third: the design's full
+ * resource tab draws its panes as words on the page surface with an accent
+ * underline beneath the active one — not the window chrome's filled strip and
+ * not the peek's rounded pill. The kit resisted a third skin on principle
+ * (see `SKIN`'s own note) right up until the design asked for one.
+ */
+describe("Tabs, underlined", () => {
+  it("wears the underline skin without changing the control", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <Tabs tabs={tabs} active="pods" onChange={onChange} variant="underline" label="Resource views" />,
+    );
+    expect(container.querySelector(".utabs")).toBeTruthy();
+    expect(screen.getAllByRole("tab").every((t) => t.classList.contains("utab"))).toBe(true);
+    // Same contract as the other two skins: roving tab stop, and a click emits.
+    expect(screen.getByRole("tab", { name: "Pods" }).getAttribute("tabindex")).toBe("0");
+    await userEvent.click(screen.getByRole("tab", { name: "Events" }));
+    expect(onChange).toHaveBeenCalledWith("events");
+  });
+
+  it("marks the active tab with the accent rule and nothing else", () => {
+    const css = readFileSync(join(__dirname, "styles/kit.css"), "utf8");
+    const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+    const rule = components.slice(components.indexOf('  .utab[data-active="true"] {'));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("border-bottom-color: var(--accent)");
+    // No filled background: that is the window chrome's tab, and a page's
+    // tabs sit on the page.
+    expect(body).not.toContain("background");
+  });
+});

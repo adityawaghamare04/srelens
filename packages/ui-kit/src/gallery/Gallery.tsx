@@ -22,6 +22,7 @@ import { DrillCard } from "../DrillCard";
 import { EmptyState } from "../EmptyState";
 import { ErrorState } from "../ErrorState";
 import { Eyebrow } from "../Eyebrow";
+import { FactGrid } from "../FactGrid";
 import { Field } from "../Field";
 import { FilterBar } from "../FilterBar";
 import { IconButton } from "../IconButton";
@@ -423,6 +424,37 @@ export function Gallery() {
       </section>
 
       <section>
+        <h2>FactGrid</h2>
+        {/* The SAME rows as the run above, on a page instead of in a column:
+            the wrapper restyles a body it did not build, so a subject drawn in
+            both places is derived once. The heading spans, the pairs do not. */}
+        <div className="card">
+          <FactGrid>
+            <Section>
+              <KV k="Status" v="Running" />
+              <KV k="Node" v="eu-w4-c3-standard-a3" mono />
+              <KV k="Pod IP" v="10.44.21.4" mono />
+              <KV k="QoS class" v="Burstable" />
+              <KV k="Service account" v="cart-session-store" mono />
+              <KV k="Containers ready" v="1 of 1" />
+            </Section>
+            <Section title="Conditions">
+              <KV k={<StatusPill status="Ready" kind="success" tinted />} v="True · —" />
+            </Section>
+          </FactGrid>
+        </div>
+        {/* Two columns, for a surface with less room than a full tab. */}
+        <div className="card">
+          <FactGrid columns={2}>
+            <Section>
+              <KV k="Replicas" v="9 ready · 12 desired" />
+              <KV k="Up to date" v="9 of 12" />
+            </Section>
+          </FactGrid>
+        </div>
+      </section>
+
+      <section>
         <h2>Tabs</h2>
         <Tabs
           tabs={[
@@ -450,6 +482,19 @@ export function Gallery() {
           active={tab}
           onChange={setTab}
           label="Resource views, segmented"
+        />
+        {/* The underline variant: what the resource FULL TAB draws — words on
+            the page surface, the active one ruled in the accent. */}
+        <Tabs
+          variant="underline"
+          tabs={[
+            { id: "pods", label: "Overview" },
+            { id: "services", label: "YAML" },
+            { id: "events", label: "Events" },
+          ]}
+          active={tab}
+          onChange={setTab}
+          label="Resource views, underlined"
         />
       </section>
 
