@@ -42,6 +42,20 @@ pub struct PodSummary {
     /// A pod with several containers joins them as `"img-a, img-b"`; a pod
     /// with no containers (or no status yet) is `""`.
     pub image: String,
+    /// Why a container is waiting, when one is — `CrashLoopBackOff`,
+    /// `ImagePullBackOff`, `CreateContainerConfigError`, `ContainerCreating`.
+    ///
+    /// `phase` alone cannot tell a healthy pod from a crash-looping one: a pod
+    /// whose only container is restarting in a back-off loop still reports
+    /// `Running`, so a list that reads nothing but the phase draws it green.
+    /// This carries the fact the phase omits; what it *means* — which reasons
+    /// are a failure and which are a pod on its way up — is decided once, in
+    /// `podStatus` in `@srelens/core`, not here and not twice.
+    ///
+    /// The first waiting reason across the pod's containers, or `""` when none
+    /// is waiting.
+    #[serde(rename = "waitingReason")]
+    pub waiting_reason: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -123,6 +137,16 @@ pub(crate) fn summarise_pod(pod: Pod) -> PodSummary {
         })
         .unwrap_or_default();
 
+    // Reported raw, in container order, exactly as `image` is: the first
+    // container with something to say. Init containers are excluded for the
+    // same reason they are excluded there.
+    let waiting_reason = statuses
+        .and_then(|cs| {
+            cs.iter()
+                .find_map(|c| c.state.as_ref()?.waiting.as_ref()?.reason.clone())
+        })
+        .unwrap_or_default();
+
     PodSummary {
         name,
         namespace,
@@ -132,6 +156,7 @@ pub(crate) fn summarise_pod(pod: Pod) -> PodSummary {
         node,
         age: crate::humanize_age(pod.metadata.creation_timestamp.as_ref()),
         image,
+        waiting_reason,
     }
 }
 
@@ -211,7 +236,10 @@ pub fn pods_for_selector_capability(cache: Arc<ClientCache>) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k8s_openapi::api::core::v1::{ContainerStatus, PodSpec, PodStatus};
+    use k8s_openapi::api::core::v1::{
+        ContainerState, ContainerStateRunning, ContainerStateWaiting, ContainerStatus, PodSpec,
+        PodStatus,
+    };
 
     #[test]
     fn capabilities_have_expected_ids() {
@@ -284,6 +312,107 @@ mod tests {
         assert_eq!(s.ready, "0/0");
         assert_eq!(s.restarts, 0);
         assert_eq!(s.image, "");
+    }
+
+    #[test]
+    fn reports_the_waiting_reason_a_running_phase_hides() {
+        // The defect this field exists for: a pod whose only container is in
+        // CrashLoopBackOff still reports phase "Running", so a row that reads
+        // nothing but the phase draws it green and healthy.
+        let pod = Pod {
+            metadata: kube::core::ObjectMeta {
+                name: Some("checkout-api".into()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Running".into()),
+                container_statuses: Some(vec![ContainerStatus {
+                    name: "api".into(),
+                    ready: false,
+                    restart_count: 7,
+                    state: Some(ContainerState {
+                        waiting: Some(ContainerStateWaiting {
+                            reason: Some("CrashLoopBackOff".into()),
+                            message: Some("back-off 5m0s restarting failed container".into()),
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let s = summarise_pod(pod);
+        assert_eq!(s.phase, "Running");
+        assert_eq!(s.waiting_reason, "CrashLoopBackOff");
+    }
+
+    #[test]
+    fn leaves_the_waiting_reason_empty_when_nothing_is_waiting() {
+        let pod = Pod {
+            metadata: kube::core::ObjectMeta {
+                name: Some("web-1".into()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Running".into()),
+                container_statuses: Some(vec![ContainerStatus {
+                    name: "web".into(),
+                    ready: true,
+                    restart_count: 0,
+                    state: Some(ContainerState {
+                        running: Some(ContainerStateRunning { started_at: None }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(summarise_pod(pod).waiting_reason, "");
+    }
+
+    #[test]
+    fn takes_the_first_waiting_container_of_several() {
+        // Container order, exactly as `image` joins in container order: one
+        // row shows one reason, and it is the first one the pod reports.
+        let waiting = |reason: &str| ContainerStatus {
+            name: reason.into(),
+            ready: false,
+            restart_count: 0,
+            state: Some(ContainerState {
+                waiting: Some(ContainerStateWaiting {
+                    reason: Some(reason.into()),
+                    message: None,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let pod = Pod {
+            metadata: kube::core::ObjectMeta {
+                name: Some("web-1".into()),
+                ..Default::default()
+            },
+            status: Some(PodStatus {
+                phase: Some("Pending".into()),
+                container_statuses: Some(vec![
+                    ContainerStatus {
+                        name: "sidecar".into(),
+                        ready: true,
+                        restart_count: 0,
+                        ..Default::default()
+                    },
+                    waiting("ImagePullBackOff"),
+                    waiting("CreateContainerConfigError"),
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(summarise_pod(pod).waiting_reason, "ImagePullBackOff");
     }
 
     #[test]
