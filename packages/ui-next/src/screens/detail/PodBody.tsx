@@ -11,6 +11,7 @@ import {
   latestRestartTime,
   mountText,
   orderPodConditions,
+  phaseKind,
   portText,
   probeChips,
   resourceText,
@@ -31,7 +32,6 @@ import {
   Table,
   type Column,
 } from "@srelens/ui-kit";
-import { phaseKind } from "../../lib/kinds/columns";
 
 /**
  * Kubernetes' own labels for a pod volume's source kind, keyed on which field

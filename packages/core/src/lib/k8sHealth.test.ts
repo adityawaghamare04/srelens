@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { conditionKind, containerStateText, orderPodConditions } from "./k8sHealth";
+import { conditionKind, containerStateText, orderPodConditions, phaseKind } from "./k8sHealth";
 
 describe("orderPodConditions", () => {
   it("orders lifecycle conditions PodScheduled → Initialized → ContainersReady → Ready", () => {
@@ -154,5 +154,28 @@ describe("containerStateText", () => {
   it("returns a dash with neutral kind when the state has none of running/waiting/terminated", () => {
     expect(containerStateText({ state: {} })).toEqual({ text: "—", kind: "neutral" });
     expect(containerStateText({})).toEqual({ text: "—", kind: "neutral" });
+  });
+});
+
+describe("phaseKind", () => {
+  it("calls the three settled-and-well phases success", () => {
+    expect(phaseKind("Running")).toBe("success");
+    expect(phaseKind("Succeeded")).toBe("success");
+    expect(phaseKind("Ready")).toBe("success");
+  });
+
+  it("calls a Pending phase a warning — on its way, not yet wrong", () => {
+    expect(phaseKind("Pending")).toBe("warning");
+  });
+
+  it("calls the failed, unknown and not-ready phases danger", () => {
+    expect(phaseKind("Failed")).toBe("danger");
+    expect(phaseKind("Unknown")).toBe("danger");
+    expect(phaseKind("NotReady")).toBe("danger");
+  });
+
+  it("leaves any word it does not recognise neutral rather than guessing a tone", () => {
+    expect(phaseKind("CrashLoopBackOff")).toBe("neutral");
+    expect(phaseKind("")).toBe("neutral");
   });
 });

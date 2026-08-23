@@ -5,6 +5,7 @@ import {
   asRecord,
   conditionKind,
   listReplicaSets,
+  phaseKind,
   podMetrics,
   podsForSelector,
   str,
@@ -18,7 +19,6 @@ import {
 } from "@srelens/core";
 import { EmptyState, KV, LoadingState, PairList, Panel, StatusPill, Table, type Column } from "@srelens/ui-kit";
 import { SELF_DESCRIBING_KINDS } from "./GenericBody";
-import { phaseKind } from "../../lib/kinds/columns";
 
 /** A formatted list, one item per line — matches `PodBody`'s own helper of
  *  the same shape, kept local since it's a small presentational detail, not

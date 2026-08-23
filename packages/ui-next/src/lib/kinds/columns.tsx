@@ -1,6 +1,7 @@
 import {
   ageSortValue,
   formatStorageSize,
+  phaseKind,
   type ClusterRoleBindingSummary,
   type ClusterRoleSummary,
   type ConfigMapSummary,
@@ -68,32 +69,7 @@ const metric = (value: number | undefined, format: (value: number) => string) =>
   value == null ? "—" : format(value);
 const metricSort = (value: number | undefined) => value ?? -1;
 
-/**
- * Classic's phase-to-tone mapping (`ResourceBrowser.tsx:135`), ported verbatim
- * onto the kit's `StatusKind` vocabulary — the names already match one-for-one.
- *
- * Exported rather than kept private: `Workloads.tsx` needs the same mapping
- * for a Pod's `phase` (its `Ready`/`NotReady` cases just never come up there,
- * since a Pod never reports either).
- */
-export function phaseKind(phase: string): StatusKind {
-  switch (phase) {
-    case "Running":
-    case "Succeeded":
-    case "Ready":
-      return "success";
-    case "Pending":
-      return "warning";
-    case "Failed":
-    case "Unknown":
-    case "NotReady":
-      return "danger";
-    default:
-      return "neutral";
-  }
-}
-
-/** The design's unhealthy dot for a pod: derived from `phaseKind` above, not
+/** The design's unhealthy dot for a pod: derived from core's `phaseKind`, not
  *  restated here — a phase `phaseKind` calls healthy (e.g. `Succeeded`, which
  *  renders a green pill) must never also earn a "needs attention" dot. The
  *  next phase added to the success set only needs editing in one place. */

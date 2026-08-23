@@ -12,6 +12,32 @@ import { asRecord, str } from "./k8sRaw";
 
 export type HealthKind = "neutral" | "success" | "warning" | "danger" | "info";
 
+/**
+ * Classic's phase-to-tone mapping (`ResourceBrowser.tsx:135`), on the
+ * `HealthKind` vocabulary above — the names already match one-for-one, so
+ * either design passes the result straight into its own pill.
+ *
+ * `Ready`/`NotReady` are here because a Node reports readiness where a Pod
+ * reports a phase, and both go through this one table; a Pod never reports
+ * either, and a Node never reports `Running`.
+ */
+export function phaseKind(phase: string): HealthKind {
+  switch (phase) {
+    case "Running":
+    case "Succeeded":
+    case "Ready":
+      return "success";
+    case "Pending":
+      return "warning";
+    case "Failed":
+    case "Unknown":
+    case "NotReady":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
 export interface Condition {
   type: string;
   status: string;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ageSortValue,
+  phaseKind,
   rowInSelection,
   watchNamespaceForSelection,
   type ClusterContext,
@@ -30,7 +31,7 @@ import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
 import { detailRoute } from "../lib/detailRoute";
-import { formatCpu, formatMemory, phaseKind, type PodRow } from "../lib/kinds/columns";
+import { formatCpu, formatMemory, type PodRow } from "../lib/kinds/columns";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { ListRow } from "../lib/kinds/types";

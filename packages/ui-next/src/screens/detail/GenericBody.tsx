@@ -5,6 +5,7 @@ import {
   asArray,
   asRecord,
   conditionKind,
+  phaseKind,
   plural,
   podMetrics,
   podsForSelector,
@@ -17,7 +18,6 @@ import {
   type PodSummary,
 } from "@srelens/core";
 import { Button, KV, LoadingState, PairList, Panel, StatusPill, Table, type Column } from "@srelens/ui-kit";
-import { phaseKind } from "../../lib/kinds/columns";
 
 /**
  * The four kinds classic's `ObjectDetail` special-cases with their own
