@@ -137,6 +137,33 @@ describe("SecretDetailsBody", () => {
       "-----BEGIN CERTIFICATE-----\nFAKE-NOT-A-REAL-CERTIFICATE\n-----END CERTIFICATE-----\n";
     const KEY = "-----BEGIN PRIVATE KEY-----\nFAKE-NOT-A-REAL-KEY\n-----END PRIVATE KEY-----\n";
 
+    // A real, parseable self-signed certificate generated only for tests — the
+    // same fixture core's k8sSecret.test.ts and classic's
+    // ResourceOverview.test.tsx use, so every test suite that parses a
+    // certificate agrees on what a real parse should produce. It resembles no
+    // real certificate: CN=example.test, SANs example.test / www.example.test,
+    // valid 2026-07-06 to 2036-07-03.
+    const PARSEABLE_CERT = `-----BEGIN CERTIFICATE-----
+MIIDOjCCAiKgAwIBAgIUJ5Pvy55tHmHDJGwzXMVWvbuxrNgwDQYJKoZIhvcNAQEL
+BQAwFzEVMBMGA1UEAwwMZXhhbXBsZS50ZXN0MB4XDTI2MDcwNjExMjk1NVoXDTM2
+MDcwMzExMjk1NVowFzEVMBMGA1UEAwwMZXhhbXBsZS50ZXN0MIIBIjANBgkqhkiG
+9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsxW6hu41Upb+m5zGfnZgkiOLniXXNhOc8oMh
+hVBp5W/F9iynzPFB4F3CN+eehJuiXXXuEQgPQQj9R+Wq+bPT+RO8wzpBjCPXhz5L
+vgGs44uqpPCboQuiWDXrfCYkTOlrwKHebCqTQ3aPRMaPi4bHsDwMviTp4a0DFU1V
+HFsdWps4R+7LmLIpaStTM5umMjH/EO2FgjlBhXQEFOS4RvvXjhWA5dfb0Kp5ER4R
+f1FvKBE3ZO5flnevQeLgr2vYObajX99455Q4/U012Idmeuex/d5eNUWEMzZkg9kQ
+uSM/0ZpnHDTU8QvPLxtC/cJU5zGJ334fziLefAIil4v4ToW0PwIDAQABo34wfDAd
+BgNVHQ4EFgQUlZtEgu9u/vSMZmJcMkdTqhVVbCIwHwYDVR0jBBgwFoAUlZtEgu9u
+/vSMZmJcMkdTqhVVbCIwDwYDVR0TAQH/BAUwAwEB/zApBgNVHREEIjAgggxleGFt
+cGxlLnRlc3SCEHd3dy5leGFtcGxlLnRlc3QwDQYJKoZIhvcNAQELBQADggEBAGk/
+zzphT6tn4+qQx9//fycdK1m685ymSDVjOvWydPih8G289BdCPfbW8eUk9rjjBUeg
+GY99BLpHoqosd3UXHNP2sYGggGY8n4AwRlQVf/jj0OzuVS6iKAC3VWXPmti9CRPg
+GVGZGEY1b5Iv0U+ZK0cbRzsSR7AA7NUXhSQH462CBZIkRRMsEqXRWhnPnJwza/2I
+buDGbLmV2hQQ7IybmoAi/QPUC9ZWk0LNWjFbZCkI/zn0wd1YXajmbLpRWGlN4u/7
+/cCHDz43rY6WxrMF5pbByig/ZNhmEY+nkHXp+fhDWY8euAUqOZxmD+4R3/iOCgab
+lUc3RsBva1V3RlPz+Jo=
+-----END CERTIFICATE-----`;
+
     it("shows the certificate count, private key format, and encoded sizes", async () => {
       render(
         <SecretDetailsBody
@@ -180,6 +207,64 @@ describe("SecretDetailsBody", () => {
       expect(screen.getAllByText("••••••••")).toHaveLength(2);
       expect(documentContains(CERT)).toBe(false);
       expect(documentContains(KEY)).toBe(false);
+    });
+
+    describe("certificate facts (parsed via core's certificateRows)", () => {
+      it("shows status, subject, issuer, serial, public key algorithm, validity, and SANs from the leaf certificate", async () => {
+        render(
+          <SecretDetailsBody
+            object={secret(
+              { "tls.crt": btoa(PARSEABLE_CERT), "tls.key": btoa(KEY) },
+              { type: "kubernetes.io/tls" },
+            )}
+            context="ctx"
+          />,
+        );
+        await waitFor(() => expect(getSecret).toHaveBeenCalled());
+        // Subject, Issuer (equal, self-signed) and the per-certificate
+        // table's Subject column all show "CN=example.test".
+        await waitFor(() => expect(screen.getAllByText("CN=example.test")).toHaveLength(3));
+        expect(screen.getByText("2793efcb9e6d1e61c3246c335cc556bdbbb1acd8")).toBeDefined();
+        expect(screen.getByText("RSASSA-PKCS1-v1_5 2048-bit")).toBeDefined();
+        expect(screen.getByText("example.test")).toBeDefined();
+        expect(screen.getByText("www.example.test")).toBeDefined();
+        // Both a "Certificate status" KV row and the per-certificate table's
+        // own Status column show "Valid" for this fixture's validity window.
+        expect(screen.getAllByText("Valid").length).toBeGreaterThanOrEqual(2);
+      });
+
+      it("renders the per-certificate table with role, subject, status, and size", async () => {
+        render(
+          <SecretDetailsBody
+            object={secret(
+              { "tls.crt": btoa(PARSEABLE_CERT), "tls.key": btoa(KEY) },
+              { type: "kubernetes.io/tls" },
+            )}
+            context="ctx"
+          />,
+        );
+        await waitFor(() => expect(getSecret).toHaveBeenCalled());
+        await waitFor(() => expect(screen.getByText("Leaf")).toBeDefined());
+        const table = screen.getByRole("table");
+        expect(table).toBeDefined();
+      });
+
+      it("falls back to an Invalid status and no serial/issuer/SANs when the certificate fails to parse, without exposing the private key", async () => {
+        render(
+          <SecretDetailsBody
+            object={secret({ "tls.crt": btoa(CERT), "tls.key": btoa(KEY) }, { type: "kubernetes.io/tls" })}
+            context="ctx"
+          />,
+        );
+        await waitFor(() => expect(getSecret).toHaveBeenCalled());
+        // The "Certificate status" KV row and the per-certificate table's
+        // Status column both show "Invalid".
+        await waitFor(() => expect(screen.getAllByText("Invalid")).toHaveLength(2));
+        // The "Subject" KV row and the table's Subject column both show it.
+        expect(screen.getAllByText("Unable to parse certificate")).toHaveLength(2);
+        expect(documentContains(KEY)).toBe(false);
+        expect(documentContains("FAKE-NOT-A-REAL-KEY")).toBe(false);
+      });
     });
   });
 

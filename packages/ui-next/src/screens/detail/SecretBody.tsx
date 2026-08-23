@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import {
+  absoluteTimestamp,
+  certificateRows,
   decodeBase64,
   decodedByteLength,
   dockerRegistries,
@@ -7,10 +9,11 @@ import {
   getSecret,
   plural,
   str,
+  type CertificateRow,
   type DockerRegistryRow,
   type K8sObject,
 } from "@srelens/core";
-import { Button, EmptyState, KV, Panel, Table, type Column } from "@srelens/ui-kit";
+import { Button, EmptyState, KV, Panel, Spinner, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
 
 /**
  * A private key's format, read straight off its PEM header — classic's
@@ -30,6 +33,41 @@ function privateKeyType(pem: string): string {
 function certificateCount(pem: string): number {
   return pem.match(/-----BEGIN CERTIFICATE-----/g)?.length ?? 0;
 }
+
+/** A plain, unlinked string list — the same small local component every other
+ *  detail body in this directory (PodBody, ServiceBody, ...) repeats for a
+ *  KV row whose value is a handful of short strings rather than prose. */
+function StringList({ items }: { items: string[] }) {
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {items.map((item, i) => (
+        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** classic's inline ternary for a certificate row's status pill, factored out
+ *  so both the "Certificate status" KV row and the per-certificate table's
+ *  Status column use the same mapping. */
+function certificateStatusKind(status: string): StatusKind {
+  if (status === "Valid") return "success";
+  if (status === "Expires soon") return "warning";
+  return "danger";
+}
+
+const CERTIFICATE_COLUMNS: Column<CertificateRow>[] = [
+  { key: "role", header: "Certificate", render: (row) => row.role },
+  { key: "subject", header: "Subject", render: (row) => <span className="font-mono">{row.subject}</span> },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => <StatusPill status={row.status} kind={certificateStatusKind(row.status)} />,
+  },
+  { key: "size", header: "Size", render: (row) => row.size },
+];
 
 /**
  * One Secret entry — key and value, the value masked until the reader
@@ -84,33 +122,65 @@ function SecretDataSection({ data }: { data: Record<string, string> }) {
 }
 
 /**
- * TLS material — classic's `TlsSecretBody`, MINUS every fact that comes from
- * actually parsing the certificate (`certificateRows`): Subject, Issuer,
- * Serial number, Certificate status, Public key algorithm, Valid from/until,
- * DNS/IP names, and the per-certificate table. Those all need
- * `X509Certificate` from `@peculiar/x509`, a dependency `apps/desktop` has
- * and `@srelens/core` does not (classic imports it dynamically to keep
- * certificate parsing out of its main bundle — see `k8sSecret.ts`'s doc
- * comment and ruling R-7). Whether to add that dependency to core, do
- * certificate parsing in `ui-next` instead, or go without the algorithm
- * detail is a dependency decision the task brief says to stop and report on
- * rather than settle here — see the task report. Everything that does NOT
- * need the certificate parsed — the certificate count (a regex over
- * `BEGIN CERTIFICATE` markers), the private key's format (`privateKeyType`,
- * itself just a PEM-header regex), and both materials' encoded size — is
- * ported below.
+ * TLS material — classic's `TlsSecretBody`, including every fact that comes
+ * from actually parsing the certificate: Certificate status, Subject,
+ * Issuer, Serial number, Public key, Valid from/until, DNS/IP names, and the
+ * per-certificate table. Those all need `X509Certificate` from
+ * `@peculiar/x509`; the R-7 ruling that kept that dependency (and this
+ * parsing) out of `@srelens/core` has been overruled, and `certificateRows`
+ * now lives in `k8sSecret.ts` — see its doc comment for how the bundling
+ * property R-7 protected survives the reversal (the parser is still loaded
+ * via a dynamic `import()`, not a static one, so it stays out of the main
+ * bundle for every consumer, ui-next included).
+ *
+ * None of these facts come from the private key, so none of them sit behind
+ * the reveal gate — same as classic. Only the raw `tls.crt`/`tls.key` bytes
+ * stay masked, via `SecretDataSection` below.
  */
 function TlsSection({ data }: { data: Record<string, string> }) {
   const certificate = decodeBase64(str(data["tls.crt"]));
   const privateKey = decodeBase64(str(data["tls.key"]));
   const count = certificateCount(certificate);
+  const [certificates, setCertificates] = useState<CertificateRow[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (count === 0) {
+      setCertificates([]);
+    } else {
+      certificateRows(certificate)
+        .then((rows) => {
+          if (active) setCertificates(rows);
+        })
+        .catch(() => {
+          if (active) setCertificates([]);
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [certificate, count]);
+  const leaf = certificates?.[0];
   return (
     <Panel title="TLS material">
       <KV k="Type" v="kubernetes.io/tls" />
       <KV k="Certificates" v={count > 0 ? plural(count, "certificate") : "Missing tls.crt"} />
       <KV k="Private key" v={privateKeyType(privateKey)} />
+      {leaf && (
+        <KV k="Certificate status" v={<StatusPill status={leaf.status} kind={certificateStatusKind(leaf.status)} />} />
+      )}
+      {leaf?.subject && <KV k="Subject" v={leaf.subject} />}
+      {leaf?.issuer && <KV k="Issuer" v={leaf.issuer} />}
+      {leaf?.serial && <KV k="Serial number" v={leaf.serial} mono />}
+      {leaf?.keyAlgorithm && <KV k="Public key" v={leaf.keyAlgorithm} />}
+      {leaf?.validFrom && <KV k="Valid from" v={absoluteTimestamp(leaf.validFrom)} />}
+      {leaf?.validUntil && <KV k="Valid until" v={absoluteTimestamp(leaf.validUntil)} />}
+      {leaf && leaf.sans.length > 0 && <KV k="DNS / IP names" v={<StringList items={leaf.sans} />} />}
       {data["tls.crt"] && <KV k="Certificate data" v={formatBytes(decodedByteLength(data["tls.crt"]))} />}
       {data["tls.key"] && <KV k="Private key data" v={formatBytes(decodedByteLength(data["tls.key"]))} />}
+      {certificates === null && count > 0 && <Spinner label="Reading certificates" />}
+      {certificates && certificates.length > 0 && (
+        <Table columns={CERTIFICATE_COLUMNS} data={certificates} getRowKey={(row) => row.key} />
+      )}
     </Panel>
   );
 }
