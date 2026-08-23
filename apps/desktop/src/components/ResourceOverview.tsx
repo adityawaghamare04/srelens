@@ -21,7 +21,7 @@ import {
   mountText,
   tolerationText,
 } from "@srelens/core";
-import { summarizeAffinity, updateStrategyText, relatedPodSelector } from "@srelens/core";
+import { summarizeAffinity, updateStrategy, relatedPodSelector } from "@srelens/core";
 import { parseQuantity, usagePercent, formatBytes, decodedByteLength } from "@srelens/core";
 import { useAccess, denyReason, reportActionError, type AccessCheck } from "@srelens/core/react";
 import { describeError } from "@srelens/core";
@@ -970,6 +970,27 @@ function WorkloadDetailView({
       )}
     </div>
   );
+}
+
+/**
+ * "RollingUpdate (partition 2)" / "RollingUpdate (max unavailable 1)" / "OnDelete".
+ *
+ * Classic's own form, and it stays here rather than in core. The NUMBERS come
+ * from core's `updateStrategy` — one reader of `spec.strategy` /
+ * `spec.updateStrategy` for every design — but the words around them are this
+ * design's. The new design draws the same facts as "RollingUpdate ·
+ * unavailable 1" off its mock; that is its decision to make, and classic is
+ * frozen. A shared function returning either sentence would put one design's
+ * typography in the other's screens, which is exactly what happened when this
+ * helper was moved to core wholesale.
+ */
+function updateStrategyText(strategy: Record<string, unknown>): string {
+  const { type, partition, maxUnavailable, maxSurge } = updateStrategy(strategy);
+  const parts: string[] = [];
+  if (partition != null) parts.push(`partition ${partition}`);
+  if (maxUnavailable != null) parts.push(`max unavailable ${maxUnavailable}`);
+  if (maxSurge != null) parts.push(`max surge ${maxSurge}`);
+  return parts.length ? `${type} (${parts.join(", ")})` : type;
 }
 
 function DaemonSetBody({ obj }: { obj: K8sObject }) {

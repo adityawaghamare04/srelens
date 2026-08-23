@@ -6,8 +6,8 @@ import type { K8sObject, PodSummary, PodMetric, ReplicaSetSummary } from "@srele
 // workload's selector, and a Deployment's "Deploy Revisions" section reads
 // its rolled-out ReplicaSets, via core's `podsForSelector`/`podMetrics`/
 // `listReplicaSets` — mocked here so a test controls what "the cluster
-// said" without one. `importOriginal` keeps every formatter
-// (`updateStrategyText`, `str`, `asRecord`, ...) intact.
+// said" without one. `importOriginal` keeps every reader
+// (`updateStrategy`, `str`, `asRecord`, ...) intact.
 const { podsForSelector, podMetrics, listReplicaSets } = vi.hoisted(() => ({
   podsForSelector: vi.fn(async (): Promise<{ pods?: PodSummary[]; error?: string }> => ({ pods: [] })),
   podMetrics: vi.fn(async (): Promise<{ metrics?: PodMetric[]; error?: string }> => ({ metrics: [] })),
@@ -139,9 +139,11 @@ describe("WorkloadDetailsBody", () => {
 
     it("shows a Deployment's whole strategy, surge and unavailable included", () => {
       render(<WorkloadDetailsBody object={CHECKOUT_API} context="ctx" />);
-      // core's `updateStrategyText`, which this file used to call on the
-      // StatefulSet branch only — so a Deployment showed the bare type, with
-      // the two numbers that decide how a rollout behaves dropped.
+      // This file's own `updateStrategyText`, over core's `updateStrategy`
+      // facts, which the Deployment branch used to skip — so a Deployment
+      // showed the bare type, with the two numbers that decide how a rollout
+      // behaves dropped. The form is this design's; classic words the same
+      // facts its own way, and neither reaches the other.
       expect(screen.getByText("RollingUpdate · surge 25% · unavailable 0")).toBeDefined();
       expect(screen.getByText("Strategy")).toBeDefined();
       expect(screen.queryByText("Strategy type")).toBeNull();
@@ -549,7 +551,7 @@ describe("WorkloadDetailsBody", () => {
       expect(screen.queryByText(/desired,/)).toBeNull();
     });
 
-    it("shows the update strategy via core's updateStrategyText", () => {
+    it("shows the update strategy in this design's form, off core's facts", () => {
       render(
         <WorkloadDetailsBody
           object={workload("DaemonSet", {

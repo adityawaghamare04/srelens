@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeAffinity, updateStrategyText, relatedPodSelector } from "./k8sWorkload";
+import { summarizeAffinity, updateStrategy, relatedPodSelector } from "./k8sWorkload";
 import type { K8sObject } from "./manifest";
 
 // Moved verbatim from apps/desktop/src/components/ResourceOverview.test.tsx
@@ -26,49 +26,58 @@ describe("summarizeAffinity", () => {
   });
 });
 
-// classic's ResourceOverview.test.tsx did not cover updateStrategyText; written
-// here against the body as moved (see k8sWorkload.ts), not against its name.
-describe("updateStrategyText", () => {
-  it("defaults to RollingUpdate with nothing after it when the strategy is empty", () => {
-    expect(updateStrategyText({})).toBe("RollingUpdate");
+// Facts, not a sentence: the two designs word these differently and each
+// formats at its own edge (classic's `updateStrategyText` in
+// `ResourceOverview.tsx`, the new design's in `WorkloadBody.tsx`). What is
+// shared, and tested here, is WHICH fields are read and how they are read.
+describe("updateStrategy", () => {
+  it("defaults the type to RollingUpdate, as the API server does", () => {
+    expect(updateStrategy({})).toEqual({
+      type: "RollingUpdate",
+      partition: undefined,
+      maxSurge: undefined,
+      maxUnavailable: undefined,
+    });
   });
 
   it("uses an explicit type when given, rather than always defaulting", () => {
-    expect(updateStrategyText({ type: "OnDelete" })).toBe("OnDelete");
+    expect(updateStrategy({ type: "OnDelete" }).type).toBe("OnDelete");
   });
 
-  it("reads the design mock's Deployment strategy verbatim: surge before unavailable", () => {
-    // Frame A draws `RollingUpdate · surge 25% · unavailable 0`. Where the
-    // mock and the build disagree on a value's form, the mock wins — so the
-    // separator is a middle dot rather than a parenthesised comma list, the
-    // labels drop their "max", and surge is named before unavailable.
-    expect(
-      updateStrategyText({ type: "RollingUpdate", rollingUpdate: { maxUnavailable: 0, maxSurge: "25%" } }),
-    ).toBe("RollingUpdate · surge 25% · unavailable 0");
-  });
-
-  it("appends a partition clause when rollingUpdate.partition is set", () => {
-    expect(updateStrategyText({ rollingUpdate: { partition: 2 } })).toBe("RollingUpdate · partition 2");
-  });
-
-  it("appends an unavailable clause when rollingUpdate.maxUnavailable is set", () => {
-    expect(updateStrategyText({ rollingUpdate: { maxUnavailable: 1 } })).toBe("RollingUpdate · unavailable 1");
-  });
-
-  it("appends a surge clause when rollingUpdate.maxSurge is set", () => {
-    expect(updateStrategyText({ rollingUpdate: { maxSurge: "25%" } })).toBe("RollingUpdate · surge 25%");
-  });
-
-  it("keeps an unavailable clause that is explicitly zero, which the mock shows", () => {
-    // `0` is a real setting — "take nothing down while rolling" — and dropping
-    // it as falsy would silently lose the strictest configuration there is.
-    expect(updateStrategyText({ rollingUpdate: { maxUnavailable: 0 } })).toBe("RollingUpdate · unavailable 0");
-  });
-
-  it("joins several clauses with the same middle dot, partition then surge then unavailable", () => {
-    expect(updateStrategyText({ rollingUpdate: { partition: 1, maxUnavailable: 1, maxSurge: 1 } })).toBe(
-      "RollingUpdate · partition 1 · surge 1 · unavailable 1",
+  it("reads partition, surge and unavailable out of rollingUpdate", () => {
+    expect(updateStrategy({ type: "RollingUpdate", rollingUpdate: { partition: 1, maxUnavailable: 1, maxSurge: 1 } })).toEqual(
+      { type: "RollingUpdate", partition: "1", maxSurge: "1", maxUnavailable: "1" },
     );
+  });
+
+  it("keeps every value as written, so a percentage survives", () => {
+    // A surge or an unavailable may legally be `"25%"`; parsing it into a
+    // number would have to invent a base to resolve it against.
+    expect(updateStrategy({ rollingUpdate: { maxSurge: "25%" } }).maxSurge).toBe("25%");
+    expect(updateStrategy({ rollingUpdate: { maxSurge: 2 } }).maxSurge).toBe("2");
+  });
+
+  it("keeps an explicit zero, which is the strictest setting there is", () => {
+    // `maxUnavailable: 0` means "take nothing down while rolling". A
+    // truthiness test would drop it and leave the row looking unset.
+    expect(updateStrategy({ rollingUpdate: { maxUnavailable: 0 } }).maxUnavailable).toBe("0");
+  });
+
+  it("reports an unset field as undefined rather than as an empty string", () => {
+    // The distinction each design's formatter turns into "print this clause
+    // or leave it out"; an empty string would print a labelled blank.
+    const out = updateStrategy({ rollingUpdate: { maxSurge: "25%" } });
+    expect(out.partition).toBeUndefined();
+    expect(out.maxUnavailable).toBeUndefined();
+  });
+
+  it("survives a strategy with no rollingUpdate block at all", () => {
+    expect(updateStrategy({ type: "OnDelete" })).toEqual({
+      type: "OnDelete",
+      partition: undefined,
+      maxSurge: undefined,
+      maxUnavailable: undefined,
+    });
   });
 });
 

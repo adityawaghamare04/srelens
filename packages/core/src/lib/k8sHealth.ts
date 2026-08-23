@@ -62,6 +62,23 @@ export interface Condition {
 const NEGATIVE_CONDITION = /Pressure|Unavailable|Fail|Dangling/i;
 
 /**
+ * A condition's tone from its type and status alone. The rule both designs
+ * share, and the one classic has drawn since before this module existed:
+ * `Unknown` is amber, and otherwise a positive type is green when `True`
+ * while a `NEGATIVE_CONDITION` type is green when `False`.
+ *
+ * Deliberately blind to `reason`. Reading one is a judgement about a
+ * particular controller's vocabulary, which the new design makes and classic
+ * does not — see `conditionKindWithReason` below, which classic must not call.
+ */
+export function conditionKind(c: Condition): HealthKind {
+  const negative = NEGATIVE_CONDITION.test(c.type);
+  if (c.status === "Unknown") return "warning";
+  const good = c.status === "True" ? !negative : negative;
+  return good ? "success" : "danger";
+}
+
+/**
  * Condition types whose `True` means "still working on it" — mapped to the one
  * reason that means the work has landed.
  *
@@ -82,17 +99,28 @@ const COMPLETION_REASON: Record<string, string> = {
   Progressing: "NewReplicaSetAvailable",
 };
 
-export function conditionKind(c: Condition): HealthKind {
-  const negative = NEGATIVE_CONDITION.test(c.type);
-  if (c.status === "Unknown") return "warning";
-  const good = c.status === "True" ? !negative : negative;
-  if (!good) return "danger";
-  // Only ever softens a green to amber. A reason may not repaint a condition
-  // the status has already condemned — that is the polarity trap, and it is
-  // how a stalled `Progressing: False` would talk its way back to healthy.
+/**
+ * `conditionKind`, plus the new design's rollout rule: a `Progressing` that is
+ * `True` for any reason other than the completion one softens from green to
+ * amber.
+ *
+ * OPT-IN, and a separate function rather than a flag, because it is a DESIGN
+ * decision read off the new design's mock and not a correctness fix. Classic
+ * is frozen and never asked for it: it calls plain `conditionKind`, and its
+ * pills tone exactly as they did before this module existed. Teaching the
+ * shared function this rule re-toned classic's condition pills with no test to
+ * catch it, which is the mistake this split exists to make impossible.
+ *
+ * A reason may only ever soften a green to amber. It may not repaint a
+ * condition the status has already condemned — that is the polarity trap, and
+ * it is how a stalled `Progressing: False` would talk its way back to healthy.
+ */
+export function conditionKindWithReason(c: Condition): HealthKind {
+  const base = conditionKind(c);
+  if (base !== "success") return base;
   const landed = COMPLETION_REASON[c.type];
   if (landed && c.status === "True" && c.reason && c.reason !== landed) return "warning";
-  return "success";
+  return base;
 }
 
 // The pod lifecycle, in the order kubelet reports it.

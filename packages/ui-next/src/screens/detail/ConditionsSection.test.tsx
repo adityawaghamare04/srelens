@@ -67,14 +67,18 @@ describe("ConditionsSection", () => {
     //   (warn)    Progressing     True  · ReplicaSetUpdated            amber name
     //   (ok)      ReplicaFailure  False · —                            plain name
     //
-    // Every tone is core's `conditionKind`; this section keeps no second
-    // heuristic, which is why two core bugs the frame exposed could be fixed
-    // where the list column and every other reader of a condition's tone got
-    // them too. `Failed` did not match `ReplicaFailure`, so a Deployment's
-    // healthy state read as a failure; and a `Progressing` condition was
-    // toned on its status alone, so a rollout still in flight was drawn the
-    // same green as one that had landed — the mock's own two frames prove
-    // the difference, tone by reason, with the same type and status in both.
+    // Every tone is core's `conditionKindWithReason`; this section keeps no
+    // second heuristic, which is why the two bugs the frame exposed could be
+    // fixed where the list column and every other reader of a condition's
+    // tone got them too. `Failed` did not match `ReplicaFailure`, so a
+    // Deployment's healthy state read as a failure — a genuine fix, and so
+    // one BOTH designs take, in plain `conditionKind`. The amber
+    // `Progressing` is the other half and is this design's alone: a rollout
+    // still in flight was drawn the same green as one that had landed, and
+    // the mock's two frames prove the difference tone by reason with the same
+    // type and status in both. Classic never asked for that reading, so it
+    // lives in the `WithReason` variant this section calls and classic does
+    // not.
     //
     // The name colour is the asymmetric half of the rule: a bad state is
     // worth the ink, a good one is not, so the ok row alone reads plain.

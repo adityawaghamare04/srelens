@@ -316,6 +316,64 @@ describe("ObjectDetail (Deployment)", () => {
   });
 });
 
+// Classic is a frozen design, and its condition pills are part of it. The
+// branch moved `conditionKind` into core and then taught the shared copy a
+// rollout rule read off the NEW design's mock — which silently re-toned these
+// pills, with no classic test to catch it. This pins the tone classic has
+// always drawn, so the next change to the shared helper cannot leak in here.
+//
+// The surface is `ConditionsTable`, which every kind without a body of its own
+// renders (a Deployment shows `ConditionBadges` instead — a different, local
+// rule this does not touch). `Certificate` is such a kind.
+describe("ObjectDetail condition pill tones (classic, frozen)", () => {
+  /** The tone class on the pill's dot, e.g. `bg-emerald-500`. */
+  const toneOf = (label: string) => {
+    const pill = screen.getByText(label);
+    return pill.querySelector("span")?.className ?? "";
+  };
+
+  const objectWith = (conditions: Array<Record<string, string>>): K8sObject => ({
+    kind: "Certificate",
+    metadata: { name: "web-tls", namespace: "default" },
+    status: { conditions },
+  });
+
+  const renderWith = (conditions: Array<Record<string, string>>) =>
+    render(<ObjectDetail kind="Certificate" obj={objectWith(conditions)} now={NOW} />);
+
+  it("keeps a Progressing condition green on its status alone, whatever its reason", () => {
+    // The new design tones this amber — a rollout still in flight — off its
+    // mock. Classic never asked for that and must not be given it.
+    renderWith([{ type: "Progressing", status: "True", reason: "ReplicaSetUpdated" }]);
+    expect(toneOf("Progressing")).toContain("bg-emerald-500");
+  });
+
+  it("keeps a completed rollout green too, so the reason changes nothing either way", () => {
+    renderWith([{ type: "Progressing", status: "True", reason: "NewReplicaSetAvailable" }]);
+    expect(toneOf("Progressing")).toContain("bg-emerald-500");
+  });
+
+  it("reads a ReplicaFailure: False as healthy — the one deliberate change to classic here", () => {
+    // Classic's own `conditionBadgeVariant` already matched `Failed|Failure`
+    // while its `conditionKind` matched only `Failed`, so classic disagreed
+    // with itself about this row: the badge called it healthy and the pill
+    // painted it red. Core's `/Fail/` settles it in the badge's favour. A
+    // reviewed behaviour change, kept for both designs because it is a bug
+    // fix rather than a design decision.
+    renderWith([{ type: "ReplicaFailure", status: "False" }]);
+    expect(toneOf("ReplicaFailure")).toContain("bg-emerald-500");
+  });
+
+  it("still paints a genuinely bad condition red, and an Unknown one amber", () => {
+    renderWith([
+      { type: "Ready", status: "False" },
+      { type: "Degraded", status: "Unknown" },
+    ]);
+    expect(toneOf("Ready")).toContain("bg-destructive");
+    expect(toneOf("Degraded")).toContain("bg-amber-500");
+  });
+});
+
 describe("ObjectDetail (workload kinds)", () => {
   it("shows Job timing (started, completed, duration)", () => {
     const job: K8sObject = {

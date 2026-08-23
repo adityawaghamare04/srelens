@@ -26,28 +26,53 @@ export function summarizeAffinity(affinity: Record<string, unknown>): string[] {
 }
 
 /**
- * "RollingUpdate · surge 25% · unavailable 0" / "RollingUpdate · partition 2" /
- * "OnDelete".
+ * The facts of a workload's update strategy: its type, and whichever of
+ * `partition` / `maxSurge` / `maxUnavailable` the object actually sets.
  *
- * The form is the design mock's, read off frame A's Strategy row: a middle-dot
- * run rather than a parenthesised comma list, labels without their "max"
- * prefix, and surge named before unavailable. Where the mock and the build
- * disagree on a value's form, the mock wins.
+ * FACTS, NOT A SENTENCE, and deliberately so. Two designs read this — classic
+ * draws "RollingUpdate (max unavailable 1)", the new design draws
+ * "RollingUpdate · unavailable 1" off its mock — and a shared function that
+ * returned one of those strings would put one design's typography inside the
+ * other. It did, briefly: moving classic's helper into core and then restyling
+ * it for the mock silently retyped a frozen app's Update strategy rows. So the
+ * numbers are read once, here, and the words are chosen at each edge.
  *
- * One helper, so a DaemonSet's Update strategy row reads the same way a
- * Deployment's does — the mock only draws the Deployment, but two forms for
- * one fact would be a worse answer than the one it does draw.
+ * Every field is the value as written (`"25%"`, `"1"`), not a number: a surge
+ * or an unavailable may legally be a percentage string, and parsing one into a
+ * number would have to invent a base to resolve it against. Absent stays
+ * absent — `undefined` is "the object does not set this", distinct from a
+ * `maxUnavailable: 0`, which is a real and strict setting ("take nothing down
+ * while rolling") that a truthiness test would drop.
  */
-export function updateStrategyText(strategy: Record<string, unknown>): string {
-  const type = str(strategy.type) || "RollingUpdate";
+export interface UpdateStrategy {
+  /** `type`, defaulting to `RollingUpdate` as the API server does. */
+  type: string;
+  /** `rollingUpdate.partition` — a StatefulSet's staged-rollout cutoff. */
+  partition?: string;
+  /** `rollingUpdate.maxSurge` — extra pods allowed above the desired count. */
+  maxSurge?: string;
+  /** `rollingUpdate.maxUnavailable` — pods allowed down during a rollout. */
+  maxUnavailable?: string;
+}
+
+/**
+ * Read a `spec.strategy` / `spec.updateStrategy` into its facts.
+ *
+ * One reader for every workload kind: a Deployment's `strategy` and a
+ * StatefulSet's or DaemonSet's `updateStrategy` are the same shape under
+ * different names, and only the caller knows which field to hand over.
+ */
+export function updateStrategy(strategy: Record<string, unknown>): UpdateStrategy {
   const ru = asRecord(strategy.rollingUpdate);
-  const parts: string[] = [];
   // `!= null` and not a truthiness test: `maxUnavailable: 0` is a real
   // setting — take nothing down while rolling — and the strictest one there is.
-  if (ru.partition != null) parts.push(`partition ${str(ru.partition)}`);
-  if (ru.maxSurge != null) parts.push(`surge ${str(ru.maxSurge)}`);
-  if (ru.maxUnavailable != null) parts.push(`unavailable ${str(ru.maxUnavailable)}`);
-  return [type, ...parts].join(" · ");
+  const at = (key: string) => (ru[key] != null ? str(ru[key]) : undefined);
+  return {
+    type: str(strategy.type) || "RollingUpdate",
+    partition: at("partition"),
+    maxSurge: at("maxSurge"),
+    maxUnavailable: at("maxUnavailable"),
+  };
 }
 
 export function relatedPodSelector(kind: string, obj: K8sObject): Record<string, string> {

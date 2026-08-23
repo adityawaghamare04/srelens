@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { conditionKind, containerStateText, orderPodConditions, phaseKind, waitingKind } from "./k8sHealth";
+import {
+  conditionKind,
+  conditionKindWithReason,
+  containerStateText,
+  orderPodConditions,
+  phaseKind,
+  waitingKind,
+} from "./k8sHealth";
 
 describe("orderPodConditions", () => {
   it("orders lifecycle conditions PodScheduled → Initialized → ContainersReady → Ready", () => {
@@ -114,6 +121,24 @@ describe("conditionKind", () => {
     expect(conditionKind({ type: "VolumeDangling", status: "False" })).toBe("success");
   });
 
+  it("ignores a reason entirely, which is what keeps classic's pills where they were", () => {
+    // The rollout rule below is the NEW design's, off its mock. Classic renders
+    // `conditionKind` and never asked for it, so this function must stay blind
+    // to `reason`: teaching it one silently re-toned a frozen app's condition
+    // pills, with no test to catch it.
+    expect(conditionKind({ type: "Progressing", status: "True", reason: "ReplicaSetUpdated" })).toBe("success");
+    expect(conditionKind({ type: "Progressing", status: "True", reason: "NewReplicaSetAvailable" })).toBe("success");
+    expect(conditionKind({ type: "Progressing", status: "True", reason: "SomeFutureReason" })).toBe("success");
+  });
+
+  it("matches the negative-type regex case-insensitively", () => {
+    expect(conditionKind({ type: "networkunavailable", status: "True" })).toBe("danger");
+  });
+});
+
+// The new design's opt-in extension of `conditionKind`: same rule, plus a
+// reason read for the types that need one. Classic must never call this.
+describe("conditionKindWithReason", () => {
   it("separates a rollout in flight from one that has landed, on the reason", () => {
     // The design mock draws both frames of this pair: frame A's degraded
     // Deployment has `Progressing · True · ReplicaSetUpdated` in amber, and
@@ -121,8 +146,8 @@ describe("conditionKind", () => {
     // in green. Same type, same status — the reason is the only thing that
     // separates "working on it" from "done", which is the one fact an
     // operator opens a Deployment to find out.
-    expect(conditionKind({ type: "Progressing", status: "True", reason: "ReplicaSetUpdated" })).toBe("warning");
-    expect(conditionKind({ type: "Progressing", status: "True", reason: "NewReplicaSetAvailable" })).toBe("success");
+    expect(conditionKindWithReason({ type: "Progressing", status: "True", reason: "ReplicaSetUpdated" })).toBe("warning");
+    expect(conditionKindWithReason({ type: "Progressing", status: "True", reason: "NewReplicaSetAvailable" })).toBe("success");
   });
 
   it("reads any other in-flight reason as unsettled too, not only the mock's one", () => {
@@ -130,38 +155,50 @@ describe("conditionKind", () => {
     // listed, so a rollout reason nobody has seen before reads amber rather
     // than claiming a rollout has finished on no evidence.
     for (const reason of ["NewReplicaSetCreated", "FoundNewReplicaSet", "DeploymentPaused", "SomeFutureReason"]) {
-      expect(conditionKind({ type: "Progressing", status: "True", reason })).toBe("warning");
+      expect(conditionKindWithReason({ type: "Progressing", status: "True", reason })).toBe("warning");
     }
   });
 
   it("leaves a reasonless Progressing alone rather than calling it unsettled", () => {
     // An absent reason is no information, not evidence of a rollout: the mock
     // renders those as an em dash, and they must not all turn amber.
-    expect(conditionKind({ type: "Progressing", status: "True" })).toBe("success");
-    expect(conditionKind({ type: "Progressing", status: "True", reason: "" })).toBe("success");
+    expect(conditionKindWithReason({ type: "Progressing", status: "True" })).toBe("success");
+    expect(conditionKindWithReason({ type: "Progressing", status: "True", reason: "" })).toBe("success");
   });
 
   it("keeps the reason from ever rescuing a condition the status already condemns", () => {
     // Polarity first: the reason may only soften a green to amber, never
     // repaint a red. `Progressing: False` is a stalled rollout whatever it
     // says about itself.
-    expect(conditionKind({ type: "Progressing", status: "False", reason: "ProgressDeadlineExceeded" })).toBe("danger");
-    expect(conditionKind({ type: "Progressing", status: "False", reason: "NewReplicaSetAvailable" })).toBe("danger");
-    expect(conditionKind({ type: "Progressing", status: "Unknown", reason: "NewReplicaSetAvailable" })).toBe("warning");
+    expect(conditionKindWithReason({ type: "Progressing", status: "False", reason: "ProgressDeadlineExceeded" })).toBe("danger");
+    expect(conditionKindWithReason({ type: "Progressing", status: "False", reason: "NewReplicaSetAvailable" })).toBe("danger");
+    expect(conditionKindWithReason({ type: "Progressing", status: "Unknown", reason: "NewReplicaSetAvailable" })).toBe("warning");
   });
 
   it("tones on the type-and-reason pair, never on the reason alone", () => {
     // The same reason string can appear on a condition of another type, where
     // it means something else entirely. Only the types named in the table
     // consult a reason at all.
-    expect(conditionKind({ type: "Available", status: "True", reason: "ReplicaSetUpdated" })).toBe("success");
-    expect(conditionKind({ type: "Available", status: "True", reason: "MinimumReplicasAvailable" })).toBe("success");
-    expect(conditionKind({ type: "ReplicaFailure", status: "False", reason: "ReplicaSetUpdated" })).toBe("success");
-    expect(conditionKind({ type: "Ready", status: "True", reason: "KubeletReady" })).toBe("success");
+    expect(conditionKindWithReason({ type: "Available", status: "True", reason: "ReplicaSetUpdated" })).toBe("success");
+    expect(conditionKindWithReason({ type: "Available", status: "True", reason: "MinimumReplicasAvailable" })).toBe("success");
+    expect(conditionKindWithReason({ type: "ReplicaFailure", status: "False", reason: "ReplicaSetUpdated" })).toBe("success");
+    expect(conditionKindWithReason({ type: "Ready", status: "True", reason: "KubeletReady" })).toBe("success");
   });
 
-  it("matches the negative-type regex case-insensitively", () => {
-    expect(conditionKind({ type: "networkunavailable", status: "True" })).toBe("danger");
+
+  it("agrees with conditionKind on every condition that carries no reason", () => {
+    // The extension is exactly that — an extension. A condition without a
+    // reason, or of a type the table does not name, tones identically.
+    for (const c of [
+      { type: "Ready", status: "True" },
+      { type: "Ready", status: "False" },
+      { type: "MemoryPressure", status: "True" },
+      { type: "ReplicaFailure", status: "False" },
+      { type: "Available", status: "Unknown" },
+      { type: "Available", status: "True", reason: "MinimumReplicasAvailable" },
+    ]) {
+      expect(conditionKindWithReason(c)).toBe(conditionKind(c));
+    }
   });
 });
 

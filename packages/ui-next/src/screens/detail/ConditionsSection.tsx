@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from "react";
 import {
-  conditionKind,
+  conditionKindWithReason,
   podMetrics,
   podsForSelector,
   podStatus,
@@ -48,8 +48,14 @@ export interface ConditionsSectionProps {
  *
  * Conditions arrive as data, never as an object to read: the module has no
  * idea whether it is printing a Pod's, a Node's or a Deployment's, which is
- * what lets every body share it. `conditionKind` is core's single severity
- * heuristic, so a condition is toned the same way wherever it appears.
+ * what lets every body share it. `conditionKindWithReason` is core's severity
+ * heuristic, so a condition is toned the same way wherever it appears in this
+ * design. It is the `WithReason` variant on purpose: this design's mock draws
+ * a `Progressing · True · ReplicaSetUpdated` amber and the completed
+ * `NewReplicaSetAvailable` green, which is a reading of one controller's
+ * vocabulary and so a decision this design makes on its own. Classic calls
+ * plain `conditionKind` and tones without it; that split is what keeps a
+ * change made for this mock out of a frozen app's screens.
  *
  * The name is `tinted`, which colours it for a bad state and leaves it plain
  * for a good one — red `Available` above a plain `ReplicaFailure`, both beside
@@ -72,7 +78,7 @@ export function ConditionsSection({ conditions }: ConditionsSectionProps) {
       {conditions.map((condition) => (
         <KV
           key={condition.type}
-          k={<StatusPill status={condition.type} kind={conditionKind(condition)} tinted />}
+          k={<StatusPill status={condition.type} kind={conditionKindWithReason(condition)} tinted />}
           v={`${condition.status} · ${condition.reason || "—"}`}
         />
       ))}

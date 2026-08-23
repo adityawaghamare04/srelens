@@ -6,7 +6,7 @@ import {
   asRecord,
   listReplicaSets,
   str,
-  updateStrategyText,
+  updateStrategy,
   type Condition,
   type K8sObject,
   type ReplicaSetSummary,
@@ -31,6 +31,34 @@ function StringList({ items }: { items: string[] }) {
       ))}
     </ul>
   );
+}
+
+/**
+ * "RollingUpdate · surge 25% · unavailable 0" / "RollingUpdate · partition 2"
+ * / "OnDelete".
+ *
+ * The form is this design's, read off frame A's Strategy row: a middle-dot
+ * run rather than a parenthesised comma list, labels without their "max"
+ * prefix, and surge named before unavailable. Where the mock and the build
+ * disagree on a value's form, the mock wins.
+ *
+ * The FACTS come from core's `updateStrategy`, which every design shares; the
+ * words are chosen here, and only here. Classic draws the same numbers as
+ * "RollingUpdate (max unavailable 0, max surge 25%)" and is frozen, so a
+ * shared formatter would have to pick one app's typography for both — it
+ * briefly did, and retyped classic's rows by accident.
+ *
+ * One helper for every kind, so a DaemonSet's Update strategy row reads the
+ * way a Deployment's does: the mock only draws the Deployment, but two forms
+ * for one fact would be a worse answer than the one it does draw.
+ */
+function updateStrategyText(strategy: Record<string, unknown>): string {
+  const { type, partition, maxSurge, maxUnavailable } = updateStrategy(strategy);
+  const parts: string[] = [];
+  if (partition != null) parts.push(`partition ${partition}`);
+  if (maxSurge != null) parts.push(`surge ${maxSurge}`);
+  if (maxUnavailable != null) parts.push(`unavailable ${maxUnavailable}`);
+  return [type, ...parts].join(" · ");
 }
 
 /** The images a workload's pod template runs, each named once. */
@@ -148,10 +176,11 @@ function DeployRevisionsSection({ state }: { state: RevisionsState }) {
  * the two that mattered; `Up to date` gets the row of its own the design
  * gives it, and the rest are on the YAML tab.
  *
- * `Strategy` is core's `updateStrategyText` for every kind. It always was for
- * a StatefulSet/DaemonSet; a Deployment alone read `spec.strategy.type` and
- * so printed "RollingUpdate" with the surge and unavailable clauses — the two
- * numbers that decide how a rollout behaves — dropped.
+ * `Strategy` is `updateStrategyText` below — core's `updateStrategy` facts in
+ * this design's own words — for every kind. It always read the whole strategy
+ * for a StatefulSet/DaemonSet; a Deployment alone read `spec.strategy.type`
+ * and so printed "RollingUpdate" with the surge and unavailable clauses — the
+ * two numbers that decide how a rollout behaves — dropped.
  *
  * Namespace and Managed by are a `ResourceLink`/`LinkedResources` in classic
  * that navigate; they render here as plain text (see the task report).
