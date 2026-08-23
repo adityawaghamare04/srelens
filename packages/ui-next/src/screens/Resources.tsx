@@ -16,6 +16,7 @@ import {
   LoadingState,
   ResizeHandle,
   Screen,
+  SideRail,
   Table,
   filterTableData,
   type Column,
@@ -24,7 +25,7 @@ import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
 import { detailRoute, parseDetailRoute } from "../lib/detailRoute";
-import { customDescriptorFor } from "../lib/kinds/custom";
+import { customDescriptor } from "../lib/kinds/custom";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { KindDescriptor, ListRow } from "../lib/kinds/types";
@@ -34,6 +35,7 @@ import { describe, isBuiltInKind } from "../lib/routes";
 import { openTab } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
+import { AboutKind } from "./crd/AboutKind";
 import { ResourceDetailView } from "./detail/ResourceDetailView";
 import { ResourceTabView } from "./detail/ResourceTabView";
 import { ResourceBulk } from "./ResourceBulk";
@@ -54,6 +56,9 @@ const NAME_KEY = "name";
 
 /** Stable identity for "no columns", so a memo on it does not churn. */
 const NO_COLUMNS: Column<ListRow>[] = [];
+
+/** The "About this kind" rail's width, from the design's own table (§12). */
+const CRD_RAIL_WIDTH = 264;
 
 /**
  * The resource list: one screen for every `/k/<slug>` route there is.
@@ -118,17 +123,32 @@ function KindList({
   );
   const crds = discovery.data;
 
+  /**
+   * The CRD this route names, once discovery has answered — `undefined` for a
+   * built-in kind, and for a slug this cluster has no definition for (a tab
+   * restored from a session can name a kind whose operator is gone).
+   *
+   * Looked up ONCE, here, rather than by `customDescriptorFor` inside the memo
+   * below and again beside it for the rail: the columns and the "About this
+   * kind" rail have to describe the same definition, and two finds are two
+   * chances for them not to. `builtIn` is the same flag discovery itself is
+   * gated on, so the slug's shape is still tested in exactly one place.
+   */
+  const crd = useMemo(
+    () => (builtIn ? undefined : crds?.find((c) => c.name === slug)),
+    [builtIn, crds, slug],
+  );
+
   const descriptor = useMemo(() => {
     if (builtIn) return descriptorFor(slug);
-    if (!crds) return undefined;
     // The same variance cast `descriptors.ts` makes for its typed column sets:
     // `CustomRow` is a proper subtype of `ListRow` on the data side, but
     // `Column`'s render/sort functions take the row contravariantly, so
     // TypeScript cannot see the assignment is safe. Every function on a custom
     // column only reads fields `ListRow` does not promise (`columns`,
     // `sortKeys`), so a bare `ListRow` cannot reach one wrongly.
-    return customDescriptorFor(slug, crds) as KindDescriptor<ListRow> | undefined;
-  }, [builtIn, slug, crds]);
+    return (crd ? customDescriptor(crd) : undefined) as KindDescriptor<ListRow> | undefined;
+  }, [builtIn, slug, crd]);
 
   const selection = useNamespaces(context.stableId);
   const { namespaces, scope, error: namespaceError } = useNamespaceOptions(name, files);
@@ -297,6 +317,103 @@ function KindList({
   // a table to warn about or select from.
   const showRows = list.status !== "loading" && list.status !== "error";
 
+  /**
+   * The list and the peek, side by side. Still not `SideRail`, which is the
+   * kit's fixed rail and offers no grip by design — the peek is the one thing
+   * on this screen the reader drags, and it carries a measured clamp and a
+   * persisted width that a fixed rail has no use for. `min-w-0` on the
+   * table's own column is what keeps the peek from widening this row past the
+   * window — without it a flex item refuses to shrink below its content and
+   * the whole screen scrolls sideways instead of the table scrolling inside
+   * itself.
+   *
+   * Named rather than written inline because a custom resource wraps it in a
+   * rail and a built-in kind does not, and one copy of it is the only way
+   * those two branches cannot drift.
+   */
+  const listAndPeek = (
+    <div ref={listRow.ref} className="flex min-h-0 flex-1">
+      <div className="scroll min-h-0 min-w-0 flex-1">
+        {list.status === "loading" ? (
+          <LoadingState label={`Loading ${lower}`} />
+        ) : list.status === "error" ? (
+          <ErrorState
+            title={`Could not list ${lower} on ${name}`}
+            detail={list.error}
+            onRetry={list.reload}
+          />
+        ) : (
+          <Table
+            columns={renderedColumns}
+            data={filtered}
+            getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
+            selection={{ selected, onChange: setSelected }}
+            sort={sort}
+            onSortChange={setSort}
+            activeFilterKey={filterKey}
+            onActiveFilterKeyChange={setFilterKey}
+            // Single click peeks, double click (or Enter) opens the tab —
+            // `Table` owns both gestures, so a row is reachable from the
+            // keyboard either way.
+            onRowClick={(row) => peekAt(row.namespace ?? null, row.name)}
+            onRowActivate={(row) => openRowTab(row.namespace ?? null, row.name)}
+            rowMenu={rowMenuItems}
+            rowMenuLabel={`${title} actions`}
+            {...emptyTableCopy(rows.length, lower, name, clusterScoped ? "" : " in the namespaces you are looking at")}
+          />
+        )}
+      </div>
+      {peek && (
+        // Deliberately NOT keyed on the subject: `ResourceDetailView` gates its
+        // own panes on the target it is rendering for, and remounting per
+        // row would throw away the reader's selected pane on every click —
+        // the one thing that component's own comments say must survive a
+        // subject change.
+        //
+        // A plain `div`, not an `aside`: `Inspector` is already a named
+        // region, and a second complementary landmark around it would be
+        // noise (see the kit's own note on that).
+        //
+        // `relative` and an inline width rather than a `w-` utility: the
+        // grip is positioned against this box, and the width is now a
+        // number the reader owns. Changing it re-styles this element in
+        // place — the pane below is not keyed and does not remount, or
+        // every frame of a drag would refetch the resource.
+        <div className="relative flex min-h-0 shrink-0 flex-col" style={{ width: peekWidth }}>
+          {/* No `rule-l` on the box: the grip draws the rule between the
+              list and the pane itself, the same way the sidebar's does. It
+              is named after what the reader called it — "resource details"
+              — since `ResizeHandle` announces itself as `Resize {label}`.
+              Written live and persisted once on release. */}
+          <ResizeHandle
+            label="the resource details"
+            width={peekWidth}
+            minWidth={listRow.bounds.minWidth}
+            maxWidth={listRow.bounds.maxWidth}
+            edge="left"
+            onResize={setPeekWidth}
+            onCommit={savePeekWidth}
+          />
+          <ResourceDetailView
+            context={name}
+            kind={descriptor.k8sKind}
+            namespace={peek.namespace}
+            name={peek.name}
+            // The one prop the tab host does not pass, carrying both of the
+            // controls the design gives the peek's header. Promoting does
+            // not dismiss: the reader asked for a tab, not for the list to
+            // stop showing them what they were looking at.
+            peek={{
+              onClose: () => setPeek(null),
+              onOpenTab: () => openRowTab(peek.namespace, peek.name),
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+
+
   return (
     <Screen
       title={title}
@@ -370,91 +487,23 @@ function KindList({
           onDone={() => setSelected(new Set())}
         />
       )}
-      {/* The list and the peek, side by side. No split-pane component: the kit
-          has none, and one call site does not justify inventing one. `min-w-0`
-          on the table's own column is what keeps the peek from widening this
-          row past the window — without it a flex item refuses to shrink below
-          its content and the whole screen scrolls sideways instead of the
-          table scrolling inside itself. */}
-      <div ref={listRow.ref} className="flex min-h-0 flex-1">
-        <div className="scroll min-h-0 min-w-0 flex-1">
-          {list.status === "loading" ? (
-            <LoadingState label={`Loading ${lower}`} />
-          ) : list.status === "error" ? (
-            <ErrorState
-              title={`Could not list ${lower} on ${name}`}
-              detail={list.error}
-              onRetry={list.reload}
-            />
-          ) : (
-            <Table
-              columns={renderedColumns}
-              data={filtered}
-              getRowKey={(row) => `${row.namespace ?? ""}/${row.name}`}
-              selection={{ selected, onChange: setSelected }}
-              sort={sort}
-              onSortChange={setSort}
-              activeFilterKey={filterKey}
-              onActiveFilterKeyChange={setFilterKey}
-              // Single click peeks, double click (or Enter) opens the tab —
-              // `Table` owns both gestures, so a row is reachable from the
-              // keyboard either way.
-              onRowClick={(row) => peekAt(row.namespace ?? null, row.name)}
-              onRowActivate={(row) => openRowTab(row.namespace ?? null, row.name)}
-              rowMenu={rowMenuItems}
-              rowMenuLabel={`${title} actions`}
-              {...emptyTableCopy(rows.length, lower, name, clusterScoped ? "" : " in the namespaces you are looking at")}
-            />
-          )}
-        </div>
-        {peek && (
-          // Deliberately NOT keyed on the subject: `ResourceDetailView` gates its
-          // own panes on the target it is rendering for, and remounting per
-          // row would throw away the reader's selected pane on every click —
-          // the one thing that component's own comments say must survive a
-          // subject change.
-          //
-          // A plain `div`, not an `aside`: `Inspector` is already a named
-          // region, and a second complementary landmark around it would be
-          // noise (see the kit's own note on that).
-          //
-          // `relative` and an inline width rather than a `w-` utility: the
-          // grip is positioned against this box, and the width is now a
-          // number the reader owns. Changing it re-styles this element in
-          // place — the pane below is not keyed and does not remount, or
-          // every frame of a drag would refetch the resource.
-          <div className="relative flex min-h-0 shrink-0 flex-col" style={{ width: peekWidth }}>
-            {/* No `rule-l` on the box: the grip draws the rule between the
-                list and the pane itself, the same way the sidebar's does. It
-                is named after what the reader called it — "resource details"
-                — since `ResizeHandle` announces itself as `Resize {label}`.
-                Written live and persisted once on release. */}
-            <ResizeHandle
-              label="the resource details"
-              width={peekWidth}
-              minWidth={listRow.bounds.minWidth}
-              maxWidth={listRow.bounds.maxWidth}
-              edge="left"
-              onResize={setPeekWidth}
-              onCommit={savePeekWidth}
-            />
-            <ResourceDetailView
-              context={name}
-              kind={descriptor.k8sKind}
-              namespace={peek.namespace}
-              name={peek.name}
-              // The one prop the tab host does not pass, carrying both of the
-              // controls the design gives the peek's header. Promoting does
-              // not dismiss: the reader asked for a tab, not for the list to
-              // stop showing them what they were looking at.
-              peek={{
-                onClose: () => setPeek(null),
-                onOpenTab: () => openRowTab(peek.namespace, peek.name),
-              }}
-            />
-          </div>
-        )}
-      </div>
+      {crd ? (
+        // The rail is the whole of what a custom resource's list adds. It is
+        // mounted off `crd` rather than off the slug's shape: `builtIn` already
+        // decided that once, upstream, and it is what gates discovery itself.
+        <SideRail
+          head="About this kind"
+          width={CRD_RAIL_WIDTH}
+          rail={<AboutKind crd={crd} context={name} objects={rows.length} />}
+        >
+          {/* The left pane's own head, as the design words it. `crd.kind` again
+              — the slug is a plural DNS name and reads as one. */}
+          <div className="pane-head">{`${crd.kind} \u00b7 custom resource`}</div>
+          {listAndPeek}
+        </SideRail>
+      ) : (
+        listAndPeek
+      )}
       {/* Outside the scrolling table body: a `ConfirmDialog` is a portal
           anyway, but a clipped ancestor is one fewer thing to reason about. */}
       {rowMenuDialog}

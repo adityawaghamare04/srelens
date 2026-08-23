@@ -355,6 +355,12 @@ function openDetailTab(route: string) {
   );
 }
 
+/** One row of the "About this kind" rail, by its key. */
+const railRow = (rail: HTMLElement, key: string) =>
+  Array.from(rail.querySelectorAll("dl.kv"))
+    .find((kv) => kv.querySelector(".kv-k")?.textContent === key)
+    ?.querySelector(".kv-v")?.textContent;
+
 /** Open the column picker and hand back its panel. */
 async function openColumns() {
   await userEvent.click(screen.getByRole("button", { name: /Columns/ }));
@@ -441,6 +447,51 @@ describe("Resources", () => {
     await waitFor(() => expect(rowNames()).toEqual(["left"]));
     expect(headers()).toContain("Phase");
     expect(listCrds).toHaveBeenCalledWith("prod-eu");
+  });
+
+  it("tells the reader what a custom kind is, in a rail beside its list", async () => {
+    listCrds.mockResolvedValue({
+      crds: [{ ...WIDGETS, versions: ["v1", "v1beta1"], storageVersion: "v1" }],
+    });
+    listCustomResource.mockResolvedValue({
+      items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
+    });
+
+    open("/k/widgets.example.com");
+
+    await waitFor(() => expect(rowNames()).toEqual(["left"]));
+    const rail = screen.getByRole("complementary", { name: "About this kind" });
+    expect(railRow(rail, "Kind")).toBe("Widget");
+    expect(railRow(rail, "Scope")).toBe("Namespaced");
+    expect(railRow(rail, "Served versions")).toBe("v1, v1beta1");
+    expect(railRow(rail, "Storage version")).toBe("v1");
+    expect(railRow(rail, "Objects")).toBe("1");
+    expect(within(rail).getByText(/kubectl --context prod-eu get widgets.example.com -A -o wide/)).toBeDefined();
+  });
+
+  it("heads the custom list's own pane with the kind, not the slug", async () => {
+    listCrds.mockResolvedValue({ crds: [WIDGETS] });
+    listCustomResource.mockResolvedValue({
+      items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
+    });
+
+    open("/k/widgets.example.com");
+
+    await waitFor(() => expect(rowNames()).toEqual(["left"]));
+    expect(document.querySelector("[data-slot='rail-main'] .pane-head")?.textContent).toBe(
+      "Widget \u00b7 custom resource",
+    );
+  });
+
+  it("gives a built-in kind no rail — there is no CRD behind one", async () => {
+    open("/k/pods");
+
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    expect(screen.queryByRole("complementary", { name: "About this kind" })).toBeNull();
+    expect(document.body.textContent).not.toContain("custom resource");
+    // Discovery is what a rail would have to be built from, and a built-in
+    // kind must never pay for it.
+    expect(listCrds).not.toHaveBeenCalled();
   });
 
   it("narrows the list by the filter text", async () => {
