@@ -2,17 +2,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useLayoutEffect } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { EventSummary, K8sObject } from "@srelens/core";
+import type { CrdRef, EventSummary, K8sObject } from "@srelens/core";
 import type { KindDescriptor, ListRow } from "../../lib/kinds/types";
 
 // `useObject` reads `getObject`; the YAML and Events panes read `getManifest`
-// and `listEvents` directly. All three are core's, mocked here so a test
-// controls what "the cluster said" without one — `importOriginal` keeps
-// everything else (K8S_KIND, and the real types) intact.
-const { getObject, getManifest, listEvents } = vi.hoisted(() => ({
+// and `listEvents` directly, and the YAML pane also reads `listCrds` to
+// resolve a custom resource's group/version/plural before fetching its
+// manifest. All four are core's, mocked here so a test controls what "the
+// cluster said" without one — `importOriginal` keeps everything else
+// (K8S_KIND, and the real types) intact.
+const { getObject, getManifest, listEvents, listCrds } = vi.hoisted(() => ({
   getObject: vi.fn(async (): Promise<{ object?: K8sObject; error?: string }> => ({})),
   getManifest: vi.fn(async (): Promise<{ yaml?: string; error?: string }> => ({ yaml: "" })),
   listEvents: vi.fn(async (): Promise<{ events?: EventSummary[]; error?: string }> => ({ events: [] })),
+  listCrds: vi.fn(async (): Promise<{ crds?: CrdRef[]; error?: string }> => ({ crds: [] })),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => ({
@@ -20,6 +23,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   getObject,
   getManifest,
   listEvents,
+  listCrds,
 }));
 
 // The shell asks the same descriptor the list screen resolves, only to read
@@ -60,6 +64,7 @@ describe("ResourceDetail", () => {
     vi.clearAllMocks();
     getManifest.mockResolvedValue({ yaml: "kind: Pod\n" });
     listEvents.mockResolvedValue({ events: [] });
+    listCrds.mockResolvedValue({ crds: [] });
     descriptorFor.mockReturnValue(undefined);
   });
 
@@ -136,6 +141,137 @@ describe("ResourceDetail", () => {
     expect(getObject).toHaveBeenCalledTimes(1);
     expect(getManifest).toHaveBeenCalledTimes(1);
     expect(listEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a loading state for the manifest while it is in flight", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    getManifest.mockImplementation(() => new Promise(() => {}));
+    const { getByRole, getByText } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    expect(getByText(/loading.*manifest/i)).toBeDefined();
+  });
+
+  it("renders the fetched manifest once the YAML pane is opened", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    getManifest.mockResolvedValue({ yaml: "kind: Pod\nspec:\n  nodeName: node-7\n" });
+    const { getByRole, container } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("node-7"));
+  });
+
+  it("keeps the YAML pane usable when the manifest fetch fails", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    getManifest.mockResolvedValue({ error: "forbidden" });
+    const { getByRole } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getByRole("alert")).toBeDefined());
+    const text = getByRole("alert").textContent ?? "";
+    // Names the object that failed, same convention as the object's own
+    // error state — several panes can be open at once.
+    expect(text).toContain("Pod");
+    expect(text).toContain("web-1");
+
+    // "Usable" means the rest of the shell still works after the failure —
+    // other tabs remain clickable and render, rather than the whole
+    // component wedging on the one failed pane.
+    await userEvent.click(getByRole("tab", { name: "Details" }));
+    await waitFor(() => expect(getByRole("tab", { name: "Details" }).getAttribute("aria-selected")).toBe("true"));
+  });
+
+  it("renders event rows once the Events pane is opened for a resource with events", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    listEvents.mockResolvedValue({
+      events: [
+        { name: "web-1.abc", type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "container crashed", age: "5m" },
+        { name: "web-1.def", type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned to node-3", age: "10m" },
+      ],
+    });
+    const { getByRole, getByText } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "Events" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "Events" }));
+    await waitFor(() => expect(getByText("BackOff")).toBeDefined());
+    expect(getByText("container crashed")).toBeDefined();
+    expect(getByText("Scheduled")).toBeDefined();
+    expect(getByText("assigned to node-3")).toBeDefined();
+  });
+
+  it("does not query the cluster's CRDs to fetch a built-in kind's manifest", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    const { getByRole } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1));
+    expect(listCrds).not.toHaveBeenCalled();
+    expect(getManifest).toHaveBeenCalledWith("ctx", "Pod", "default", "web-1", undefined, undefined);
+  });
+
+  it("resolves a custom resource's group/version/plural from the cluster's CRDs and passes it to getManifest", async () => {
+    getObject.mockResolvedValue({ object: { kind: "Certificate", metadata: { name: "cert-1", namespace: "default" } } });
+    listCrds.mockResolvedValue({
+      crds: [
+        {
+          name: "certificates.cert-manager.io",
+          group: "cert-manager.io",
+          version: "v1",
+          kind: "Certificate",
+          plural: "certificates",
+          namespaced: true,
+        },
+      ],
+    });
+    getManifest.mockResolvedValue({ yaml: "kind: Certificate\n" });
+    const { getByRole } = render(
+      <ResourceDetail context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1));
+    expect(getManifest).toHaveBeenCalledWith("ctx", "Certificate", "default", "cert-1", undefined, {
+      group: "cert-manager.io",
+      version: "v1",
+      plural: "certificates",
+    });
+  });
+
+  it("shows a distinct, informative error when no CRD on the cluster matches the custom resource's kind", async () => {
+    getObject.mockResolvedValue({ object: { kind: "Certificate", metadata: { name: "cert-1", namespace: "default" } } });
+    listCrds.mockResolvedValue({ crds: [] });
+    const { getByRole } = render(
+      <ResourceDetail context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getByRole("alert")).toBeDefined());
+    const text = getByRole("alert").textContent ?? "";
+    expect(text).toContain("Certificate");
+    // Distinct from a generic manifest-fetch failure: names the real reason
+    // (no matching CustomResourceDefinition), not a bare "could not load".
+    expect(text.toLowerCase()).toContain("customresourcedefinition");
+    expect(getManifest).not.toHaveBeenCalled();
+  });
+
+  it("shows a distinct error when the cluster's CRDs themselves fail to load", async () => {
+    getObject.mockResolvedValue({ object: { kind: "Certificate", metadata: { name: "cert-1", namespace: "default" } } });
+    listCrds.mockResolvedValue({ error: "forbidden" });
+    const { getByRole } = render(
+      <ResourceDetail context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getByRole("alert")).toBeDefined());
+    const text = getByRole("alert").textContent ?? "";
+    expect(text).toContain("Certificate");
+    expect(text).toContain("forbidden");
+    expect(getManifest).not.toHaveBeenCalled();
   });
 
   it("shows a labelled empty state for a resource with no events, not a blank pane", async () => {

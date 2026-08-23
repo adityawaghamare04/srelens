@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { K8S_KIND, getManifest, listEvents, type EventSummary, type K8sObject } from "@srelens/core";
+import {
+  K8S_KIND,
+  getManifest,
+  listCrds,
+  listEvents,
+  type DynamicGvk,
+  type EventSummary,
+  type K8sObject,
+} from "@srelens/core";
 import {
   Badge,
   CodeEditor,
@@ -52,6 +60,50 @@ const SLUG_BY_K8S_KIND: Record<string, string> = Object.fromEntries(
 
 function describeTarget(kind: string, namespace: string | null, name: string): string {
   return `${kind} ${namespace ? `${namespace}/` : ""}${name}`;
+}
+
+/**
+ * Resolves a custom resource's `{group, version, plural}` from the cluster's
+ * own CRD list, for `getManifest`'s optional fifth argument.
+ *
+ * `getManifest(context, kind, namespace, name, invoke, crd?)` needs that GVK
+ * to resolve a CRD-backed kind — kind alone is ambiguous to the backend's
+ * kind→GVR match, which has no CRD path at all (the same reason
+ * `KindActions.delete` is withheld for custom resources in `lib/kinds/
+ * custom.ts`). This shell only ever receives a bare `kind` string (not a
+ * slug, not a `CrdRef`), and there is nowhere upstream to source one from
+ * yet — no descriptor represents a CRD kind today, and threading a `CrdRef`
+ * through `KindDescriptor`/props would only work once every future caller
+ * remembers to supply it, which is exactly the kind of coordination gap that
+ * has already bitten this component once (see Task 9's own "must remember to
+ * set panes.containers" concern). Resolving it here instead means the YAML
+ * pane works correctly for a custom resource the moment ANY caller passes
+ * its kind — self-contained, not dependent on another task's discipline —
+ * at the cost of one extra `listCrds` round trip per custom-resource YAML
+ * open (skipped entirely for a built-in kind, and only paid once the reader
+ * actually opens the YAML tab, matching this file's existing laziness).
+ *
+ * A `kind` with no CRD on the cluster (the CRD was deleted, or the caller
+ * mis-typed it) is reported as an error, not silently passed through
+ * unresolved: an unresolved `crd` would make `getManifest` guess via the
+ * same ambiguous kind→GVR match this function exists to avoid, which can
+ * fail confusingly or, worse, resolve to the wrong resource entirely.
+ */
+async function resolveCrdGvk(
+  context: string,
+  kind: string,
+): Promise<{ crd?: DynamicGvk; error?: string }> {
+  const result = await listCrds(context);
+  if (result.error) {
+    return { error: `Could not look up ${kind}'s CustomResourceDefinition: ${result.error}` };
+  }
+  const match = result.crds?.find((c) => c.kind === kind);
+  if (!match) {
+    return {
+      error: `${kind} has no matching CustomResourceDefinition on this cluster, so its manifest cannot be resolved.`,
+    };
+  }
+  return { crd: { group: match.group, version: match.version, plural: match.plural } };
 }
 
 type PaneBody = (props: { object: K8sObject; context: string }) => ReactNode;
@@ -250,9 +302,22 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
   // object is loading or has errored the pane isn't visible anyway (the
   // early returns below short-circuit before any tab renders).
   const target = [context, kind, namespace, name] as const;
-  const yamlState = useLoad<string>(openedPanes.has(PANE_YAML), target, () =>
-    getManifest(context, kind, namespace, name).then((r) => ({ data: r.yaml, error: r.error })),
-  );
+  // `getManifest` needs a CRD's group/version/plural to resolve a
+  // custom-resource manifest — see `resolveCrdGvk`'s own doc comment for why
+  // this is looked up here rather than threaded in from a descriptor.
+  const isBuiltInKind = slug !== undefined;
+  const yamlState = useLoad<string>(openedPanes.has(PANE_YAML), target, async () => {
+    let crd: DynamicGvk | undefined;
+    if (!isBuiltInKind) {
+      const resolved = await resolveCrdGvk(context, kind);
+      if (resolved.error) return { error: resolved.error };
+      crd = resolved.crd;
+    }
+    return getManifest(context, kind, namespace, name, undefined, crd).then((r) => ({
+      data: r.yaml,
+      error: r.error,
+    }));
+  });
   const eventsState = useLoad<EventSummary[]>(openedPanes.has(PANE_EVENTS), target, () =>
     listEvents(context, namespace, { kind, name }).then((r) => ({ data: r.events, error: r.error })),
   );
