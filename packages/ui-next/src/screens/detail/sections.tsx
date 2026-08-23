@@ -5,8 +5,12 @@
  * before it was written once, and every copy had drifted from the others by
  * the time they were compared. (#331)
  *
- * The file was `ConditionsSection.tsx` while it held one block. It holds six
- * now, so it is named for what it is: this design's shared detail sections.
+ * The file was `ConditionsSection.tsx` while it held one block. It holds seven
+ * now — `StringList`, `LabelsSection`, `AnnotationsSection`,
+ * `AnnotationsToggle`, `AnnotationLines`, `ConditionsSection` and
+ * `RelatedPodsSection`, the same seven `sections.test.tsx` sweeps for exactly
+ * one definition of — so it is named for what it is: this design's shared
+ * detail sections.
  */
 import { useEffect, useState } from "react";
 import {
@@ -145,9 +149,10 @@ export interface AnnotationSplit {
  * its account. It happens to remove the one annotation through which a Secret's
  * base64 `data` map reaches the page, but that is a side effect of a
  * legibility rule, not a promise — any other annotation, on any kind, is
- * printed exactly as it arrives. `Secret` keeps its own gate in `GenericBody`
- * (`AnnotationsToggle`, which mounts nothing until a reader asks), and a Secret
- * must never be routed through this instead. (#331)
+ * printed exactly as it arrives. `Secret` keeps its own gate in
+ * `AnnotationsSection` below (`AnnotationsToggle`, which mounts nothing until
+ * a reader asks), and a Secret must never be routed through this instead.
+ * (#331)
  */
 export function partitionAnnotations(annotations: Record<string, string>): AnnotationSplit {
   const entries = Object.entries(annotations);

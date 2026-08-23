@@ -298,15 +298,45 @@ describe("one definition each, across every detail body", () => {
     .filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
     .map((f) => ({ file: f, text: readFileSync(join(here, f), "utf8") }));
 
-  it.each(["StringList", "LabelsSection", "AnnotationsSection", "AnnotationsToggle", "AnnotationLines", "RelatedPodsSection", "ConditionsSection"])(
-    "defines %s exactly once, in sections.tsx",
-    (name) => {
-      const definedIn = sources
-        .filter(({ text }) => new RegExp(`function ${name}\\(`).test(text))
-        .map(({ file }) => file);
-      expect(definedIn).toEqual(["sections.tsx"]);
-    },
-  );
+  const SHARED = [
+    "StringList",
+    "LabelsSection",
+    "AnnotationsSection",
+    "AnnotationsToggle",
+    "AnnotationLines",
+    "RelatedPodsSection",
+    "ConditionsSection",
+  ];
+
+  /**
+   * Every form a component in this directory is actually written in:
+   * `function X(`, and `const X = (`/`const X: T = (` for the arrow form.
+   * The first version of this sweep matched only the `function` form, which
+   * left a re-added copy free to escape it by being written the other way —
+   * and both forms are already in use here (`AnnotationLines` is a function,
+   * `RELATED_POD_COLUMNS` a const), so that was not a hypothetical.
+   */
+  const definesComponent = (text: string, name: string) =>
+    new RegExp(`(?:function\\s+${name}\\s*[(<]|const\\s+${name}\\s*(?::[^=\\n]*)?=)`).test(text);
+
+  it.each(SHARED)("defines %s exactly once, in sections.tsx", (name) => {
+    const definedIn = sources.filter(({ text }) => definesComponent(text, name)).map(({ file }) => file);
+    expect(definedIn).toEqual(["sections.tsx"]);
+  });
+
+  it("catches a copy written either way round, so the form is not the escape hatch", () => {
+    // The predicate itself, checked against both spellings and against a
+    // near-miss that must NOT match — a sweep that matched everything would
+    // pass this file's real sources by accident.
+    for (const name of SHARED) {
+      expect(definesComponent(`function ${name}({ items }: { items: string[] }) {`, name)).toBe(true);
+      expect(definesComponent(`const ${name} = ({ items }: { items: string[] }) => (`, name)).toBe(true);
+      expect(definesComponent(`const ${name}: FC<Props> = (props) => (`, name)).toBe(true);
+      // A call site and an import are not a definition.
+      expect(definesComponent(`      <${name} items={ports} />`, name)).toBe(false);
+      expect(definesComponent(`import { ${name} } from "./sections";`, name)).toBe(false);
+    }
+  });
 
   it("reads a directory with every body in it, so the sweep above is not vacuous", () => {
     const files = sources.map((s) => s.file);

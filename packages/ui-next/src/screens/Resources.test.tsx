@@ -269,6 +269,27 @@ const paneName = () => peekPane()?.querySelector("h2")?.textContent ?? null;
 /** The pane's body — the subject it is ACTUALLY showing (from `getObject`). */
 const paneBody = () => peekPane()?.querySelector(".pane-body")?.textContent ?? "";
 
+/** The pane's tab strip, empty on any frame that is not the settled one. */
+const paneTabs = () => screen.queryAllByRole("tab").map((tab) => tab.textContent);
+
+/**
+ * Settles on the pane's READY frame, by name.
+ *
+ * Neither `paneName()` nor `paneBody()` will do on its own, and that cost a
+ * flake. `ResourceDetail` renders its loading `Inspector` with `name` straight
+ * from props, and that frame's own `LoadingState` reads "Loading Pod
+ * default/web-1" — so the heading AND the body already say "web-1" before
+ * `getObject` has answered. What does not exist until it has is the tab strip,
+ * so that is the signal, and it is what the tests using this are about
+ * anyway. (#331)
+ */
+async function paneReadyFor(name: string) {
+  await waitFor(() => {
+    expect(paneName()).toBe(name);
+    expect(paneTabs().length).toBeGreaterThan(0);
+  });
+}
+
 /**
  * A row of the LIST, by the name in its identifier cell.
  *
@@ -1068,10 +1089,17 @@ describe("the detail pane's two hosts", () => {
     expect(store.currentWorkspace().tabs.map((t) => t.route)).toEqual(routes);
   });
 
+  // Both settle through `paneReadyFor`, never on the subject's name. The
+  // loading frame carries that name in its heading AND in its own
+  // "Loading Pod default/web-1" label, so a `waitFor` on either returned
+  // before `getObject` answered — which let the panes test race the fetch
+  // (one failure in twelve runs) and made the Open-tab test vacuous, since
+  // the loading `Inspector` renders `actions` too and a full-tab host has
+  // none in either frame.
   it("offers no Open tab in the full-tab host, which is already the tab", async () => {
     openDetailTab("/k/Pod/default/web-1");
 
-    await waitFor(() => expect(paneName()).toBe("web-1"));
+    await paneReadyFor("web-1");
     expect(screen.queryByRole("button", { name: "Open tab" })).toBeNull();
   });
 
@@ -1079,15 +1107,15 @@ describe("the detail pane's two hosts", () => {
     const list = open("/k/pods");
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
     fireEvent.click(row("web-1"));
-    await waitFor(() => expect(paneName()).toBe("web-1"));
-    const peekTabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    await paneReadyFor("web-1");
+    const peekTabs = paneTabs();
     expect(peekTabs).toContain("YAML");
     list.unmount();
 
     openDetailTab("/k/Pod/default/web-1");
-    await waitFor(() => expect(paneName()).toBe("web-1"));
+    await paneReadyFor("web-1");
 
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(peekTabs);
+    expect(paneTabs()).toEqual(peekTabs);
   });
 });
 
