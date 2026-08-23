@@ -1,6 +1,6 @@
 import { Alert, Button, EmptyState, MultiSelect, Screen, Spinner, type Column, type TableSort } from "@srelens/ui-kit";
 import { toggleColumn } from "../lib/columnPrefs";
-import { openTab, setTabView, useTabs, useTabView } from "../lib/tabsStore";
+import { setTabView, useTabs, useTabView } from "../lib/tabsStore";
 
 /**
  * Shell pieces `Resources.tsx` (one kind per `/k/<slug>` tab) and
@@ -151,11 +151,6 @@ export function toggleColumnVisibility(params: {
   const { key, storageKey, hidden, filterKey, tabId } = params;
   if (!hidden.has(key) && filterKey === key) setTabView(tabId, { filterKey: null });
   toggleColumn(storageKey, key);
-}
-
-/** The one place both screens send a row's own detail route from. */
-export function openResourceTab(rowName: string, clusterName: string): void {
-  openTab(`/resources/${encodeURIComponent(rowName)}`, { clusterName });
 }
 
 /** "This kind has none" and "the filter matched none" are different facts,
