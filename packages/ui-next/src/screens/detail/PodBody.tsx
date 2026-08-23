@@ -27,12 +27,12 @@ import {
   EmptyState,
   KV,
   PairList,
-  Section,
   StatusPill,
   SubHead,
   Table,
   type Column,
 } from "@srelens/ui-kit";
+import { Section } from "./Section";
 import { ConditionsSection, StringList } from "./sections";
 
 /**

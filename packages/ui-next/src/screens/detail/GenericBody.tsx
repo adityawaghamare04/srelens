@@ -8,7 +8,8 @@ import {
   type Condition,
   type K8sObject,
 } from "@srelens/core";
-import { KV, Section } from "@srelens/ui-kit";
+import { KV } from "@srelens/ui-kit";
+import { Section } from "./Section";
 import { ConditionsSection, RelatedPodsSection, StringList } from "./sections";
 
 /**

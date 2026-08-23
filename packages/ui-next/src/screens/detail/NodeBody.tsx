@@ -1,5 +1,6 @@
 import { asRecord, str, type K8sObject } from "@srelens/core";
-import { KV, Section, StatusPill } from "@srelens/ui-kit";
+import { KV, StatusPill } from "@srelens/ui-kit";
+import { Section } from "./Section";
 
 /**
  * A Node's runtime identity — classic's "Info" section, ported fact-for-fact:

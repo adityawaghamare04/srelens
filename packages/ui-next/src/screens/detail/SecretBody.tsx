@@ -14,7 +14,8 @@ import {
   type DockerRegistryRow,
   type K8sObject,
 } from "@srelens/core";
-import { Button, EmptyState, KV, Section, Spinner, StatusPill, Table, type Column } from "@srelens/ui-kit";
+import { Button, EmptyState, KV, Spinner, StatusPill, Table, type Column } from "@srelens/ui-kit";
+import { Section } from "./Section";
 import { StringList } from "./sections";
 
 /**
@@ -86,7 +87,10 @@ function SecretEntry({ name, value }: { name: string; value: string }) {
 function SecretDataSection({ data }: { data: Record<string, string> }) {
   const keys = Object.keys(data);
   return (
-    <Section title={`Data (${plural(keys.length, "key")})`}>
+    // Remembered as `Data`, not as `Data (3 keys)`: the heading counts what
+    // is in the object, and a memory keyed on it would be lost the first
+    // time someone added a key.
+    <Section id="Data" title={`Data (${plural(keys.length, "key")})`}>
       {keys.length === 0 ? (
         <EmptyState title="No data" />
       ) : (

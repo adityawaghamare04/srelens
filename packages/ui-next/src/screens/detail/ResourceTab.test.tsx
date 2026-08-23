@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within, type RenderOptions } from "@testing-library/react";
 import { render as renderBare } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import type { K8sObject, PodMetric } from "@srelens/core";
 import type { KindDescriptor, ListRow } from "../../lib/kinds/types";
@@ -34,6 +35,7 @@ const { descriptorFor } = vi.hoisted(() => ({
 vi.mock("../../lib/kinds/descriptors", () => ({ descriptorFor }));
 
 import { ConsoleProvider } from "../../console";
+import { loadSectionFolds, setSectionOpen } from "../../lib/sectionFolds";
 import { ResourceTab } from "./ResourceTab";
 
 function Wrapper({ children }: { children: ReactNode }) {
@@ -131,6 +133,15 @@ async function openPod(props: Partial<{ kind: string; namespace: string | null; 
   return view;
 }
 
+/**
+ * Open a titled block, the way a reader does. Every one of them opens shut on
+ * a first visit — the reader asked for that — so a test reading what is inside
+ * one asks for it first.
+ */
+async function expand(name: string) {
+  await userEvent.click(screen.getByRole("button", { name }));
+}
+
 describe("ResourceTab — the full tab the design draws", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -141,6 +152,10 @@ describe("ResourceTab — the full tab the design draws", () => {
     podMetrics.mockResolvedValue({ metrics: [] });
     podsForSelector.mockResolvedValue({ pods: [] });
     descriptorFor.mockReturnValue(podDescriptor());
+    // The fold memory is a module-level store, so a block one test opens
+    // would still be open in the next one.
+    localStorage.clear();
+    loadSectionFolds();
   });
 
   describe("the breadcrumb header", () => {
@@ -270,6 +285,7 @@ describe("ResourceTab — the full tab the design draws", () => {
 
     it("puts the containers table on Overview, with the design's columns", async () => {
       await openPod();
+      await expand("Containers");
       // Scoped by the block's own heading: `Table` names no table, and the
       // Overview holds more than one.
       const block = screen
@@ -324,6 +340,27 @@ describe("ResourceTab — the full tab the design draws", () => {
         <ResourceTab context="prod-eu" kind="Pod" namespace="checkout" name="cart-session-store-1" />,
       );
       expect(getManifest).not.toHaveBeenCalled();
+    });
+
+    it("opens every titled block shut, here as in the peek", async () => {
+      await openPod();
+      for (const name of ["Containers", "Labels", "Annotations"]) {
+        expect(screen.getByRole("button", { name }).getAttribute("aria-expanded")).toBe("false");
+      }
+      // The lead fact grid has no heading, so it has no control and stays
+      // open — a tab that opened showing nothing at all is hostile.
+      expect(screen.getByText("Burstable")).toBeDefined();
+    });
+
+    it("reads the same memory the peek writes, since a block is the same block in both", async () => {
+      // The two hosts lay a subject out differently and remember it once. The
+      // memory is per KIND, so this is what a reader who opened Annotations
+      // on some other Pod sees here.
+      setSectionOpen("Pod", "Annotations", true);
+      await openPod();
+      expect(screen.getByRole("button", { name: "Annotations" }).getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText("dana@acme.io")).toBeDefined();
+      expect(screen.getByRole("button", { name: "Labels" }).getAttribute("aria-expanded")).toBe("false");
     });
   });
 });

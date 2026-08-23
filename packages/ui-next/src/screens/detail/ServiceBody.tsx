@@ -7,7 +7,8 @@ import {
   str,
   type K8sObject,
 } from "@srelens/core";
-import { KV, PairList, Section, Table, type Column } from "@srelens/ui-kit";
+import { KV, PairList, Table, type Column } from "@srelens/ui-kit";
+import { Section } from "./Section";
 import { StringList } from "./sections";
 
 /**

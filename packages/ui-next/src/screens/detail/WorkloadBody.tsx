@@ -11,7 +11,8 @@ import {
   type K8sObject,
   type ReplicaSetSummary,
 } from "@srelens/core";
-import { KV, LoadingState, PairList, Section, Table, type Column } from "@srelens/ui-kit";
+import { KV, LoadingState, PairList, Table, type Column } from "@srelens/ui-kit";
+import { Section } from "./Section";
 import {
   ConditionsSection,
   RelatedPodsSection,

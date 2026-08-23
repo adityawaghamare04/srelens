@@ -5,6 +5,7 @@ import { setContexts, setKubeconfigFiles, useContexts } from "../lib/clusters";
 import { loadColumnPrefs } from "../lib/columnPrefs";
 import { loadMarks } from "../lib/marks";
 import { loadPeekWidth } from "../lib/peekWidth";
+import { loadSectionFolds } from "../lib/sectionFolds";
 import { loadNamespaces } from "../lib/workspace";
 import { defaultState, reconcile } from "../lib/tabs";
 import { flushSave, installFlushOnUnload, loadTabsState, scheduleSave } from "../lib/tabsPersist";
@@ -124,6 +125,11 @@ export function Window({
       // here: unread, the pane opens at its default however wide the reader
       // last dragged it.
       loadPeekWidth();
+      // And which blocks of a resource detail the reader has opened. Unread,
+      // every detail opens fully collapsed however many blocks they last
+      // unfolded — and the first unfold then spreads over an empty record and
+      // erases every other kind's, exactly as `loadMarks` above describes.
+      loadSectionFolds();
       // And the namespace selection each cluster was narrowed to — unlike
       // `links`/`expanded` on the same store, this one is persisted, and
       // unread it costs the reader their picker choice on every launch.

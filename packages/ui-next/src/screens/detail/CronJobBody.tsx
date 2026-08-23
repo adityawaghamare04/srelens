@@ -10,7 +10,8 @@ import {
   type JobSummary,
   type K8sObject,
 } from "@srelens/core";
-import { KV, LoadingState, Section, StatusPill, Table, type Column } from "@srelens/ui-kit";
+import { KV, LoadingState, StatusPill, Table, type Column } from "@srelens/ui-kit";
+import { Section } from "./Section";
 import { StringList } from "./sections";
 
 /**

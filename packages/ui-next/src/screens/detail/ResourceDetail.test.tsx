@@ -59,6 +59,7 @@ vi.mock("@srelens/ui-kit", async (importOriginal) => {
 });
 
 import { ConsoleProvider, useConsole } from "../../console";
+import { loadSectionFolds, setSectionOpen } from "../../lib/sectionFolds";
 import { ResourceDetail } from "./ResourceDetail";
 import { ResourceTab } from "./ResourceTab";
 
@@ -188,7 +189,21 @@ describe("ResourceDetail", () => {
     descriptorFor.mockReturnValue(undefined);
     codeEditorProps.length = 0;
     asked.length = 0;
+    // Which blocks are open is a module-level store that outlives a render,
+    // exactly as it outlives a launch. Cleared, so no test inherits another's
+    // choices — least of all one about a Secret.
+    localStorage.clear();
+    loadSectionFolds();
   });
+
+  /**
+   * Open a titled block, the way a reader does. Every one of them opens shut
+   * on a first visit — "first open should keep everything collapsed" — so a
+   * test that reads what is inside one asks for it first.
+   */
+  async function expand(name: string) {
+    await userEvent.click(screen.getByRole("button", { name }));
+  }
 
   it("shows a loading state while the object is in flight", () => {
     getObject.mockImplementation(() => new Promise(() => {}));
@@ -673,6 +688,7 @@ describe("ResourceDetail", () => {
       });
       expect(screen.getByRole("heading", { level: 3, name: "Labels" })).toBeDefined();
       expect(screen.getByRole("heading", { level: 3, name: "Annotations" })).toBeDefined();
+      await expand("Labels");
       expect(screen.getByText("app=")).toBeDefined();
       expect(screen.getByText("checkout")).toBeDefined();
       // Not truncated: `PairList` writes no `title`, so wrapping is the only
@@ -687,8 +703,13 @@ describe("ResourceDetail", () => {
       expect(screen.queryByRole("heading", { level: 3, name: "Annotations" })).toBeNull();
     });
 
-    it("shows annotations expanded, with no toggle, on an ordinary kind", async () => {
+    it("shows an ordinary kind's annotations outright once the block is opened, with no second toggle", async () => {
+      // The design draws annotations open and ungated. The block itself folds
+      // now, which is a preference about how much of a pane a reader wants at
+      // once; what is NOT here is the `Show N annotations` gate, which is a
+      // security control and belongs to Secret alone.
       await open("ConfigMap", { annotations: { "srelens.io/last-applied-by": "dana@acme.io" } });
+      await expand("Annotations");
       expect(documentContains("dana@acme.io")).toBe(true);
       expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
     });
@@ -702,6 +723,10 @@ describe("ResourceDetail", () => {
 
       // Not as text, not as a title/aria-label/data-*, not anywhere in the
       // markup — nothing under the toggle is mounted at all.
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+
+      await expand("Annotations");
+      // Opening the BLOCK reveals the gate, never what is behind it.
       expect(documentContains(FIXTURE_VALUE)).toBe(false);
 
       const toggle = screen.getByRole("button", { name: "Show 1 annotation" });
@@ -721,6 +746,7 @@ describe("ResourceDetail", () => {
       // different rule and applies to Secret alone. Asserted on an ordinary
       // annotation, so the legibility rule cannot stand in for the gate.
       await open("Pod", { annotations: { "srelens.io/last-applied-by": "dana@acme.io" } });
+      await expand("Annotations");
       expect(documentContains("dana@acme.io")).toBe(true);
       expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
     });
@@ -729,9 +755,104 @@ describe("ResourceDetail", () => {
       await open("ConfigMap", {
         annotations: { [APPLIED]: FIXTURE_VALUE, "srelens.io/last-applied-by": "dana@acme.io" },
       });
+      await expand("Annotations");
       expect(documentContains(FIXTURE_VALUE)).toBe(false);
       expect(screen.getByText(new RegExp(APPLIED.replace(/\//g, "\\/"))).textContent).toMatch(/YAML/);
       expect(documentContains("dana@acme.io")).toBe(true);
+    });
+  });
+
+  /**
+   * "By default everything is uncollapsed, first open should keep everything
+   * collapsed, and from for next one remember what all was uncollapsed" — the
+   * reader's own words. The store is `lib/sectionFolds.ts` and its own tests
+   * cover the document; these are about the pane a reader actually sees.
+   */
+  describe("the blocks a reader has opened", () => {
+    const withMeta = (kind: string, meta: Record<string, unknown>): K8sObject => ({
+      kind,
+      apiVersion: "v1",
+      metadata: { name: "subject-1", namespace: "default", ...meta },
+    });
+
+    async function open(kind: string, meta: Record<string, unknown> = {}) {
+      getObject.mockResolvedValue({ object: withMeta(kind, meta) });
+      const view = render(<ResourceDetail context="ctx" kind={kind} namespace="default" name="subject-1" />);
+      await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
+      return view;
+    }
+
+    it("opens every titled block shut on a first visit, and the unheaded lead block open", async () => {
+      await open("ConfigMap", {
+        creationTimestamp: "2026-08-20T00:00:00Z",
+        labels: { app: "checkout" },
+        annotations: { "srelens.io/note": "hello" },
+      });
+      for (const name of ["Labels", "Annotations"]) {
+        expect(screen.getByRole("button", { name }).getAttribute("aria-expanded")).toBe("false");
+      }
+      // The lead fact list has no heading, so there is nothing to hang a
+      // control on — and a pane that opens showing nothing at all is hostile.
+      expect(screen.getByText("Namespace")).toBeDefined();
+      expect(screen.getByText("default")).toBeDefined();
+    });
+
+    it("remembers what the reader opened, for the next subject of that kind", async () => {
+      const first = await open("ConfigMap", { labels: { app: "checkout" } });
+      await expand("Labels");
+      expect(screen.getByText("checkout")).toBeDefined();
+      first.unmount();
+
+      await open("ConfigMap", { labels: { app: "billing" } });
+      expect(screen.getByRole("button", { name: "Labels" }).getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText("billing")).toBeDefined();
+    });
+
+    it("remembers per kind, so opening a block on one kind opens nothing on another", async () => {
+      const first = await open("ConfigMap", { labels: { app: "checkout" } });
+      await expand("Labels");
+      first.unmount();
+
+      await open("Pod", { labels: { app: "checkout" } });
+      expect(screen.getByRole("button", { name: "Labels" }).getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("leaves a Secret's annotations shut whatever any other kind's memory says", async () => {
+      // THE GATE, from the direction that would break it. `AnnotationsToggle`
+      // is a security control — a `kubectl apply`-managed Secret carries its
+      // whole base64 `data` map inside the applied-configuration annotation,
+      // and `k8s.getObject`'s redaction never touches annotations. A memory
+      // recorded on a Deployment is a different key and cannot reach it.
+      setSectionOpen("Deployment", "Annotations", true);
+      await open("Secret", { annotations: { "srelens.io/note": "fixture-only" } });
+      expect(screen.getByRole("button", { name: "Annotations" }).getAttribute("aria-expanded")).toBe("false");
+      expect(documentContains("fixture-only")).toBe(false);
+    });
+
+    it("still gates a Secret's values behind the reader's own reveal when the block itself is remembered open", async () => {
+      // The memory can disclose the GATE and never what is behind it. The
+      // toggle keeps its own state, starts shut on every mount, and reads
+      // nothing from this store — so the only thing a remembered "open" can
+      // show is the words on its button.
+      setSectionOpen("Secret", "Annotations", true);
+      await open("Secret", { annotations: { "srelens.io/note": "fixture-only" } });
+      expect(screen.getByRole("button", { name: "Annotations" }).getAttribute("aria-expanded")).toBe("true");
+      expect(documentContains("fixture-only")).toBe(false);
+      await userEvent.click(screen.getByRole("button", { name: "Show 1 annotation" }));
+      await waitFor(() => expect(documentContains("fixture-only")).toBe(true));
+    });
+
+    it("keeps the run of blocks unbroken, so a shut block still draws its rule", async () => {
+      // `.section + .section` is what divides a detail. A shut block is still
+      // a section, and the memory adds no element between any two of them.
+      const { container } = await open("ConfigMap", {
+        creationTimestamp: "2026-08-20T00:00:00Z",
+        labels: { app: "checkout" },
+        annotations: { "srelens.io/note": "hello" },
+      });
+      const body = container.querySelector(".pane-body")!;
+      expect(body.children.length).toBeGreaterThan(1);
+      expect([...body.children].every((el) => el.matches("section.section"))).toBe(true);
     });
   });
 

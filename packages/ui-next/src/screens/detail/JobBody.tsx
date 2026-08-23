@@ -1,5 +1,6 @@
 import { ageFromTimestamp, asRecord, durationBetween, str, timestampWithAge, type K8sObject } from "@srelens/core";
-import { KV, Section } from "@srelens/ui-kit";
+import { KV } from "@srelens/ui-kit";
+import { Section } from "./Section";
 
 /**
  * A Job's run — classic's "Job" section, ported fact-for-fact: completions,

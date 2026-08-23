@@ -37,6 +37,7 @@ import { GenericBody } from "./GenericBody";
 import { JobDetailsBody } from "./JobBody";
 import { NodeDetailsBody } from "./NodeBody";
 import { PodContainersBody, PodContainersTable, PodDetailsBody } from "./PodBody";
+import { SectionMemory } from "./Section";
 import { AnnotationsSection, LabelsSection } from "./sections";
 import { SecretDetailsBody } from "./SecretBody";
 import { ServiceDetailsBody } from "./ServiceBody";
@@ -604,7 +605,14 @@ export function useDetailPanes({
     tabs,
     active,
     selectTab,
-    pane,
+    // Wrapped ONCE, here, around the pane both hosts render: every titled
+    // block inside opens shut on a first visit and stays as the reader last
+    // left it for this kind. The peek and the tab lay those blocks out
+    // differently and share one memory, which is only possible because
+    // neither of them places it — a provider renders no element, so the run
+    // of sections beneath is still a run of direct siblings and every
+    // hairline is unchanged. (`lib/sectionFolds.ts`)
+    pane: <SectionMemory kind={kind}>{pane}</SectionMemory>,
   };
 }
 

@@ -28,11 +28,11 @@ import {
   KV,
   LoadingState,
   PairList,
-  Section,
   StatusPill,
   Table,
   type Column,
 } from "@srelens/ui-kit";
+import { Section } from "./Section";
 import { formatCpu, formatMemory } from "../../lib/kinds/columns";
 
 /**
