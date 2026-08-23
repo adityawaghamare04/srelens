@@ -158,9 +158,9 @@ describe("a section that discloses", () => {
   });
 
   it("keeps its content its own direct children, wrapped in nothing", () => {
-    // `FactGrid` lays a section's rows out as grid items of the section
-    // itself (`.factgrid .section > :not(.kv)`), so a panel element around
-    // the content would take the full tab's three columns away.
+    // A caller lays a section's content out — `ui-next`'s full tab grids its
+    // fact rows three across inside one — so a panel element between that
+    // caller's own layout and the rows would change what it is placing.
     const { container } = render(
       <Section title="Facts" open onToggle={() => {}}>
         <KV k="Status" v="Running" />

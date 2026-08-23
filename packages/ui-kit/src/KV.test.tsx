@@ -120,6 +120,14 @@ describe("the stacked row's rules", () => {
     expect(body).toContain("border-bottom");
   });
 
+  it("leaves no rule that lays a body out from a surface wrapping it", () => {
+    // `FactGrid` is gone. Its rules were the counter-example: a wrapper
+    // restyling children it did not build, which made the full tab's layout
+    // a property of the peek's DOM and needed a fresh exception for every
+    // child that was not a fact row.
+    expect(components).not.toContain(".factgrid");
+  });
+
   it("keeps every one of those rules on the row itself, never on an ancestor", () => {
     // What went wrong with `FactGrid`: its rules were descendant selectors
     // under a wrapper, so the layout belonged to whoever wrapped the body

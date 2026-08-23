@@ -684,34 +684,6 @@
   }
   .kv[data-stacked="true"] .kv-k { margin-bottom: 0.1rem; }
 
-  /* The same fact rows, read across a page instead of down a column.
-
-     `FactGrid` wraps a body it did not build — the peek and the full tab draw
-     one subject from one derivation — so every rule here is a descendant of
-     `.factgrid` and the peek's own rows are untouched by it existing. The
-     column count arrives as `--fact-cols` because a class per count is a class
-     the stylesheet has to enumerate. */
-  .factgrid { --fact-cols: 3; }
-  .factgrid .section {
-    display: grid;
-    grid-template-columns: repeat(var(--fact-cols), minmax(0, 1fr));
-    column-gap: 1.5rem;
-    align-content: start;
-  }
-  /* A heading, a table, a list of pods: everything that is not a pair takes
-     the whole width. A table in a third of a grid is not a narrower table. */
-  .factgrid .section > :not(.kv) { grid-column: 1 / -1; }
-  /* `Table` seats itself inside a `display: contents` wrapper, so the wrapper
-     never becomes a grid item and the rule above lands on nothing — it is the
-     TABLE that gets placed. Naming it directly is what keeps a Pod Volumes or
-     a related-pods table out of one column of three. */
-  .factgrid .section table { grid-column: 1 / -1; }
-  .factgrid .kv {
-    display: block;
-    padding: 0.4rem 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent);
-  }
-  .factgrid .kv-k { margin-bottom: 0.1rem; }
 
   /* a quiet field label — sentence case, no tracking */
   .field-label {
