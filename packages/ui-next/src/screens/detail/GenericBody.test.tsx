@@ -7,20 +7,33 @@ import type { K8sObject, PodSummary, PodMetric } from "@srelens/core";
 // here so a test controls what "the cluster said" without one.
 // `importOriginal` keeps every formatter (`relatedPodSelector`, `str`,
 // `conditionKind`, ...) intact.
-const { podsForSelector, podMetrics } = vi.hoisted(() => ({
-  podsForSelector: vi.fn(async (): Promise<{ pods?: PodSummary[]; error?: string }> => ({ pods: [] })),
-  podMetrics: vi.fn(async (): Promise<{ metrics?: PodMetric[]; error?: string }> => ({ metrics: [] })),
-}));
+const { podsForSelector, podMetrics, listReplicaSets, listEndpointSlices, listJobs, getSecret } = vi.hoisted(
+  () => ({
+    podsForSelector: vi.fn(async (): Promise<{ pods?: PodSummary[]; error?: string }> => ({ pods: [] })),
+    podMetrics: vi.fn(async (): Promise<{ metrics?: PodMetric[]; error?: string }> => ({ metrics: [] })),
+    // The four other live reads the real `DETAILS_BODY` entries make, stubbed
+    // so the sweep at the bottom of this file can mount every one of them.
+    listReplicaSets: vi.fn(async () => ({ replicasets: [] })),
+    listEndpointSlices: vi.fn(async () => ({ endpointslices: [] })),
+    listJobs: vi.fn(async () => ({ jobs: [] })),
+    getSecret: vi.fn(async () => ({ data: {} })),
+  }),
+);
 
 vi.mock("@srelens/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@srelens/core")>()),
   podsForSelector,
   podMetrics,
+  listReplicaSets,
+  listEndpointSlices,
+  listJobs,
+  getSecret,
 }));
 
 import userEvent from "@testing-library/user-event";
 import { Section } from "@srelens/ui-kit";
 import { GenericBody, SELF_DESCRIBING_KINDS } from "./GenericBody";
+import { DETAILS_BODY } from "./ResourceDetail";
 
 function object(
   kind: string,
@@ -467,5 +480,60 @@ describe("GenericBody", () => {
       expect(screen.getByText("Namespace")).toBeDefined();
       expect(screen.getByRole("heading", { level: 3, name: "Scheduling" })).toBeDefined();
     });
+  });
+});
+
+/**
+ * The hairline guard, run against the REAL bodies rather than the synthetic
+ * `NestedBody` above.
+ *
+ * `runIsUnbroken` proved it discriminates — `WrappedBody` fails it — but until
+ * now nothing asserted that any body actually shipped satisfies it, which is
+ * the claim the rule exists to make. It caught one: `WorkloadDetailsBody`
+ * returned a bare `EmptyState` (not a `.section`) from an `if (!kind)` guard,
+ * and a run containing it loses the rule on both sides. That guard is gone —
+ * the kind is now the route's, and `DETAILS_BODY[""]` is undefined. (#331)
+ */
+describe("every real DETAILS_BODY entry lands in an unbroken run", () => {
+  /** Enough of each kind for its body to draw something. Deliberately plain:
+   *  the sweep is about the SHAPE of what each body returns, not its facts. */
+  const FIXTURES: Record<string, K8sObject> = {
+    Pod: object("Pod", { containers: [{ name: "app", image: "app:1" }], nodeName: "node-a" }, {
+      phase: "Running",
+      conditions: [{ type: "Ready", status: "True" }],
+      containerStatuses: [{ name: "app", ready: true, restartCount: 0, state: { running: { startedAt: "2026-08-20T00:00:00Z" } } }],
+    }),
+    Deployment: object("Deployment", { replicas: 1, selector: { matchLabels: { app: "web" } } }, { readyReplicas: 1 }),
+    StatefulSet: object("StatefulSet", { replicas: 1, selector: { matchLabels: { app: "db" } } }, { readyReplicas: 1 }),
+    DaemonSet: object("DaemonSet", { selector: { matchLabels: { app: "agent" } } }, { desiredNumberScheduled: 1, numberReady: 1 }),
+    ReplicaSet: object("ReplicaSet", { replicas: 1, selector: { matchLabels: { app: "web" } } }, { readyReplicas: 1 }),
+    Service: object("Service", { type: "ClusterIP", clusterIP: "10.0.0.1", ports: [{ port: 80 }] }, {}),
+    Node: object("Node", {}, { nodeInfo: { kubeletVersion: "v1.30.0" }, capacity: { cpu: "4" }, allocatable: { cpu: "3800m" } }, { name: "node-a" }),
+    Job: object("Job", { completions: 1 }, { succeeded: 1, startTime: "2026-08-20T00:00:00Z" }),
+    CronJob: object("CronJob", { schedule: "0 2 * * *" }, {}),
+    ConfigMap: { ...object("ConfigMap", {}, {}), data: { "app.conf": "k=v" } } as K8sObject,
+    Secret: { ...object("Secret", {}, {}), type: "Opaque", data: { token: "cmVkYWN0ZWQ=" } } as K8sObject,
+  };
+
+  it("covers every entry in the table, so the sweep cannot silently shrink", () => {
+    expect(Object.keys(FIXTURES).sort()).toEqual(Object.keys(DETAILS_BODY).sort());
+  });
+
+  it.each(Object.keys(DETAILS_BODY))("keeps the run unbroken for %s, wrapper and body together", async (kind) => {
+    const Body = DETAILS_BODY[kind];
+    const fixture = FIXTURES[kind];
+    const { container } = render(
+      <GenericBody kind={kind} object={fixture} context="ctx">
+        <Body kind={kind} object={fixture} context="ctx" />
+      </GenericBody>,
+    );
+    // Every block a sibling of every other: `.section + .section` is what
+    // draws the hairline, so one element wrapped around one block costs the
+    // rule above AND below it, with nothing about the rendering looking wrong.
+    expect({ kind, unbroken: runIsUnbroken(container) }).toEqual({ kind, unbroken: true });
+    expect(container.children.length).toBeGreaterThan(0);
+    // Settles the live reads inside act(), so no state update lands after the
+    // assertion.
+    await waitFor(() => expect(container.children.length).toBeGreaterThan(0));
   });
 });

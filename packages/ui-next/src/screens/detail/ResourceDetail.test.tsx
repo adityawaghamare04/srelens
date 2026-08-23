@@ -978,5 +978,61 @@ describe("ResourceDetail", () => {
       // is allowed to vary.
       expect(barWords()).toEqual(inPeek);
     });
+
+    /**
+     * `DetailFooter` reconstitutes a `ListRow` for `useRowMenu`, and
+     * `suspended: object.spec?.suspend === true` is the one field on it that
+     * is not identity. It decides whether a CronJob's action reads Suspend or
+     * Resume — and dropping it read "Suspend" on an already-suspended CronJob,
+     * which is an action that does nothing, offered as though it did.
+     *
+     * The whole-branch review mutated it to `suspended={false}` and all 750
+     * tests stayed green: the adaptation was correct and entirely unpinned.
+     * Both directions are asserted here, because a single unsuspended fixture
+     * cannot catch the field being dropped — `isSuspended` reads a missing
+     * field exactly like `false`. (#331)
+     */
+    const cronJobDescriptor = () =>
+      baseDescriptor({ k8sKind: "CronJob", actions: { suspend: true, trigger: true } });
+
+    const cronJob = (suspend: boolean): K8sObject => ({
+      kind: "CronJob",
+      apiVersion: "batch/v1",
+      metadata: { name: "nightly-backup", namespace: "batch", creationTimestamp: daysAgo(120) },
+      spec: { schedule: "0 2 * * *", suspend },
+      status: {},
+    });
+
+    /** Every action the footer offers: the two on the bar plus whatever the
+     *  overflow holds. Suspend/Resume is the third entry for a CronJob, so a
+     *  reader has to open the overflow to reach it. */
+    async function allFooterActions(): Promise<(string | null)[]> {
+      const bar = barWords();
+      await userEvent.click(within(footer()!).getByRole("button", { name: "More actions" }));
+      const menu = await screen.findByRole("dialog");
+      const folded = Array.from(menu.querySelectorAll("button")).map((b) => b.textContent);
+      await userEvent.keyboard("{Escape}");
+      return [...bar, ...folded];
+    }
+
+    async function footerActionsFor(suspend: boolean): Promise<(string | null)[]> {
+      getObject.mockResolvedValue({ object: cronJob(suspend) });
+      descriptorFor.mockReturnValue(cronJobDescriptor());
+      const view = render(<ResourceDetail context="ctx" kind="CronJob" namespace="batch" name="nightly-backup" />);
+      await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
+      const words = await allFooterActions();
+      view.unmount();
+      return words;
+    }
+
+    it("offers Suspend on a running CronJob and Resume on a suspended one — the pane's own spec, not a default", async () => {
+      const running = await footerActionsFor(false);
+      expect(running).toContain("Suspend");
+      expect(running).not.toContain("Resume");
+
+      const suspended = await footerActionsFor(true);
+      expect(suspended).toContain("Resume");
+      expect(suspended).not.toContain("Suspend");
+    });
   });
 });
