@@ -607,6 +607,27 @@
   .section { padding: 0.6rem 0.75rem; }
   .section + .section { border-top: 1px solid var(--rule); }
   .section-title { margin-bottom: 0.3rem; }
+
+  /* A section that folds: the heading itself is the control, so the whole
+     line is clickable rather than a caret the size of a full stop beside it.
+     Inherits the heading's own type — this is the same line it was, wearing a
+     caret that turns with the state. */
+  .section-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .section-caret { transition: transform 120ms ease; color: var(--ink-faint); }
+  .section-caret[data-open="true"] { transform: rotate(90deg); }
+  /* A closed block is its heading and nothing else, so the gap the heading
+     kept for content it no longer has goes with it. */
+  .section[data-open="false"] .section-title { margin-bottom: 0; }
+
   .section-head {
     position: sticky;
     top: 0;

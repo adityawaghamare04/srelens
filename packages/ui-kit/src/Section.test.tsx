@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { KV } from "./KV";
 import { Section } from "./Section";
 
 /**
@@ -47,6 +49,127 @@ describe("Section", () => {
   });
 });
 
+/**
+ * The disclosure the reader's own request asks for: "first open should keep
+ * everything collapsed, and from for next one remember what all was
+ * uncollapsed". Remembering is the app's — see `ui-next/src/lib/sectionFolds`
+ * — and this is the half the kit owns: a heading that can be a control, a
+ * state it is told, and a toggle it reports.
+ */
+describe("a section that discloses", () => {
+  it("leaves the heading a plain heading when the caller offers no toggle", () => {
+    // Every call site that has one today keeps exactly what it had: a heading,
+    // its content, and no control at all.
+    render(<Section title="Conditions">rows</Section>);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("rows")).toBeDefined();
+  });
+
+  it("makes the heading a button that names what it opens", () => {
+    // The accessible name is the block's own name, which is what the reader
+    // is choosing to see. `AnnotationsToggle` counts entries instead because
+    // it sits over secret data and must not name a key; a section heading is
+    // already on the page whether it is open or shut.
+    render(
+      <Section title="Conditions" open={false} onToggle={() => {}}>
+        rows
+      </Section>,
+    );
+    const toggle = screen.getByRole("button", { name: "Conditions" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("type")).toBe("button");
+  });
+
+  it("keeps the heading in the outline, so the control does not cost the block its name", () => {
+    render(
+      <Section title="Conditions" open={false} onToggle={() => {}}>
+        rows
+      </Section>,
+    );
+    expect(screen.getByRole("heading", { level: 3, name: "Conditions" })).toBeDefined();
+  });
+
+  it("mounts none of its content while it is closed", () => {
+    // Collapsed means ABSENT, not hidden. `AnnotationsToggle` exists for
+    // exactly this reason and a section that merely hid its rows would put a
+    // Secret's annotation back in the markup.
+    const { container } = render(
+      <Section title="Annotations" open={false} onToggle={() => {}}>
+        <span>not-in-the-document</span>
+      </Section>,
+    );
+    expect(container.innerHTML).not.toContain("not-in-the-document");
+  });
+
+  it("is still a section when it is closed, so its rule is still drawn", () => {
+    // `.section + .section` is what divides a run. A closed section that
+    // rendered nothing at all would take a hairline with it.
+    const { container } = render(
+      <>
+        <Section title="Labels" open={false} onToggle={() => {}}>
+          rows
+        </Section>
+        <Section title="Annotations" open={false} onToggle={() => {}}>
+          rows
+        </Section>
+      </>,
+    );
+    expect([...container.children].every((el) => el.matches("section.section"))).toBe(true);
+  });
+
+  it("reports the state it is moving to, and keeps none of its own", async () => {
+    // Controlled outright: the kit holds no app state and touches no storage,
+    // so a section that flipped itself would disagree with the memory the
+    // moment the app said otherwise. Same split as `Sidebar`/`ResizeHandle`.
+    const onToggle = vi.fn();
+    const { rerender } = render(
+      <Section title="Conditions" open={false} onToggle={onToggle}>
+        rows
+      </Section>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Conditions" }));
+    expect(onToggle).toHaveBeenCalledWith(true);
+    expect(screen.queryByText("rows")).toBeNull();
+
+    rerender(
+      <Section title="Conditions" open onToggle={onToggle}>
+        rows
+      </Section>,
+    );
+    const toggle = screen.getByRole("button", { name: "Conditions" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("rows")).toBeDefined();
+    await userEvent.click(toggle);
+    expect(onToggle).toHaveBeenLastCalledWith(false);
+  });
+
+  it("has nothing to disclose without a heading, so it stays open", () => {
+    // The design heads the first block of a detail with nothing, so there is
+    // no control to hang on it — and a pane that opens showing nothing at all
+    // is hostile. An untitled section ignores both props rather than
+    // vanishing.
+    render(
+      <Section open={false} onToggle={() => {}}>
+        rows
+      </Section>,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("rows")).toBeDefined();
+  });
+
+  it("keeps its content its own direct children, wrapped in nothing", () => {
+    // `FactGrid` lays a section's rows out as grid items of the section
+    // itself (`.factgrid .section > :not(.kv)`), so a panel element around
+    // the content would take the full tab's three columns away.
+    const { container } = render(
+      <Section title="Facts" open onToggle={() => {}}>
+        <KV k="Status" v="Running" />
+      </Section>,
+    );
+    expect(container.querySelector("section.section > .kv")).not.toBeNull();
+  });
+});
+
 describe("a run of sections", () => {
   const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
   const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
@@ -62,5 +185,13 @@ describe("a run of sections", () => {
     const body = rule.slice(0, rule.indexOf("}"));
     expect(body).not.toContain("border:");
     expect(body).not.toContain("background:");
+  });
+
+  it("draws the disclosure's own line in the components layer too", () => {
+    // Same reason as the rule above: a utility in the JSX has to be able to
+    // override it, and Tailwind's utilities layer is declared after this one.
+    const rule = components.slice(components.indexOf("\n  .section-toggle {"));
+    expect(rule.slice(0, rule.indexOf("}"))).toContain("width: 100%");
+    expect(components).toContain(".section-caret[data-open=\"true\"]");
   });
 });
