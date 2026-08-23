@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { useState } from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { createEvent, render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ResizeHandle } from "./ResizeHandle";
 
@@ -94,6 +94,25 @@ describe("ResizeHandle", () => {
     expect(paneWidth()).toBe("180px");
     await userEvent.keyboard("{ArrowRight}{ArrowRight}{ArrowRight}");
     expect(paneWidth()).toBe("200px");
+  });
+
+  it("keeps its keys off the page, which nothing else would notice", () => {
+    // Deleted, every test here and in `Sidebar.test.tsx` stays green: Home and
+    // End would also jump the page to its ends and the arrows would scroll the
+    // pane, and the width would still be right. Pinned because this is now one
+    // primitive two call sites depend on, and a silent drift in exactly this
+    // class of detail is why it was shared rather than copied.
+    render(<Pane />);
+    for (const key of ["ArrowLeft", "ArrowRight", "Home", "End"]) {
+      const event = createEvent.keyDown(handle(), { key });
+      fireEvent(handle(), event);
+      expect(event.defaultPrevented, key).toBe(true);
+    }
+    // A key it does not act on is left alone: swallowing Tab or Escape here
+    // would cost the page its focus ring and its dialogs.
+    const passed = createEvent.keyDown(handle(), { key: "Escape" });
+    fireEvent(handle(), passed);
+    expect(passed.defaultPrevented).toBe(false);
   });
 
   it("goes to the extremes with Home and End, whichever edge it is on", async () => {

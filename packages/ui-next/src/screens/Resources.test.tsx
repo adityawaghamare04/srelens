@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -114,7 +114,14 @@ import * as store from "../lib/tabsStore";
 import { defaultState } from "../lib/tabs";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
 import { hiddenColumns, loadColumnPrefs, toggleColumn } from "../lib/columnPrefs";
-import { DEFAULT_PEEK_WIDTH, MAX_PEEK_WIDTH, MIN_PEEK_WIDTH, PEEK_WIDTH_KEY, loadPeekWidth } from "../lib/peekWidth";
+import {
+  DEFAULT_PEEK_WIDTH,
+  MAX_PEEK_WIDTH,
+  MIN_LIST_WIDTH,
+  MIN_PEEK_WIDTH,
+  PEEK_WIDTH_KEY,
+  loadPeekWidth,
+} from "../lib/peekWidth";
 import { resetListCache } from "../lib/resourceList";
 import { getView, resetView, setNamespaces } from "../lib/workspace";
 
@@ -1140,5 +1147,97 @@ describe("the peek's width", () => {
     // while it was at it.
     expect(peekPane()).toBe(paneNode);
     expect(getObject).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The room the peek leaves the list.
+ *
+ * The list does not own the window. The cluster rail (~46px) and the
+ * navigation `Sidebar` (238px, and up to 420 once the reader drags it) sit
+ * outside this screen entirely, so a ceiling computed from `window.innerWidth`
+ * hands the peek space that was never the list's to give. What the list and
+ * the peek actually share is the flex row they are siblings in, and the only
+ * way to say how wide that is under jsdom — which does no layout at all — is
+ * to tell the observer watching it.
+ */
+describe("the room the peek leaves the list", () => {
+  /** A 1280px window, less the 46px rail and a sidebar dragged to its widest. */
+  const SHARED = 1280 - 46 - 420;
+
+  type Watch = { target: Element; cb: ResizeObserverCallback };
+  let watches: Watch[];
+  let original: typeof globalThis.ResizeObserver;
+
+  beforeEach(() => {
+    watches = [];
+    original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class Recording implements ResizeObserver {
+      constructor(private readonly cb: ResizeObserverCallback) {}
+      observe(target: Element) {
+        watches.push({ target, cb: this.cb });
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+  });
+
+  afterEach(() => {
+    globalThis.ResizeObserver = original;
+  });
+
+  /** Tell everything watching a box that the box is this wide. */
+  function measured(width: number) {
+    act(() => {
+      for (const { target, cb } of watches) {
+        cb([{ target, contentRect: { width } }] as unknown as ResizeObserverEntry[], {} as ResizeObserver);
+      }
+    });
+  }
+
+  async function peekAtWeb1() {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneBody()).toContain("web-1"));
+  }
+
+  /** Drag the grip as far left as it will go — the widest the peek can get. */
+  function dragAsWideAsItGoes() {
+    fireEvent.mouseDown(peekGrip(), { clientX: 800 });
+    fireEvent.mouseMove(window, { clientX: -8000 });
+    fireEvent.mouseUp(window);
+  }
+
+  it("keeps the list its floor however wide the peek is dragged", async () => {
+    await peekAtWeb1();
+    measured(SHARED);
+
+    expect(peekGrip().getAttribute("aria-valuemax")).toBe(String(SHARED - MIN_LIST_WIDTH));
+    dragAsWideAsItGoes();
+    // The property the floor constant was always for, stated as the reader
+    // would see it: whatever is left of the row is still a usable table.
+    expect(SHARED - parseInt(peekWidth(), 10)).toBeGreaterThanOrEqual(MIN_LIST_WIDTH);
+  });
+
+  it("still stops at its own ceiling when the row is generous", async () => {
+    await peekAtWeb1();
+    measured(4000);
+
+    expect(peekGrip().getAttribute("aria-valuemax")).toBe(String(MAX_PEEK_WIDTH));
+    dragAsWideAsItGoes();
+    expect(peekWidth()).toBe(`${MAX_PEEK_WIDTH}px`);
+  });
+
+  it("stays legible in a row too narrow for both, and lets the table scroll instead", async () => {
+    await peekAtWeb1();
+    measured(MIN_LIST_WIDTH + 100);
+
+    // Below this the pane cannot show what it holds, so the minimum wins over
+    // the floor and the list scrolls inside itself — which is what `min-w-0`
+    // on its column is there for.
+    expect(peekGrip().getAttribute("aria-valuemax")).toBe(String(MIN_PEEK_WIDTH));
+    dragAsWideAsItGoes();
+    expect(peekWidth()).toBe(`${MIN_PEEK_WIDTH}px`);
   });
 });

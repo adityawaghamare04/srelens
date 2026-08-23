@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   listCrds,
   rowInSelection,
@@ -28,7 +28,7 @@ import { customDescriptorFor } from "../lib/kinds/custom";
 import { descriptorFor } from "../lib/kinds/descriptors";
 import { withRowAffordances } from "../lib/kinds/rowAffordances";
 import type { KindDescriptor, ListRow } from "../lib/kinds/types";
-import { savePeekWidth, setPeekWidth, usePeekWidth } from "../lib/peekWidth";
+import { clampPeekWidth, savePeekWidth, setPeekWidth, usePeekBounds, usePeekWidth } from "../lib/peekWidth";
 import { useResourceList } from "../lib/resourceList";
 import { describe, isBuiltInKind } from "../lib/routes";
 import { openTab } from "../lib/tabsStore";
@@ -221,9 +221,17 @@ function KindList({
 
   // How wide that pane is. Module state rather than this screen's, so the
   // width the reader dragged is the width every resource list opens at — and
-  // so it outlives the tab. `min`/`max` come back with it because the ceiling
-  // depends on the window, which this screen does not measure itself.
-  const peekSize = usePeekWidth();
+  // so it outlives the tab.
+  //
+  // The bounds are this screen's own business, though, and they come off the
+  // row below rather than off the window: the cluster rail and the navigation
+  // sidebar are outside this screen and the sidebar is itself resizable, so
+  // the window is space the list does not have. Clamped here rather than in
+  // the store, and on the way out rather than written back, so a pane
+  // squeezed by a narrow row widens again when the row does.
+  const listRow = useRef<HTMLDivElement>(null);
+  const peekBounds = usePeekBounds(listRow);
+  const peekWidth = clampPeekWidth(usePeekWidth(), peekBounds);
 
   function peekAt(rowNamespace: string | null, rowName: string) {
     setPeek((prev) =>
@@ -343,7 +351,7 @@ function KindList({
           row past the window — without it a flex item refuses to shrink below
           its content and the whole screen scrolls sideways instead of the
           table scrolling inside itself. */}
-      <div className="flex min-h-0 flex-1">
+      <div ref={listRow} className="flex min-h-0 flex-1">
         <div className="scroll min-h-0 min-w-0 flex-1">
           {list.status === "loading" ? (
             <LoadingState label={`Loading ${lower}`} />
@@ -392,7 +400,7 @@ function KindList({
           // number the reader owns. Changing it re-styles this element in
           // place — the pane below is not keyed and does not remount, or
           // every frame of a drag would refetch the resource.
-          <div className="relative flex min-h-0 shrink-0 flex-col" style={{ width: peekSize.width }}>
+          <div className="relative flex min-h-0 shrink-0 flex-col" style={{ width: peekWidth }}>
             {/* No `rule-l` on the box: the grip draws the rule between the
                 list and the pane itself, the same way the sidebar's does. It
                 is named after what the reader called it — "resource details"
@@ -400,9 +408,9 @@ function KindList({
                 Written live and persisted once on release. */}
             <ResizeHandle
               label="the resource details"
-              width={peekSize.width}
-              minWidth={peekSize.minWidth}
-              maxWidth={peekSize.maxWidth}
+              width={peekWidth}
+              minWidth={peekBounds.minWidth}
+              maxWidth={peekBounds.maxWidth}
               edge="left"
               onResize={setPeekWidth}
               onCommit={savePeekWidth}

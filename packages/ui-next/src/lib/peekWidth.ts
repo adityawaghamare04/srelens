@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { settingsStorage } from "@srelens/core";
 import type { Storage } from "./tabsPersist";
 
@@ -17,6 +17,15 @@ import type { Storage } from "./tabsPersist";
  * `localStorage` throws outright in a WebView with storage disabled. A width
  * that does not survive the session is better than a pane that cannot be
  * dragged.
+ *
+ * What this module deliberately has no opinion about is layout. It held one
+ * for a round — it clamped against `window.innerWidth` — and the window was
+ * the wrong box: the cluster rail and the navigation sidebar are outside the
+ * list entirely, and the sidebar is itself resizable, so a ceiling derived
+ * from the window handed the peek space the list never had to give. The space
+ * the two panes share is the flex row they are siblings in, which only the
+ * screen can measure. So the store holds a preference and {@link peekBounds}
+ * is a pure function of a measurement the call site takes. (task 17 review)
  */
 export const PEEK_WIDTH_KEY = "srelens.next.peekWidth";
 
@@ -35,36 +44,50 @@ export const MAX_PEEK_WIDTH = 640;
 
 /**
  * What the list keeps for itself whatever the peek asks for — roughly a name,
- * a namespace and a status column. The peek's real ceiling is whichever of
- * this and {@link MAX_PEEK_WIDTH} bites first, because a peek wider than the
- * window is a bug the reader can create with the mouse.
+ * a namespace and a status column. Measured against the row the list and the
+ * peek share, never against the window.
  */
 export const MIN_LIST_WIDTH = 360;
 
-/** The width, and the bounds it is currently allowed to move between. */
-export interface PeekWidth {
-  width: number;
+/** The range the peek may be dragged through, given the room it has. */
+export interface PeekBounds {
   minWidth: number;
   maxWidth: number;
 }
 
-const viewport = (): number => (typeof window === "undefined" ? Infinity : window.innerWidth);
-
 /**
- * The bounds the pane can actually honour right now.
+ * The bounds the pane can honour inside a row this wide.
  *
- * A window with room for neither hands back a minimum for a maximum rather
- * than a maximum below it: the pane stays legible and the table scrolls
- * inside itself, which is what `min-w-0` on the list's column is there for.
+ * `available` is the width of the box the list and the peek share. Zero means
+ * nobody has measured it yet — a first render, or a host that does no layout —
+ * and the answer is then the absolute ceiling, since a not-yet-measured row is
+ * no reason to pin the pane to its minimum. React runs the measuring layout
+ * effect before paint, so the reader never sees that state.
+ *
+ * A row with room for neither hands back a minimum for a maximum rather than a
+ * maximum below it: the pane stays legible and the table scrolls inside itself,
+ * which is what `min-w-0` on the list's column is there for.
  */
-export function peekBounds(width: number = viewport()): { minWidth: number; maxWidth: number } {
+export function peekBounds(available: number): PeekBounds {
+  const room = available > 0 ? available - MIN_LIST_WIDTH : MAX_PEEK_WIDTH;
   return {
     minWidth: MIN_PEEK_WIDTH,
-    maxWidth: Math.max(MIN_PEEK_WIDTH, Math.min(MAX_PEEK_WIDTH, width - MIN_LIST_WIDTH)),
+    maxWidth: Math.max(MIN_PEEK_WIDTH, Math.min(MAX_PEEK_WIDTH, Math.round(room))),
   };
 }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(value)));
+
+/**
+ * The width to actually render at.
+ *
+ * Applied on the way out rather than written back, so a pane squeezed by a
+ * narrow row widens again to what the reader chose when the row does, instead
+ * of the app having quietly forgotten their choice.
+ */
+export function clampPeekWidth(width: number, bounds: PeekBounds): number {
+  return clamp(width, bounds.minWidth, bounds.maxWidth);
+}
 
 /**
  * Anything but a positive, finite number reads as no stored width at all —
@@ -83,26 +106,9 @@ export function parseStoredPeekWidth(raw: string | null): number | null {
   return doc;
 }
 
-/**
- * The width the reader chose, held at whatever they dragged it to within the
- * absolute bounds. The *window's* share of the clamp is applied on the way
- * out instead, so a pane squeezed by a small window widens again when the
- * window does rather than having forgotten what it was set to.
- */
+/** The width the reader chose, within the absolute bounds and nothing else's. */
 let chosen = DEFAULT_PEEK_WIDTH;
 const listeners = new Set<() => void>();
-
-/**
- * `peekWidth` composes its answer, so it has to hand back the *same* object
- * every time nothing has changed: `useSyncExternalStore` tears down and
- * re-renders forever on a snapshot that is a fresh object on every read.
- *
- * Compared by value rather than cleared by `emit`, unlike its neighbours,
- * because one of this snapshot's inputs is the window: a resize changes the
- * answer without going through any setter here, so a cache only `emit` can
- * invalidate would hand back a stale ceiling.
- */
-let snapshot: PeekWidth = { width: chosen, ...peekBounds() };
 
 function emit() {
   for (const listener of listeners) listener();
@@ -110,24 +116,18 @@ function emit() {
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  // The window is half of what decides the maximum, so a resize is a change
-  // to this store as much as a drag is.
-  window.addEventListener("resize", listener);
   return () => {
     listeners.delete(listener);
-    window.removeEventListener("resize", listener);
   };
 }
 
-/** The peek's width and its current bounds, stable until one of them changes. */
-export function peekWidth(): PeekWidth {
-  const { minWidth, maxWidth } = peekBounds();
-  const width = clamp(chosen, minWidth, maxWidth);
-  if (snapshot.width === width && snapshot.minWidth === minWidth && snapshot.maxWidth === maxWidth) {
-    return snapshot;
-  }
-  snapshot = { width, minWidth, maxWidth };
-  return snapshot;
+/**
+ * The chosen width. A number, so `useSyncExternalStore` gets a snapshot that
+ * is stable by value for free — the composed object this used to hand back
+ * needed a cache to stop the store tearing.
+ */
+export function peekWidth(): number {
+  return chosen;
 }
 
 /**
@@ -166,7 +166,36 @@ export function savePeekWidth(width: number, storage: Storage = settingsStorage)
   }
 }
 
-/** The peek's width, re-rendering whoever reads it when it or the window changes. */
-export function usePeekWidth(): PeekWidth {
+/** The peek's chosen width, re-rendering whoever reads it when it changes. */
+export function usePeekWidth(): number {
   return useSyncExternalStore(subscribe, peekWidth, peekWidth);
+}
+
+/**
+ * The bounds for the row this ref is on — the box the list and the peek share.
+ *
+ * Observed rather than read once: the row's width changes when the window
+ * does, when the reader drags the navigation sidebar, and when the rail
+ * appears — none of which this screen hears about any other way. The
+ * observation is of the *row*, whose width does not depend on how the peek
+ * inside it is sized (`min-w-0` on the list's column is what guarantees that),
+ * so measuring cannot chase its own tail.
+ */
+export function usePeekBounds(ref: { current: HTMLElement | null }): PeekBounds {
+  const [available, setAvailable] = useState(0);
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    setAvailable(node.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      setAvailable(entry?.contentRect.width ?? node.getBoundingClientRect().width);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return useMemo(() => peekBounds(available), [available]);
 }
