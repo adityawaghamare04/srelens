@@ -158,8 +158,12 @@ function RecentJobsSection({
 /**
  * A CronJob's Details pane: Schedule, then its recent Jobs (classic's
  * `CronJobBody`). `relatedPodSelector` has no case for "CronJob", so
- * `GenericBody` fetches no related pods for one; its Metadata and Conditions
- * sections still wrap this body.
+ * `GenericBody` fetches no related pods for one; its unheaded identity block
+ * and its Conditions, Labels and Annotations blocks still wrap this body.
+ *
+ * Both blocks are returned as siblings, never wrapped: `.section + .section`
+ * is what draws the hairline between two blocks, so an element around either
+ * of them would take the rule out on both sides of it.
  */
 export function CronJobDetailsBody({ object, context }: { object: K8sObject; context: string }) {
   const namespace = str(object.metadata?.namespace);

@@ -19,6 +19,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 }));
 
 import userEvent from "@testing-library/user-event";
+import { Section } from "@srelens/ui-kit";
 import { GenericBody, SELF_DESCRIBING_KINDS } from "./GenericBody";
 
 function object(
@@ -38,6 +39,44 @@ function object(
  *  own `documentContains` helper. */
 function documentContains(value: string): boolean {
   return document.body.innerHTML.includes(value);
+}
+
+/**
+ * A nested `DETAILS_BODY` in the shape every real one has: its blocks returned
+ * as siblings of the wrapper's own, wrapped in nothing.
+ * `ServiceDetailsBody`, `NodeDetailsBody`, `SecretDetailsBody` and the rest
+ * all return a fragment for exactly this reason, and each pins it in its own
+ * file. Used here so the wrapper's tests model a real body rather than the
+ * mistake its doc comment warns about.
+ */
+function NestedBody({ title }: { title: string }) {
+  return (
+    <Section title={title} className="nested-body">
+      {`${title} rows`}
+    </Section>
+  );
+}
+
+/**
+ * The shape the wrapper's doc comment forbids: a nested body that returns its
+ * blocks inside an element of its own.
+ */
+function WrappedBody() {
+  return (
+    <div>
+      <Section title="Wrapped body">rows</Section>
+    </div>
+  );
+}
+
+/**
+ * Whether the hairline chain is unbroken: `.section + .section` is the rule
+ * that draws it, so every block of the run has to be a direct sibling of every
+ * other. One element wrapped around one block costs the rule on both sides of
+ * it — above and below — and nothing about the rendering looks wrong.
+ */
+function runIsUnbroken(container: HTMLElement): boolean {
+  return [...container.children].every((el) => el.matches("section.section"));
 }
 
 describe("GenericBody", () => {
@@ -118,9 +157,7 @@ describe("GenericBody", () => {
       expect(container.querySelector(".card")).toBeNull();
     });
 
-    it("lands every block as a sibling, so the rule between two of them is drawn", () => {
-      // `.section + .section` is what draws the hairline. A wrapper element
-      // around any block silently removes the rule on both sides of it.
+    it("lands every block as a sibling, the wrapper's own and the nested body's alike", () => {
       const { container } = render(
         <GenericBody
           kind="Lease"
@@ -131,11 +168,37 @@ describe("GenericBody", () => {
             { name: "l", namespace: "default", labels: { app: "controller" } },
           )}
           context="ctx"
-        />,
+        >
+          <NestedBody title="Nested kind body" />
+        </GenericBody>,
       );
-      const blocks = [...container.children];
-      expect(blocks.length).toBeGreaterThan(1);
-      for (const block of blocks) expect(block.matches("section.section")).toBe(true);
+      expect(container.children.length).toBeGreaterThan(1);
+      expect(runIsUnbroken(container)).toBe(true);
+    });
+
+    it("loses the rule on both sides of a nested body that wraps its own blocks", () => {
+      // The invariant the wrapper's doc comment states, made checkable — and
+      // the reason the check above is worth anything. A body returning its
+      // blocks inside a div is a sibling of neither the block before it nor
+      // the one after, so `.section + .section` matches at neither join and
+      // two hairlines vanish with nothing else looking wrong. Asserted from
+      // the violating side so the guard is known to discriminate rather than
+      // to pass on any shape at all.
+      const { container } = render(
+        <GenericBody
+          kind="Lease"
+          object={object("Lease", {}, { conditions: [{ type: "Ready", status: "True" }] }, {
+            name: "l",
+            namespace: "default",
+          })}
+          context="ctx"
+        >
+          <WrappedBody />
+        </GenericBody>,
+      );
+      expect(runIsUnbroken(container)).toBe(false);
+      const wrapped = [...container.children].filter((el) => !el.matches("section.section"));
+      expect(wrapped.map((el) => el.tagName)).toEqual(["DIV"]);
     });
 
     it("renders no block at all when a block has nothing to say", () => {
@@ -150,12 +213,11 @@ describe("GenericBody", () => {
     it("leaves the nested body first in the run when the object has no identity facts to show", () => {
       const { container } = render(
         <GenericBody kind="ConfigMap" object={object("ConfigMap", {}, {}, { name: "cm-1" })} context="ctx">
-          <section className="section" data-testid="nested-body">
-            Nested kind body
-          </section>
+          <NestedBody title="Nested kind body" />
         </GenericBody>,
       );
-      expect(container.children[0]).toBe(screen.getByTestId("nested-body"));
+      expect(container.children[0]).toBe(container.querySelector(".nested-body"));
+      expect(runIsUnbroken(container)).toBe(true);
     });
   });
 
@@ -268,16 +330,16 @@ describe("GenericBody", () => {
     it("renders the wrapper's facts and the nested body together, in classic's order", () => {
       const { container } = render(
         <GenericBody kind="ConfigMap" object={object("ConfigMap")} context="ctx">
-          <div data-testid="nested-body">Nested kind body</div>
+          <NestedBody title="Nested kind body" />
         </GenericBody>,
       );
       expect(screen.getByText("Namespace")).toBeDefined();
-      expect(screen.getByTestId("nested-body")).toBeDefined();
+      expect(screen.getByRole("heading", { level: 3, name: "Nested kind body" })).toBeDefined();
 
       // The wrapper's own facts precede the nested body in the DOM — classic's
       // `GenericDetail` nests `KindBody` after its own metadata section.
       const namespaceKey = screen.getByText("Namespace");
-      const nested = screen.getByTestId("nested-body");
+      const nested = screen.getByRole("heading", { level: 3, name: "Nested kind body" });
       // eslint-disable-next-line no-bitwise
       expect(namespaceKey.compareDocumentPosition(nested) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(container.textContent?.indexOf("Namespace")).toBeLessThan(
@@ -354,10 +416,10 @@ describe("GenericBody", () => {
     it.each([...SELF_DESCRIBING_KINDS])("passes %s's children through without a second identity block", (kind) => {
       render(
         <GenericBody kind={kind} object={object(kind)} context="ctx">
-          <div data-testid="own-body">Own Properties section</div>
+          <NestedBody title="Own properties" />
         </GenericBody>,
       );
-      expect(screen.getByTestId("own-body")).toBeDefined();
+      expect(screen.getByRole("heading", { level: 3, name: "Own properties" })).toBeDefined();
       expect(screen.queryByText("Namespace")).toBeNull();
     });
 
@@ -368,11 +430,11 @@ describe("GenericBody", () => {
     it("still wraps DaemonSet, which classic does not special-case", () => {
       render(
         <GenericBody kind="DaemonSet" object={object("DaemonSet")} context="ctx">
-          <div data-testid="daemonset-body">Scheduling</div>
+          <NestedBody title="Scheduling" />
         </GenericBody>,
       );
       expect(screen.getByText("Namespace")).toBeDefined();
-      expect(screen.getByTestId("daemonset-body")).toBeDefined();
+      expect(screen.getByRole("heading", { level: 3, name: "Scheduling" })).toBeDefined();
     });
   });
 });

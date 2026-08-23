@@ -5,7 +5,7 @@ import { KV, Section, StatusPill } from "@srelens/ui-kit";
  * A Node's runtime identity — classic's "Info" section, ported fact-for-fact:
  * whether the node is schedulable, its kubelet, OS image, kernel, container
  * runtime and CPU architecture. Node conditions (Ready, MemoryPressure, ...)
- * come from `GenericBody`'s Conditions table, not from here.
+ * come from `GenericBody`'s Conditions block, not from here.
  */
 function InfoSection({ object }: { object: K8sObject }) {
   const spec = asRecord(object.spec);
@@ -54,8 +54,13 @@ function CapacitySection({ object }: { object: K8sObject }) {
 /**
  * A Node's Details pane: Info and Capacity, in classic's own order
  * (`NodeBody`). `relatedPodSelector` has no case for "Node", so `GenericBody`
- * fetches no related pods for one; its Metadata and Conditions sections still
- * wrap this body, which is why neither is repeated here.
+ * fetches no related pods for one; its unheaded identity block and its
+ * Conditions, Labels and Annotations blocks still wrap this body, which is
+ * why none of them is repeated here.
+ *
+ * Both blocks are returned as siblings, never wrapped: `.section + .section`
+ * is what draws the hairline between two blocks, so an element around either
+ * of them would take the rule out on both sides of it.
  */
 export function NodeDetailsBody({ object }: { object: K8sObject }) {
   return (
