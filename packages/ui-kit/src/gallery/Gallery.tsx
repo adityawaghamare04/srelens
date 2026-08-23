@@ -45,6 +45,7 @@ import { ResourceTree, type ResourceNode } from "../ResourceTree";
 import { Screen } from "../Screen";
 import { SegmentBar } from "../SegmentBar";
 import { Select } from "../Select";
+import { ResizeHandle } from "../ResizeHandle";
 import { Sidebar } from "../Sidebar";
 import { Sparkline } from "../Sparkline";
 import { Stat } from "../Stat";
@@ -164,6 +165,7 @@ export function Gallery() {
   const [resource, setResource] = useState("pods");
   const [treeQuery, setTreeQuery] = useState("");
   const [sidebarQuery, setSidebarQuery] = useState("");
+  const [peekWidth, setPeekWidth] = useState(260);
   const [podFilter, setPodFilter] = useState("checkout");
   const [inspectorTab, setInspectorTab] = useState("overview");
   const [railCluster, setRailCluster] = useState("prod-eu");
@@ -1320,6 +1322,27 @@ export function Gallery() {
             error="kubeconfig could not be read"
           />
           <p className="flex-1 p-3 text-[0.75rem] text-muted">no workspace yet</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>ResizeHandle</h2>
+        {/* The grip on its own, on the edge a docked-right pane wears it: drag
+            it LEFT to widen, or focus it and press ArrowLeft. The arrows
+            follow the edge, not the other handle. */}
+        <div className="card flex overflow-hidden" style={{ height: 160 }}>
+          <p className="flex-1 p-3 text-[0.75rem] text-muted">the view this sits beside</p>
+          <div className="relative flex shrink-0 flex-col" style={{ width: peekWidth, background: "var(--surface-sunk)" }}>
+            <ResizeHandle
+              label="the details"
+              width={peekWidth}
+              minWidth={180}
+              maxWidth={420}
+              edge="left"
+              onResize={setPeekWidth}
+            />
+            <p className="p-3 text-[0.75rem] text-muted">{peekWidth}px</p>
+          </div>
         </div>
       </section>
 

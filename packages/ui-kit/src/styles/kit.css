@@ -988,6 +988,19 @@
     border-right: 1px solid var(--rule);
   }
   .resize-handle:hover { border-right-color: var(--accent); }
+  /* The mirrored grip. A pane docked on the right of the screen carries its
+     handle on its LEFT edge, so the rule it draws belongs on that side too —
+     the base rule above is one-sided, and left alone it would draw the grip's
+     border down the far side of the pane. In the same @layer deliberately:
+     this codebase declares its cascade layers, and a components rule that
+     landed in `utilities` would win and lose against the wrong things. */
+  .resize-handle[data-edge="left"] {
+    right: auto;
+    left: -2px;
+    border-right: none;
+    border-left: 1px solid var(--rule);
+  }
+  .resize-handle[data-edge="left"]:hover { border-left-color: var(--accent); }
 
   /* --- context menu ----------------------------------------------- */
   .ctx-menu {
