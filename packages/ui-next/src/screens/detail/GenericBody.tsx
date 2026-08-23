@@ -3,19 +3,14 @@ import {
   ageFromTimestamp,
   asArray,
   asRecord,
-  phaseKind,
   plural,
-  podMetrics,
-  podsForSelector,
   relatedPodSelector,
   str,
   type Condition,
   type K8sObject,
-  type PodMetric,
-  type PodSummary,
 } from "@srelens/core";
-import { Button, KV, LoadingState, PairList, Section, StatusPill, Table, type Column } from "@srelens/ui-kit";
-import { ConditionsSection } from "./ConditionsSection";
+import { Button, KV, PairList, Section } from "@srelens/ui-kit";
+import { AnnotationLines, ConditionsSection, RelatedPodsSection } from "./ConditionsSection";
 
 /**
  * The four kinds classic's `ObjectDetail` special-cases with their own
@@ -166,100 +161,26 @@ function LabelsSection({ labels }: { labels: Record<string, string> }) {
  * annotation on a ConfigMap or a Deployment holds that object's own spec,
  * which the pane shows anyway — but it does nothing for text that is visible
  * on purpose, which is what a Secret's annotation would be.
+ *
+ * Every other kind goes through the shared `AnnotationLines`, so there is one
+ * rule about how annotations print and what a pane holds back. Note what that
+ * does NOT do: holding `last-applied-configuration` back is a LEGIBILITY rule
+ * — a manifest on one line buries every other annotation in a 352px pane —
+ * and it is not redaction. It happens to drop the annotation a Secret's `data`
+ * map arrives in, and that is a side effect, not a promise: every other
+ * annotation on every kind is still printed exactly as it arrives. The
+ * `Secret` branch above therefore stays whatever `AnnotationLines` withholds,
+ * and a Secret must never be routed through it instead.
  */
 function AnnotationsSection({ kind, annotations }: { kind: string; annotations: Record<string, string> }) {
-  const pairs = Object.entries(annotations);
-  if (pairs.length === 0) return null;
+  if (Object.keys(annotations).length === 0) return null;
   return (
     <Section title="Annotations">
       {kind === "Secret" ? (
         <AnnotationsToggle annotations={annotations} />
       ) : (
-        <PairList pairs={pairs} breakValues />
+        <AnnotationLines annotations={annotations} />
       )}
-    </Section>
-  );
-}
-
-interface RelatedPod extends PodSummary {
-  cpu?: number;
-  memory?: number;
-}
-
-const RELATED_POD_COLUMNS: Column<RelatedPod>[] = [
-  { key: "name", header: "Name", render: (p) => <span className="font-mono">{p.name}</span> },
-  { key: "node", header: "Node", render: (p) => <span className="font-mono">{p.node || "—"}</span> },
-  { key: "ready", header: "Ready", render: (p) => p.ready },
-  { key: "cpu", header: "CPU", render: (p) => (p.cpu != null ? (p.cpu / 1000).toFixed(3) : "—") },
-  { key: "memory", header: "Memory", render: (p) => (p.memory != null ? `${p.memory} Mi` : "—") },
-  { key: "status", header: "Status", render: (p) => <StatusPill status={p.phase} kind={phaseKind(p.phase)} /> },
-];
-
-/**
- * The pods a kind manages, matched by `relatedPodSelector(kind, obj)` —
- * classic's `ManagedPods`, fetched live via core's
- * `podsForSelector`/`podMetrics` (metrics best-effort, same as classic: a
- * missing metrics-server must not hide the pods). Name and Node are
- * `ResourceLink`s in classic that navigate to the Pod/Node object; here they
- * render as plain mono text — see the task report for the full inert-value
- * list. Kept as its own copy rather than importing `WorkloadBody`'s
- * (unexported, and outside this task's file scope) — matches the "small
- * local helper, not a shared component" idiom the two body files already
- * follow for `StringList`.
- */
-function RelatedPodsSection({
-  context,
-  namespace,
-  selector,
-}: {
-  context: string;
-  namespace: string;
-  selector: Record<string, string>;
-}) {
-  const [state, setState] = useState<{ status: "loading" | "ready" | "error"; pods?: RelatedPod[] }>({
-    status: "loading",
-  });
-  const selectorKey = JSON.stringify(selector);
-
-  useEffect(() => {
-    let active = true;
-    setState({ status: "loading" });
-    Promise.all([
-      podsForSelector(context, namespace, selector),
-      // Metrics are best-effort: a missing metrics-server must not hide pods.
-      podMetrics(context, namespace).catch((): { metrics?: PodMetric[] } => ({ metrics: [] })),
-    ]).then(([podsOut, metricsOut]) => {
-      if (!active) return;
-      if (podsOut.error) {
-        setState({ status: "error" });
-        return;
-      }
-      const usage = new Map((metricsOut.metrics ?? []).map((m) => [m.name, m]));
-      const pods = (podsOut.pods ?? []).map((p) => {
-        const m = usage.get(p.name);
-        return { ...p, cpu: m?.cpuMillicores, memory: m?.memoryMiB };
-      });
-      setState({ status: "ready", pods });
-    });
-    return () => {
-      active = false;
-    };
-    // selectorKey captures the selector's identity without a new object each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [context, namespace, selectorKey]);
-
-  if (state.status === "error") return null; // a missing pods list shouldn't break the panel
-  if (state.status === "loading") {
-    return (
-      <Section title="Pods">
-        <LoadingState label="Loading pods" />
-      </Section>
-    );
-  }
-
-  return (
-    <Section title="Pods">
-      <Table columns={RELATED_POD_COLUMNS} data={state.pods ?? []} getRowKey={(p) => p.name} emptyText="No pods" />
     </Section>
   );
 }

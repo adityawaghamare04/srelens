@@ -308,21 +308,52 @@ describe("GenericBody", () => {
     });
 
     it("gates Secret and nothing else — every other kind's annotations are open, as the design draws them", () => {
-      const configMapWithLastApplied = object(
+      // Asserted on an ORDINARY annotation, deliberately. The applied-manifest
+      // key cannot show this any more: the shared `AnnotationLines` holds that
+      // one key back on every kind for legibility, so using it here would
+      // prove nothing about the gate.
+      const configMap = object(
+        "ConfigMap",
+        {},
+        {},
+        { name: "cm-1", namespace: "default", annotations: { "srelens.io/last-applied-by": "dana@acme.io" } },
+      );
+      render(<GenericBody kind="ConfigMap" object={configMap} context="ctx" />);
+      expect(documentContains("dana@acme.io")).toBe(true);
+      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
+    });
+
+    it("still gates a Secret whose applied manifest the shared rule would have withheld anyway", () => {
+      // The two rules must not be confused for one. `AnnotationLines` drops
+      // `last-applied-configuration` for legibility and would happen to drop
+      // this value too — but a Secret never reaches it. The gate is what keeps
+      // the value out of the document, and it is still the gate doing it.
+      render(<GenericBody kind="Secret" object={KUBECTL_MANAGED_SECRET} context="ctx" />);
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+      expect(screen.getByRole("button", { name: "Show 1 annotation" })).toBeDefined();
+    });
+
+    it("withholds an ordinary kind's applied manifest for length, and says where to read it", () => {
+      // A legibility rule, not redaction: a manifest on one line buries every
+      // other annotation in a 352px pane. The shorter annotation beside it is
+      // still printed in full.
+      const configMap = object(
         "ConfigMap",
         {},
         {},
         {
           name: "cm-1",
           namespace: "default",
-          annotations: { "kubectl.kubernetes.io/last-applied-configuration": FIXTURE_VALUE },
+          annotations: {
+            "kubectl.kubernetes.io/last-applied-configuration": FIXTURE_VALUE,
+            "srelens.io/last-applied-by": "dana@acme.io",
+          },
         },
       );
-      render(<GenericBody kind="ConfigMap" object={configMapWithLastApplied} context="ctx" />);
-      // A ConfigMap's applied manifest holds its `data`, which is not secret;
-      // the gate exists for the Secret whose `data` the redaction misses.
-      expect(documentContains(FIXTURE_VALUE)).toBe(true);
-      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
+      render(<GenericBody kind="ConfigMap" object={configMap} context="ctx" />);
+      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+      expect(screen.getByText(/kubectl.kubernetes.io\/last-applied-configuration/).textContent).toMatch(/YAML/);
+      expect(documentContains("dana@acme.io")).toBe(true);
     });
   });
 
