@@ -13,6 +13,7 @@ import {
 } from "@srelens/core";
 import { KV, LoadingState, PairList, Table, type Column } from "@srelens/ui-kit";
 import { Section } from "./Section";
+import type { DetailFact, FactsFor } from "./facts";
 import {
   ConditionsSection,
   RelatedPodsSection,
@@ -65,7 +66,7 @@ const DEPLOY_REVISION_COLUMNS: Column<ReplicaSetSummary>[] = [
   { key: "age", header: "Age", getSortValue: ageSortValue, render: (r) => r.age },
 ];
 
-interface RevisionsState {
+export interface RevisionsState {
   status: "idle" | "loading" | "ready" | "error";
   revisions?: ReplicaSetSummary[];
 }
@@ -74,19 +75,22 @@ interface RevisionsState {
  * The ReplicaSets a Deployment has rolled out, fetched once for the whole
  * body — classic's `DeployRevisions`, via core's `listReplicaSets`.
  *
- * Held here rather than inside the revisions table because two blocks need
- * it: the table below, and the `Revision` fact above it, whose "(6m ago)"
- * is the age of the ReplicaSet carrying the current revision number. Two
- * fetches of one list is one list too many, and two lists that arrive at
- * different moments is a pane that can show a revision the table does not
- * have.
+ * Called by the SHARED layer, once per subject, and its result handed to both
+ * things that need it: the table below, and the `Revision` fact
+ * (`workloadFacts`), whose "(6m ago)" is the age of the ReplicaSet carrying
+ * the current revision number. Two fetches of one list is one list too many,
+ * and two lists that arrive at different moments is a pane that can show a
+ * revision the table does not have — which is exactly what would happen if
+ * the fact list and this body each fetched their own now that the fact list
+ * is data drawn by two different screens.
  *
  * Deployment-only (`enabled`): classic never calls this for
  * StatefulSet/DaemonSet/ReplicaSet either, since only a Deployment has
  * revision history of its own. The hook still runs for every kind — hooks
- * must — and simply fetches nothing.
+ * must, and the shared layer calls it for every kind a detail can be opened
+ * on — and simply fetches nothing.
  */
-function useDeployRevisions(context: string, namespace: string, ownerName: string, enabled: boolean): RevisionsState {
+export function useDeployRevisions(context: string, namespace: string, ownerName: string, enabled: boolean): RevisionsState {
   const [state, setState] = useState<RevisionsState>({ status: "idle" });
 
   useEffect(() => {
@@ -145,7 +149,13 @@ function DeployRevisionsSection({ state }: { state: RevisionsState }) {
  * kind-specific extras (Managed by, a StatefulSet's Service and volume claim
  * templates) beside their own kin.
  *
- * No heading and no `Name` row: the pane's header has already given the name,
+ * DATA, so the two detail screens can lay one list out two ways — the peek
+ * down a column, the full tab across three — without either drawing the
+ * other's markup. `revisions` arrives from the shared layer, which fetches it
+ * once for this list AND for the Deploy Revisions table below, so a rollout
+ * cannot be in one and missing from the other.
+ *
+ * No heading and no `Name` fact: the pane's header has already given the name,
  * the kind and the namespace.
  *
  * NO STATUS ROW EITHER, and that is the fix rather than an omission. This
@@ -176,15 +186,7 @@ function DeployRevisionsSection({ state }: { state: RevisionsState }) {
  * Namespace and Managed by are a `ResourceLink`/`LinkedResources` in classic
  * that navigate; they render here as plain text (see the task report).
  */
-function WorkloadFactsSection({
-  kind,
-  object,
-  revisions,
-}: {
-  kind: string;
-  object: K8sObject;
-  revisions?: ReplicaSetSummary[];
-}) {
+export const workloadFacts: FactsFor = ({ kind, object, revisions }) => {
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
@@ -217,34 +219,39 @@ function WorkloadFactsSection({
       : [];
   const images = templateImages(spec);
 
-  return (
-    <Section>
-      <KV k="Replicas" v={`${ready} ready · ${desired} desired`} />
-      <KV k="Up to date" v={`${updated} of ${desired}`} />
-      {strategy && <KV k="Strategy" v={strategy} />}
-      {revision && <KV k="Revision" v={revisionText} />}
-      {Object.keys(selector).length > 0 && (
-        <KV k="Selector" v={<PairList pairs={Object.entries(selector)} breakValues />} />
-      )}
-      {spec.minReadySeconds != null && <KV k="Min ready seconds" v={str(spec.minReadySeconds)} />}
-      {owners.length > 0 && (
-        <KV k="Managed by" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
-      )}
-      {serviceName && <KV k="Service" v={serviceName} mono />}
-      {volumeClaimTemplateNames.length > 0 && (
-        <KV k="Volume claim templates" v={volumeClaimTemplateNames.join(", ")} />
-      )}
-      {meta.namespace && <KV k="Namespace" v={str(meta.namespace)} mono />}
-      {created && <KV k="Created" v={`${ageFromTimestamp(created, Date.now())} ago`} />}
-      {images.length > 0 && (
-        <KV
-          k="Image"
-          v={images.length === 1 ? <span className="font-mono">{images[0]}</span> : <StringList items={images} />}
-        />
-      )}
-    </Section>
-  );
-}
+  const facts: DetailFact[] = [
+    { label: "Replicas", value: `${ready} ready · ${desired} desired` },
+    { label: "Up to date", value: `${updated} of ${desired}` },
+  ];
+  if (strategy) facts.push({ label: "Strategy", value: strategy });
+  if (revision) facts.push({ label: "Revision", value: revisionText });
+  if (Object.keys(selector).length > 0) {
+    facts.push({ label: "Selector", value: <PairList pairs={Object.entries(selector)} breakValues /> });
+  }
+  if (spec.minReadySeconds != null) {
+    facts.push({ label: "Min ready seconds", value: str(spec.minReadySeconds) });
+  }
+  if (owners.length > 0) {
+    facts.push({
+      label: "Managed by",
+      value: <StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />,
+    });
+  }
+  if (serviceName) facts.push({ label: "Service", value: serviceName, mono: true });
+  if (volumeClaimTemplateNames.length > 0) {
+    facts.push({ label: "Volume claim templates", value: volumeClaimTemplateNames.join(", ") });
+  }
+  if (meta.namespace) facts.push({ label: "Namespace", value: str(meta.namespace), mono: true });
+  if (created) facts.push({ label: "Created", value: `${ageFromTimestamp(created, Date.now())} ago` });
+  if (images.length > 0) {
+    facts.push({
+      label: "Image",
+      value:
+        images.length === 1 ? <span className="font-mono">{images[0]}</span> : <StringList items={images} />,
+    });
+  }
+  return facts;
+};
 
 /**
  * A DaemonSet's Scheduling block — classic's `DaemonSetBody`. Unlike the
@@ -316,28 +323,31 @@ export function WorkloadDetailsBody({
   kind,
   object,
   context,
+  revisions = { status: "idle" },
 }: {
   kind: string;
   object: K8sObject;
   context: string;
+  /** The shared layer's one read of this Deployment's ReplicaSets. Defaulted
+   *  to idle so a body rendered on its own — in a test, or by a caller with
+   *  no revisions to hand — draws no revisions table rather than throwing. */
+  revisions?: RevisionsState;
 }) {
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const namespace = str(meta.namespace);
-  const name = str(meta.name);
   const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
   const hasSelector = Object.keys(selector).length > 0;
   const selfDescribing = SELF_DESCRIBING_KINDS.has(kind);
   const conditions = asArray(asRecord(object.status).conditions) as unknown as Condition[];
-  const revisions = useDeployRevisions(context, namespace, name, kind === "Deployment");
 
   return (
     <>
-      {kind === "DaemonSet" ? (
-        <DaemonSetSchedulingSection object={object} />
-      ) : (
-        <WorkloadFactsSection kind={kind} object={object} revisions={revisions.revisions} />
-      )}
+      {/* A DaemonSet has no replicas to lead with — its numbers are per-node
+          — so its Scheduling block is a titled section here rather than a
+          lead fact list, and `detailFacts` gives it the identity facts every
+          other wrapped kind gets. */}
+      {kind === "DaemonSet" && <DaemonSetSchedulingSection object={object} />}
       <DeployRevisionsSection state={revisions} />
       {hasSelector && namespace && selfDescribing && (
         <RelatedPodsSection context={context} namespace={namespace} selector={selector} />

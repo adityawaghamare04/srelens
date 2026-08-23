@@ -23,20 +23,35 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   listReplicaSets,
 }));
 
+import { KV } from "@srelens/ui-kit";
+import { str } from "@srelens/core";
 import { formatCpu, formatMemory } from "../../lib/kinds/columns";
+import { Section } from "./Section";
+import { detailFacts } from "./detailData";
 import { GenericBody } from "./GenericBody";
-import { WorkloadDetailsBody as Body } from "./WorkloadBody";
+import { useDeployRevisions, WorkloadDetailsBody as Body } from "./WorkloadBody";
 
 /**
- * The body under test, with the ROUTE's kind supplied the way `ResourceDetailView`
- * supplies it. Defaulted from the fixture's own `kind` so the cases below read
- * as they did — that is plumbing for this file, not the `str(object.kind)`
- * re-derivation the body itself carried until the whole-branch review. One
- * case below passes a kind the object contradicts, which is what proves the
- * prop is the thing being read.
+ * The workload detail as a SCREEN composes it: the kind's lead fact list above
+ * the body's own titled blocks, and the one live read they share made once,
+ * here, exactly as the shared layer makes it.
+ *
+ * The facts are data now (`workloadFacts`, reached through `detailFacts`)
+ * because the peek and the full tab lay one list out two different ways —
+ * down a column, and across three. Neither layout is this file's business, so
+ * the list is drawn through the plainest possible rows and the cases below
+ * assert what was DERIVED; each screen's own test pins its own layout. The
+ * plumbing here is what both screens really do, which is why the revisions
+ * fetch is still asserted to happen exactly once for the fact AND the table.
+ * (#331)
+ *
+ * The ROUTE's kind is supplied the way each screen supplies it, defaulted from
+ * the fixture's own `kind` so the cases below read as they did. One case
+ * passes a kind the object contradicts, which is what proves the prop is the
+ * thing being read.
  */
 function WorkloadDetailsBody({
-  kind,
+  kind: routeKind,
   object,
   context,
 }: {
@@ -44,7 +59,26 @@ function WorkloadDetailsBody({
   object: K8sObject;
   context: string;
 }) {
-  return <Body kind={kind ?? String(object.kind ?? "")} object={object} context={context} />;
+  const kind = routeKind ?? String(object.kind ?? "");
+  const revisions = useDeployRevisions(
+    context,
+    str(object.metadata?.namespace),
+    str(object.metadata?.name),
+    kind === "Deployment",
+  );
+  const facts = detailFacts({ kind, object, revisions });
+  return (
+    <>
+      {facts.length > 0 && (
+        <Section>
+          {facts.map((fact) => (
+            <KV key={fact.label} k={fact.label} v={fact.value} mono={fact.mono} />
+          ))}
+        </Section>
+      )}
+      <Body kind={kind} object={object} context={context} revisions={revisions} />
+    </>
+  );
 }
 
 function workload(

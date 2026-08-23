@@ -273,14 +273,30 @@ describe("ResourceTabView — the full tab the design draws", () => {
   });
 
   describe("Overview", () => {
-    it("lays the facts out as three columns of label-above-value", async () => {
+    it("lays the facts out as three columns of label-above-value, in a grid of its own", async () => {
       await openPod();
-      const grid = document.querySelector<HTMLElement>(".factgrid")!;
-      expect(grid.style.getPropertyValue("--fact-cols")).toBe("3");
-      // The very rows the peek reads down a column — one derivation, two
+      // THIS SCREEN'S grid, built here — not the peek's rows restyled from
+      // above, which is what `FactGrid` did. The rows say so themselves:
+      // `stacked` is the form a row takes, so the label sits over the value
+      // and the pair is ruled off beneath.
+      const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']")!;
+      expect(grid).toBeTruthy();
+      expect(grid.className).toContain("grid-cols-3");
+      const rows = [...grid.querySelectorAll<HTMLElement>(".kv")];
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((row) => row.dataset.stacked === "true")).toBe(true);
+      // The very facts the peek reads down a column — one derivation, two
       // layouts.
       expect(within(grid).getByText("QoS class")).toBeDefined();
       expect(within(grid).getByText("Burstable")).toBeDefined();
+    });
+
+    it("draws no fact of the peek's own form, so nothing here is the peek's markup", async () => {
+      await openPod();
+      const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']")!;
+      // Every row in the grid is this screen's form. A row here in the peek's
+      // form would mean the tab was showing something the peek built.
+      expect(grid.querySelectorAll(".kv:not([data-stacked])")).toHaveLength(0);
     });
 
     it("puts the containers table on Overview, with the design's columns", async () => {

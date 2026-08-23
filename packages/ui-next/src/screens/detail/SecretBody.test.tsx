@@ -24,6 +24,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 }));
 
 import { GenericBody } from "./GenericBody";
+import { detailFacts } from "./detailData";
 import { SecretDetailsBody } from "./SecretBody";
 
 // Obviously-fake fixture text — never anything that reads as a real
@@ -321,7 +322,10 @@ lUc3RsBva1V3RlPz+Jo=
         </GenericBody>,
       );
       await waitFor(() => expect(getSecret).toHaveBeenCalled());
-      expect(screen.getAllByText("Namespace")).toHaveLength(1);
+      // The namespace is a fact the SCREEN draws, off the one derivation both
+      // screens read; neither wrapper nor body states it again.
+      expect(detailFacts({ kind: "Secret", object: s }).map((f) => f.label)).toContain("Namespace");
+      expect(screen.queryByText("Namespace")).toBeNull();
       expect(screen.queryAllByRole("heading", { name: "Pods" })).toHaveLength(0);
       expect(podsForSelector).not.toHaveBeenCalled();
     });

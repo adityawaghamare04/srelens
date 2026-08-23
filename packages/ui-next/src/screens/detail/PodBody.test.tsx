@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { K8sObject } from "@srelens/core";
-import { PodContainersBody, PodDetailsBody } from "./PodBody";
+import { KV } from "@srelens/ui-kit";
+import { Section } from "./Section";
+import { PodContainersBody, PodDetailsBody, podFacts } from "./PodBody";
 
 const APP_CONTAINER = {
   name: "app",
@@ -172,6 +174,26 @@ function factLabels(container: HTMLElement, heading?: string): string[] {
   return [...(block?.querySelectorAll(".kv-k") ?? [])].map((el) => el.textContent ?? "");
 }
 
+/**
+ * A pod's facts, drawn.
+ *
+ * `podFacts` hands back DATA — a list of label/value pairs — because the two
+ * detail screens lay one list out two different ways: the peek reads it down a
+ * column of label-beside-value rows, the full tab across three columns of
+ * label-above-value. Neither layout is this file's business, so the cases
+ * below render the list through the plainest possible rows and assert what was
+ * DERIVED. Each screen's own test pins its own layout. (#331)
+ */
+function renderFacts(object: K8sObject) {
+  return render(
+    <Section>
+      {podFacts({ kind: "Pod", object }).map((fact) => (
+        <KV key={fact.label} k={fact.label} v={fact.value} mono={fact.mono} />
+      ))}
+    </Section>,
+  );
+}
+
 describe("PodDetailsBody", () => {
   const FULL_POD = pod(
     {
@@ -199,13 +221,13 @@ describe("PodDetailsBody", () => {
     },
   );
 
-  describe("the fact list", () => {
+  describe("the pod's facts, which each screen lays out itself", () => {
     it("leads with what the design's own Pod frame leads with, and heads it with nothing", () => {
       // Status first, Created ninth — not classic's Created/Name/Namespace
       // opening. The extras srelens shows beyond the design frame sit beside
       // their own kin (Pod IPs after Pod IP, Last restart after Restarts)
       // rather than at the end.
-      const { container } = render(<PodDetailsBody object={FULL_POD} />);
+      const { container } = renderFacts(FULL_POD);
       expect(factLabels(container)).toEqual([
         "Status",
         "Node",
@@ -229,48 +251,44 @@ describe("PodDetailsBody", () => {
     });
 
     it("shows the pod's image, which used to live only on the Containers pane", () => {
-      render(<PodDetailsBody object={FULL_POD} />);
+      renderFacts(FULL_POD);
       expect(screen.getByText("Image")).toBeDefined();
       expect(screen.getByText("ghcr.io/example/app:1.2.3")).toBeDefined();
     });
 
     it("names every image a multi-container pod runs, not just the first", () => {
-      render(
-        <PodDetailsBody
-          object={pod({ containers: [APP_CONTAINER, SIDECAR_CONTAINER] }, {}, { name: "web-1" })}
-        />,
-      );
+      renderFacts(pod({ containers: [APP_CONTAINER, SIDECAR_CONTAINER] }, {}, { name: "web-1" }));
       expect(screen.getByText("ghcr.io/example/app:1.2.3")).toBeDefined();
       expect(screen.getByText("ghcr.io/example/sidecar:1.0")).toBeDefined();
     });
 
     it("counts the containers that are ready", () => {
-      render(<PodDetailsBody object={FULL_POD} />);
+      renderFacts(FULL_POD);
       expect(screen.getByText("Containers ready")).toBeDefined();
       expect(screen.getByText("1 of 1")).toBeDefined();
     });
 
     it("omits the ready count while the kubelet has reported no container statuses", () => {
       // "0 of 0" would read as a fact where there is only an absence.
-      render(<PodDetailsBody object={pod({ containers: [APP_CONTAINER] }, { phase: "Pending" })} />);
+      renderFacts(pod({ containers: [APP_CONTAINER] }, { phase: "Pending" }));
       expect(screen.queryByText("Containers ready")).toBeNull();
     });
 
     it("says Restarts, the word the design uses", () => {
-      render(<PodDetailsBody object={FULL_POD} />);
+      renderFacts(FULL_POD);
       expect(screen.getByText("Restarts")).toBeDefined();
       expect(screen.queryByText("Container restarts")).toBeNull();
       expect(screen.getByText("3")).toBeDefined();
     });
 
     it("drops the Name row, which repeated the pane's own header", () => {
-      const { container } = render(<PodDetailsBody object={FULL_POD} />);
+      const { container } = renderFacts(FULL_POD);
       expect(factLabels(container)).not.toContain("Name");
       expect(screen.queryByText("web-1")).toBeNull();
     });
 
     it("reads Created as an age alone", () => {
-      render(<PodDetailsBody object={FULL_POD} />);
+      renderFacts(FULL_POD);
       const created = screen.getByText("Created").closest("dl");
       expect(created?.textContent).toMatch(/^Created\d/);
       expect(created?.textContent).not.toMatch(/\(/);
@@ -279,23 +297,21 @@ describe("PodDetailsBody", () => {
     it("takes the status word from core's one reading, so the header cannot contradict it", () => {
       // A pod whose container is in CrashLoopBackOff still reports phase
       // "Running"; `resourceStatusLine` is what the header reads too.
-      render(
-        <PodDetailsBody
-          object={pod(
-            { containers: [APP_CONTAINER] },
-            {
-              phase: "Running",
-              containerStatuses: [{ name: "app", ready: false, restartCount: 7, state: { waiting: { reason: "CrashLoopBackOff" } } }],
-            },
-          )}
-        />,
+      renderFacts(
+        pod(
+          { containers: [APP_CONTAINER] },
+          {
+            phase: "Running",
+            containerStatuses: [{ name: "app", ready: false, restartCount: 7, state: { waiting: { reason: "CrashLoopBackOff" } } }],
+          },
+        ),
       );
       expect(screen.getByText("CrashLoopBackOff")).toBeDefined();
       expect(screen.queryByText("Running")).toBeNull();
     });
 
     it("shows the remaining facts as plain text, with nothing that navigates", () => {
-      render(<PodDetailsBody object={FULL_POD} />);
+      renderFacts(FULL_POD);
       expect(screen.getByText("default")).toBeDefined();
       expect(screen.getByText("ReplicaSet/web-abc123")).toBeDefined();
       expect(screen.getAllByText("node-a").length).toBeGreaterThan(0);
@@ -313,14 +329,17 @@ describe("PodDetailsBody", () => {
 
     it("omits absent facts rather than showing them empty", () => {
       const bare = pod({}, {}, { name: "bare-1", namespace: "default" });
-      const { container } = render(<PodDetailsBody object={bare} />);
+      const { container } = renderFacts(bare);
       expect(factLabels(container)).toEqual(["Status", "Namespace"]);
     });
 
-    it("is a flat run of blocks, not a stack of cards", () => {
-      const { container } = render(<PodDetailsBody object={FULL_POD} />);
+    it("is one flat block, not a card", () => {
+      // Whichever screen draws it: an unheaded run of pairs, divided from
+      // what follows by a rule rather than boxed in a frame.
+      const { container } = renderFacts(FULL_POD);
       expect(container.querySelector(".card")).toBeNull();
-      expect(container.querySelectorAll("section.section").length).toBeGreaterThan(1);
+      expect(container.querySelectorAll("section.section")).toHaveLength(1);
+      expect(container.querySelector("section.section > h3")).toBeNull();
     });
   });
 
@@ -368,10 +387,13 @@ describe("PodDetailsBody", () => {
       expect(screen.getAllByText("True · —")).toHaveLength(4);
     });
 
-    it("omits the Conditions block when the pod reports none, and still shows the facts", () => {
+    it("omits the Conditions block when the pod reports none", () => {
       const { container } = render(<PodDetailsBody object={pod({}, {})} />);
       expect(screen.queryByText("Conditions")).toBeNull();
-      expect(factLabels(container)).toContain("Status");
+      // And the pane is not empty on its account: the facts are the screen's
+      // to draw and are still derived — see the fact cases above.
+      expect(container.querySelector(".card")).toBeNull();
+      expect(podFacts({ kind: "Pod", object: pod({}, {}) }).map((f) => f.label)).toContain("Status");
     });
   });
 
@@ -389,8 +411,11 @@ describe("PodDetailsBody", () => {
       );
       render(<PodDetailsBody object={scheduled} />);
       expect(screen.getByRole("heading", { name: "Scheduling" })).toBeDefined();
-      // "node-b" is shown in both the fact list and Scheduling, same as classic.
-      expect(screen.getAllByText("node-b")).toHaveLength(2);
+      // Once here. The node is also one of the pod's own facts, which the
+      // screen draws above this — the same duplication classic has, now
+      // asserted where each half lives.
+      expect(screen.getAllByText("node-b")).toHaveLength(1);
+      expect(podFacts({ kind: "Pod", object: scheduled }).map((f) => f.label)).toContain("Node");
       expect(screen.getByText("disktype=")).toBeDefined();
       expect(screen.getByText("ssd")).toBeDefined();
       expect(screen.getByText("Pod anti-affinity: 1 required")).toBeDefined();

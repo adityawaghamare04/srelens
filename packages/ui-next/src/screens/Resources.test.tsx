@@ -45,10 +45,11 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 }));
 
 /**
- * `ResourceDetailView` itself, unchanged — wrapped only to record the props each
- * host hands it. R-5 says the peek and the tab mount the same component with
- * the same props, and the only way to assert that structurally (rather than
- * by eyeballing two rendered trees) is to capture what each host passed.
+ * `ResourceDetailView` itself, unchanged — wrapped only to record the props
+ * each host hands it. The two hosts mount two different screens now, so what
+ * is captured is the SUBJECT each was pointed at: the only way to assert
+ * structurally (rather than by eyeballing two rendered trees, which are meant
+ * to differ) that one row and one route resolve to one resource.
  *
  * `createElement` rather than JSX inside the factory: `vi.mock` factories are
  * hoisted above this module's own imports, and the JSX runtime binding is not
@@ -922,9 +923,11 @@ describe("Resources", () => {
 });
 
 /**
- * The two hosts the detail pane is mounted in: the peek beside the list, and
- * the full tab the detail route resolves to. R-5 — they are the same pane, so
- * everything here that holds for one must hold for the other.
+ * The two screens a resource detail is drawn as: the peek beside the list
+ * (`ResourceDetailView`) and the page a detail route fills a tab with
+ * (`ResourceTabView`). Two designs, deliberately — what is asserted here is
+ * that the list points them at one subject and gives each only the controls
+ * that are its own.
  */
 describe("the detail pane's two hosts", () => {
   it("fills the peek from a row click, and opens no tab doing it", async () => {

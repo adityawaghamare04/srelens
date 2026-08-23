@@ -19,6 +19,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 
 import { ConfigDetailsBody } from "./ConfigBody";
 import { GenericBody } from "./GenericBody";
+import { detailFacts } from "./detailData";
 
 function configMap(data: Record<string, string> = {}): K8sObject {
   return {
@@ -64,27 +65,36 @@ describe("ConfigDetailsBody", () => {
   });
 
   describe("composition with GenericBody", () => {
-    it("states the ConfigMap's namespace once and renders no Pods section", async () => {
+    it("states the ConfigMap's namespace once, as a fact the screen draws, and renders no Pods section", async () => {
       const cm = configMap({ "app.conf": "level=info" });
       render(
         <GenericBody kind="ConfigMap" object={cm} context="ctx">
           <ConfigDetailsBody object={cm} />
         </GenericBody>,
       );
-      expect(screen.getAllByText("Namespace")).toHaveLength(1);
+      // Once, and not here: the lead facts are data (`detailFacts`) that each
+      // screen lays out itself, so neither the wrapper nor this body may draw
+      // a Namespace row of its own — two would be two answers to one
+      // question, which is the duplication this split exists to prevent.
+      expect(detailFacts({ kind: "ConfigMap", object: cm }).map((f) => f.label)).toContain("Namespace");
+      expect(screen.queryByText("Namespace")).toBeNull();
       expect(screen.queryAllByRole("heading", { name: "Pods" })).toHaveLength(0);
       expect(podsForSelector).not.toHaveBeenCalled();
     });
 
-    it("lands the wrapper's blocks and the body's own as siblings, so the rules between them draw", () => {
+    it("lands the body's blocks as bare siblings, so the rules between them draw", () => {
       const cm = configMap({ "app.conf": "level=info" });
       const { container } = render(
         <GenericBody kind="ConfigMap" object={cm} context="ctx">
           <ConfigDetailsBody object={cm} />
         </GenericBody>,
       );
+      // One block: a ConfigMap has no conditions and no related pods, and the
+      // lead fact list belongs to whichever screen is drawing. That the whole
+      // composed run — facts, wrapper and body together — stays unbroken is
+      // swept per kind in `GenericBody.test`.
       const blocks = [...container.children];
-      expect(blocks).toHaveLength(2);
+      expect(blocks).toHaveLength(1);
       for (const block of blocks) expect(block.matches("section.section")).toBe(true);
     });
   });

@@ -470,8 +470,9 @@ function KindList({
  * said it was, and the user's mock of this tab retired it — a breadcrumb
  * header with the actions on the same line, a metric strip, a three-column
  * fact grid, the containers table inline on Overview. What the two hosts
- * still share, they share through `useDetailPanes`: one read of the object,
- * one lazy-load rule per pane, the same per-kind bodies, the same actions.
+ * still share, they share through `detail/detailData`: one read of the object,
+ * one lazy-load rule per pane, one derivation of a kind's facts, the same
+ * per-kind blocks, the same actions.
  *
  * Everything it shows comes out of the route string:
  * `/k/<kind>/<namespace>/<name>` already carries the Kubernetes kind — not

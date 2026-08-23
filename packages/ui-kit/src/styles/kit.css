@@ -669,6 +669,21 @@
   }
   .kv-v.code { font-size: 0.6875rem; }
 
+  /* The same pair, read on a page instead of down a column: the label above
+     the value, a hairline under the pair.
+
+     Every rule is on the row itself, never on an ancestor. The surface that
+     wants this form asks the row for it (`<KV stacked />`) and lays its own
+     grid of them out; a wrapper restyling a body it did not build is what
+     `FactGrid` was, and it needed a fresh exception for every child that was
+     not a fact row. */
+  .kv[data-stacked="true"] {
+    display: block;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent);
+  }
+  .kv[data-stacked="true"] .kv-k { margin-bottom: 0.1rem; }
+
   /* The same fact rows, read across a page instead of down a column.
 
      `FactGrid` wraps a body it did not build — the peek and the full tab draw

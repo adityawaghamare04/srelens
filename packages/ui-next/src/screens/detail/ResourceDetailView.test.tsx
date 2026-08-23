@@ -60,6 +60,7 @@ vi.mock("@srelens/ui-kit", async (importOriginal) => {
 
 import { ConsoleProvider, useConsole } from "../../console";
 import { loadSectionFolds, setSectionOpen } from "../../lib/sectionFolds";
+import { detailFacts } from "./detailData";
 import { ResourceDetailView } from "./ResourceDetailView";
 import { ResourceTabView } from "./ResourceTabView";
 
@@ -560,17 +561,25 @@ describe("ResourceDetailView", () => {
   });
 
   /**
-   * R-5 IS RETIRED. It said the peek and the full tab were the same pane with
-   * the same props, and the user's full-tab mock says otherwise: a breadcrumb
-   * header, actions on the header row, a metric strip, a three-column fact
-   * grid, Overview rather than Details, and no Containers tab.
+   * R-5 IS RETIRED, and so is the last of the tests that held the two screens
+   * in step by comparing their rendered trees.
    *
-   * What is asserted here is what replaced it — the discipline underneath the
-   * rule rather than the rule. The two hosts draw ONE subject from ONE read
-   * through ONE set of per-kind bodies, so they can differ in how a fact reads
-   * and cannot differ in what it says. Deleting these tests along with the
-   * rule would have left that unwatched, which is the property that actually
-   * matters.
+   * The rule said the peek and the full tab were one pane with one set of
+   * props; the user's full-tab mock says otherwise, and the user's own ruling
+   * is that they are two screens with two designs. What replaced the rule is
+   * asserted here — the discipline underneath it: one read of the subject, one
+   * lazy-load rule, one derivation of the facts. So the two can differ in how
+   * a fact reads and cannot differ in what it says.
+   *
+   * WHERE EACH HALF IS ASSERTED, which is the whole point of the split:
+   *
+   * - that the two get the SAME facts is asserted at the DATA layer
+   *   (`detailFacts`), not by rendering both screens and comparing labels. A
+   *   comparison of two trees is a comparison of two layouts, and the two
+   *   layouts are meant to differ now.
+   * - that each screen draws its own mock's layout is asserted in that
+   *   screen's own tests — "the facts, the peek's way" below, and
+   *   `ResourceTabView.test`'s "lays the facts out as three columns".
    */
   describe("what the two hosts still share, now that they are two screens", () => {
     const props = { context: "ctx", kind: "Pod", namespace: "checkout", name: "cart-session-store-0" } as const;
@@ -592,25 +601,48 @@ describe("ResourceDetailView", () => {
       expect(getObject.mock.calls[0]).toEqual(fromPeek);
     });
 
-    it("renders the same per-kind body for the same subject, however it is laid out", async () => {
+    it("derives one fact list for one subject, whichever screen asks for it", async () => {
+      // THE SHARED LAYER ITSELF, not two rendered trees compared. `detailFacts`
+      // is the only place a subject's facts are derived; both screens call it
+      // and neither can reach the other's layout. A fact fixed in one is
+      // therefore fixed in both by construction — the property the deleted
+      // tree comparison was standing in for, asserted where it actually lives.
+      const facts = detailFacts({ kind: "Pod", object: RUNNING_POD });
+      expect(facts.map((f) => f.label)).toContain("Status");
+      expect(facts.map((f) => f.label)).toContain("Containers ready");
+      // Pure and stable: two readings of one subject are the same list, so
+      // two screens rendering it cannot drift apart between them.
+      expect(detailFacts({ kind: "Pod", object: RUNNING_POD }).map((f) => f.label)).toEqual(
+        facts.map((f) => f.label),
+      );
+      // And it is a kind's OWN list, dispatched on the route's kind: a
+      // ConfigMap gets the identity facts, not a pod's.
+      expect(detailFacts({ kind: "ConfigMap", object: AGED_CONFIGMAP }).map((f) => f.label)).toEqual([
+        "Namespace",
+        "Created",
+      ]);
+    });
+
+    it("draws that list in each screen, in that screen's own layout and no other's", async () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
 
       const asPeek = render(<ResourceDetailView {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
       await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
-      // Every fact the body derived, by its label. Two layouts of one list —
-      // a two-column run in the peek, three columns of label-above-value in
-      // the tab — so the LABELS are what must match, not the markup.
-      const inPeek = factLabels();
-      expect(inPeek).toContain("Status");
-      expect(inPeek).toContain("Containers ready");
+      // The peek's own form: a label column beside a value column, and no
+      // grid — the mock's two-column list, in a 352px pane.
+      expect(document.querySelectorAll(".kv[data-stacked]")).toHaveLength(0);
+      expect(document.querySelector("[data-slot='fact-grid']")).toBeNull();
+      expect(factLabels()).toContain("Status");
       asPeek.unmount();
 
       const asTab = render(<ResourceTabView {...props} />);
       await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
-      // The tab folds the containers table into Overview, so it says strictly
-      // more; what it must never do is say less, or say it differently.
-      for (const label of inPeek) expect(factLabels()).toContain(label);
+      // The tab's own: three columns of label-above-value, built by the tab.
+      const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']");
+      expect(grid).not.toBeNull();
+      expect(grid!.querySelectorAll(".kv[data-stacked='true']").length).toBeGreaterThan(0);
+      expect(factLabels()).toContain("Status");
     });
 
     it("neither refetches a pane it has already opened, and neither fetches one it has not", async () => {

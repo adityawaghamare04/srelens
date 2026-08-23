@@ -16,10 +16,11 @@ const KindContext = createContext<string | null>(null);
  * Everything inside this remembers which of its blocks the reader opened, for
  * this kind.
  *
- * Rendered ONCE, around the pane both hosts share (`useDetailPanes`), so the
- * peek and the full tab get the same memory without either of them knowing
- * that there is a store at all. They are different layouts of one subject; a
- * block a reader cares about is the same block in both.
+ * Rendered ONCE by each screen, around its own pane, so the peek and the full
+ * tab get the same memory without either of them knowing the other exists —
+ * the key is the KIND, and the store is neither screen's. They are different
+ * layouts of one subject; a block a reader cares about is the same block in
+ * both.
  *
  * A provider renders no element, so the run of sections beneath it is still a
  * run of direct siblings and `.section + .section` still draws every hairline.

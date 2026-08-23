@@ -67,6 +67,69 @@ describe("KV", () => {
   });
 });
 
+/**
+ * The same pair, read on a page instead of down a column: the label above the
+ * value, ruled off beneath.
+ *
+ * A form of the ROW, chosen by whoever renders it — not a wrapper reaching
+ * down into someone else's markup. `FactGrid` was that wrapper: it restyled
+ * the peek's rows into the full tab's grid, which meant the tab's layout was
+ * described in terms of a body the tab did not build, and every new kind of
+ * child needed another exception. The tab now lays its own grid out and asks
+ * for the row it wants. (#331)
+ */
+describe("a stacked KV", () => {
+  it("says so on the row, so the form is the row's own", () => {
+    const { container } = render(<KV k="Pod IP" v="10.44.21.4" stacked />);
+    expect(container.querySelector<HTMLElement>(".kv")!.dataset.stacked).toBe("true");
+  });
+
+  it("is still a name and its value, with the same key and value elements", () => {
+    // The markup a screen reader hears must not change with the layout.
+    const { container } = render(<KV k="Pod IP" v="10.44.21.4" stacked />);
+    expect(container.querySelector("dl.kv > dt.kv-k")!.textContent).toBe("Pod IP");
+    expect(container.querySelector("dl.kv > dd.kv-v")!.textContent).toBe("10.44.21.4");
+  });
+
+  it("leaves an ordinary row unmarked, so nothing about the column form changes", () => {
+    const { container } = render(<KV k="Pod IP" v="10.44.21.4" />);
+    expect(container.querySelector<HTMLElement>(".kv")!.dataset.stacked).toBeUndefined();
+  });
+
+  it("writes no value into an attribute, stacked or not", () => {
+    // The same disclosure rule the column form is held to: a value lives in
+    // the document once, as text.
+    const { container } = render(<KV k="Token" v="fixture-only-value" stacked />);
+    const row = container.querySelector(".kv")!;
+    for (const el of [row, ...row.querySelectorAll("*")]) {
+      for (const attr of el.getAttributeNames()) {
+        expect(el.getAttribute(attr)).not.toContain("fixture-only-value");
+      }
+    }
+  });
+});
+
+describe("the stacked row's rules", () => {
+  const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+  const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+
+  it("stacks the label over the value and rules beneath the pair", () => {
+    const rule = components.slice(components.indexOf('  .kv[data-stacked="true"] {'));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("display: block");
+    expect(body).toContain("border-bottom");
+  });
+
+  it("keeps every one of those rules on the row itself, never on an ancestor", () => {
+    // What went wrong with `FactGrid`: its rules were descendant selectors
+    // under a wrapper, so the layout belonged to whoever wrapped the body
+    // rather than to the row being laid out.
+    const stacked = components.match(/^\s*\S*\.kv\[data-stacked="true"\][^\n]*\{/gm) ?? [];
+    expect(stacked.length).toBeGreaterThan(0);
+    expect(stacked.every((r) => r.trim().startsWith(".kv[data-stacked"))).toBe(true);
+  });
+});
+
 describe("KVList", () => {
   const rows: Array<[string, string]> = [
     ["Kind", "Pod"],
