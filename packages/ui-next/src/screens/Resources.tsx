@@ -128,11 +128,12 @@ function KindList({
    * built-in kind, and for a slug this cluster has no definition for (a tab
    * restored from a session can name a kind whose operator is gone).
    *
-   * Looked up ONCE, here, rather than by `customDescriptorFor` inside the memo
-   * below and again beside it for the rail: the columns and the "About this
-   * kind" rail have to describe the same definition, and two finds are two
-   * chances for them not to. `builtIn` is the same flag discovery itself is
-   * gated on, so the slug's shape is still tested in exactly one place.
+   * Looked up ONCE, here, rather than inside the memo below and again beside
+   * it for the rail: the columns and the "About this kind" rail have to
+   * describe the same definition, and two finds are two chances for them not
+   * to. `builtIn` is the same flag discovery itself is gated on, so the slug's
+   * shape is still tested in exactly one place. (`customDescriptorFor` did
+   * this find and was deleted with this hoist — it had no other caller.)
    */
   const crd = useMemo(
     () => (builtIn ? undefined : crds?.find((c) => c.name === slug)),
@@ -413,7 +414,6 @@ function KindList({
     </div>
   );
 
-
   return (
     <Screen
       title={title}
@@ -533,7 +533,7 @@ function KindList({
  * Everything it shows comes out of the route string:
  * `/k/<kind>/<namespace>/<name>` already carries the Kubernetes kind — not
  * the list screen's slug, and not for built-in kinds only, since
- * `customDescriptorFor` mints a CRD's route from `crd.kind` too — so there is
+ * `customDescriptor` mints a CRD's route from `crd.kind` too — so there is
  * nothing to look up and nothing to keep in step with the list.
  *
  * No `Screen` wrapper: `ResourceTabView` already heads the page with the

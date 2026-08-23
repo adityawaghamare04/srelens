@@ -1,9 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { CrdRef } from "@srelens/core";
-import { Button, KVList, Section } from "@srelens/ui-kit";
-
-/** How long the copy button stays flipped, from the design's §12. */
-const COPIED_MS = 1400;
+import { CopyCommand, KVList, Section } from "@srelens/ui-kit";
 
 export interface AboutKindProps {
   /** The CustomResourceDefinition this list's rows come from. */
@@ -58,25 +55,6 @@ export interface AboutKindProps {
  * read as one undivided block.
  */
 export function AboutKind({ crd, context, objects }: AboutKindProps) {
-  const command = `kubectl --context ${context} get ${crd.name} -A -o wide`;
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPIED_MS);
-    return () => clearTimeout(timer);
-  }, [copied]);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-    } catch {
-      // No clipboard on a non-secure origin, and nothing to recover: the
-      // command is rendered in full beside the button and can be selected.
-    }
-  }
-
   const rows: Array<[key: string, value: ReactNode]> = [
     ["Kind", crd.kind],
     // Read, not assumed — see the note above.
@@ -92,31 +70,16 @@ export function AboutKind({ crd, context, objects }: AboutKindProps) {
         <KVList rows={rows} />
       </Section>
       <Section title="Fetch it yourself">
-        {/*
-          NOT `KubectlPreview`, which the plan named. That component hard-codes
-          the words "Equivalent kubectl:" ahead of the command — no prop, no
-          slot, and two suites pin the string — and they are right where it was
-          built: inside a confirm dialog, beside an action the app is about to
-          perform on the reader's behalf, saying THIS IS WHAT WE ARE DOING.
-          Under "Fetch it yourself" there is no action to be equivalent to. The
-          command is the content, and announcing it as an equivalent to nothing
-          reads as a mistake. Forking the component or hiding its label from
-          out here would both be worse than composing the two kit pieces this
-          actually needs.
+        {/* `CopyCommand`, not `KubectlPreview`: that one prints "Equivalent
+            kubectl:" ahead of the line, which belongs beside an action the app
+            is about to perform and says the wrong thing under a heading that
+            hands the reader something to run themselves. The kit's own note
+            carries the rest of the reasoning, the wrapping included.
 
-          The command WRAPS rather than truncating, which is the one place this
-          departs from §12. That is `KubectlPreview`'s own finding, and it
-          applies harder in a 264px rail than in a dialog: a command you cannot
-          finish reading is not one you can retype, and the alternative — a
-          `title` holding a second copy — is the disclosure hole `PairList` and
-          `KV` both had removed.
-        */}
-        <div className="flex items-start gap-2">
-          <code className="code min-w-0 flex-1 break-words">{command}</code>
-          <Button variant="ghost" size="xs" onClick={() => void copy()}>
-            {copied ? "Copied" : "Copy"}
-          </Button>
-        </div>
+            `crd.name` rather than `crd.plural`: the fully qualified
+            `<plural>.<group>` is what kubectl resolves unambiguously when two
+            operators have installed a kind of the same short name. */}
+        <CopyCommand command={`kubectl --context ${context} get ${crd.name} -A -o wide`} />
       </Section>
     </>
   );

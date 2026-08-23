@@ -1441,7 +1441,7 @@ describe("the room the peek leaves the list", () => {
   it("measures its row even when the descriptor arrives late", async () => {
     // A custom resource's descriptor waits on CRD discovery, so this screen's
     // first render is a loading state with no row in it at all —
-    // `descriptorFor` is synchronous, `customDescriptorFor` is not. An effect
+    // `descriptorFor` is synchronous, CRD discovery is not. An effect
     // keyed on a ref OBJECT never re-runs when the row finally mounts, since
     // a ref's identity never changes, and the ceiling then falls back to the
     // absolute maximum for every CRD list there is.

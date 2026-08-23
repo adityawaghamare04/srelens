@@ -67,17 +67,3 @@ export function customDescriptor(crd: CrdRef): KindDescriptor<CustomRow> {
     actions: CUSTOM_RESOURCE_ACTIONS,
   };
 }
-
-/**
- * The descriptor for a route slug that names a custom resource, or
- * `undefined` when this cluster has no such CRD — a route string can arrive
- * from a session persisted against a cluster that has since lost the
- * operator.
- */
-export function customDescriptorFor(
-  slug: string,
-  crds: CrdRef[],
-): KindDescriptor<CustomRow> | undefined {
-  const crd = crds.find((c) => c.name === slug);
-  return crd ? customDescriptor(crd) : undefined;
-}
