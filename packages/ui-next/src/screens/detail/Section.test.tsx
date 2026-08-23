@@ -81,7 +81,7 @@ describe("a detail section that remembers", () => {
   it("remembers per kind and cannot be opened by another kind's memory", () => {
     // A Deployment's Annotations and a Secret's are the same heading and a
     // different decision. See `sections.tsx` for what rides on that.
-    setSectionOpen("Deployment", "Annotations", true, fakeStorage());
+    setSectionOpen("Deployment", "Annotations", true, { storage: fakeStorage() });
     render(
       <SectionMemory kind="Secret">
         <Section title="Annotations">
@@ -96,7 +96,7 @@ describe("a detail section that remembers", () => {
   it("keys a block whose heading counts things on an id the count cannot move", () => {
     // `Data (3 keys)` becomes `Data (4 keys)` the moment someone edits the
     // ConfigMap, and a memory keyed on the heading would be lost with it.
-    setSectionOpen("ConfigMap", "Data", true, fakeStorage());
+    setSectionOpen("ConfigMap", "Data", true, { storage: fakeStorage() });
     render(
       <SectionMemory kind="ConfigMap">
         <Section id="Data" title="Data (3 keys)">
@@ -158,6 +158,75 @@ describe("a detail section that remembers", () => {
  * written — which is how six copies of `StringList` came to live in this
  * directory. Read off the source for the same reason that sweep is.
  */
+/**
+ * THE RULING: a titled section that is the only content of its pane defaults
+ * to open. A pane that opens showing nothing at all is hostile — the same
+ * argument that exempted the unheaded lead fact list — and the peek's
+ * Containers tab, being one titled block, was exactly that.
+ *
+ * Declared by the body that draws the block, because a section cannot see its
+ * siblings: a count would be wrong the moment a Labels block turned up beside
+ * it.
+ */
+describe("a block its pane cannot do without", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    loadSectionFolds(fakeStorage());
+  });
+
+  it("opens showing its rows, not an empty pane", () => {
+    render(
+      <SectionMemory kind="Pod">
+        <Section title="Containers" defaultOpen>
+          <span>app is running</span>
+        </Section>
+      </SectionMemory>,
+    );
+    expect(screen.getByRole("button", { name: "Containers" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("app is running")).toBeDefined();
+  });
+
+  it("still folds, and is remembered folded", async () => {
+    // The reader's choice outranks the default in both directions — that is
+    // what makes this a starting point rather than a block that cannot fold.
+    const first = render(
+      <SectionMemory kind="Pod">
+        <Section title="Containers" defaultOpen>
+          <span>app is running</span>
+        </Section>
+      </SectionMemory>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Containers" }));
+    expect(screen.queryByText("app is running")).toBeNull();
+    first.unmount();
+
+    render(
+      <SectionMemory kind="Pod">
+        <Section title="Containers" defaultOpen>
+          <span>app is running</span>
+        </Section>
+      </SectionMemory>,
+    );
+    expect(screen.queryByText("app is running")).toBeNull();
+    expect(screen.getByRole("button", { name: "Containers" }).getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("leaves every other block on the kind shut", () => {
+    render(
+      <SectionMemory kind="Pod">
+        <Section title="Containers" defaultOpen>
+          <span>app is running</span>
+        </Section>
+        <Section title="Annotations">
+          <span>an annotation</span>
+        </Section>
+      </SectionMemory>,
+    );
+    expect(screen.getByText("app is running")).toBeDefined();
+    expect(screen.queryByText("an annotation")).toBeNull();
+  });
+});
+
 describe("one Section, reached one way", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const sources = readdirSync(here)

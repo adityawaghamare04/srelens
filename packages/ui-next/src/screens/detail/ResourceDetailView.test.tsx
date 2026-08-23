@@ -814,6 +814,73 @@ describe("ResourceDetailView", () => {
       return view;
     }
 
+    /**
+     * THE RULING, at the pane a reader actually sees: a titled section that is
+     * the only content of its pane defaults to open. Everything else opens
+     * shut — "first open should keep everything collapsed" — but a pane whose
+     * whole substance is one block would otherwise open completely empty,
+     * which is the very hostility the unheaded lead fact list was exempted
+     * for.
+     */
+    describe("a pane whose whole content is one block", () => {
+      it("opens the Containers pane showing the containers", async () => {
+        descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
+        getObject.mockResolvedValue({
+          object: {
+            kind: "Pod",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            spec: { containers: [{ name: "app", image: "redis:7.4-alpine" }] },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Containers" })).toBeDefined());
+        await userEvent.click(view.getByRole("tab", { name: "Containers" }));
+        expect(screen.getByRole("button", { name: "Containers" }).getAttribute("aria-expanded")).toBe("true");
+        expect(screen.getByText("redis:7.4-alpine")).toBeDefined();
+      });
+
+      it("opens a ConfigMap's Data, the only titled block its pane offers", async () => {
+        getObject.mockResolvedValue({
+          object: {
+            kind: "ConfigMap",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            data: { "app.conf": "level=info" },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="ConfigMap" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
+        expect(screen.getByText("level=info")).toBeDefined();
+      });
+
+      it("leaves a Secret's Data shut, whose pane says more than the values", async () => {
+        // Not the same shape, and the safer answer where the difference is
+        // arguable: a Secret's pane heads its data with a summary block, so
+        // it never opens empty, and less disclosed by default is the right
+        // way to be wrong about a Secret.
+        getObject.mockResolvedValue({
+          object: {
+            kind: "Secret",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            type: "Opaque",
+            data: { token: FIXTURE_B64 },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="Secret" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
+        expect(screen.getByRole("button", { name: /^Data/ }).getAttribute("aria-expanded")).toBe("false");
+        expect(screen.queryByRole("button", { name: "Reveal" })).toBeNull();
+      });
+    });
+
     it("opens every titled block shut on a first visit, and the unheaded lead block open", async () => {
       await open("ConfigMap", {
         creationTimestamp: "2026-08-20T00:00:00Z",

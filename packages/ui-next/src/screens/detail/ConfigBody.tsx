@@ -35,7 +35,12 @@ export function ConfigDetailsBody({ object }: { object: K8sObject }) {
     // Remembered as `Data`, not as `Data (3 keys)`: the heading counts what
     // is in the object, and a memory keyed on it would be lost the first
     // time someone added a key.
-    <Section id="Data" title={`Data (${plural(keys.length, "key")})`}>
+    //
+    // Open on a first visit, because it is the only titled block a ConfigMap's
+    // pane has: everything else on it is the unheaded lead fact list, so a
+    // shut Data block is a pane that says a ConfigMap exists and nothing about
+    // what is in it. It still folds, and a reader who folds it gets that back.
+    <Section id="Data" title={`Data (${plural(keys.length, "key")})`} defaultOpen>
       {keys.length === 0 ? (
         <EmptyState title="No data" />
       ) : (

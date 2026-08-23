@@ -417,6 +417,12 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
   }
 
   const containerStatuses = statusesByName(status.containerStatuses);
+  // The pane's only block, for the pod most pods are: no init containers and
+  // none attached for debugging. A titled block that is all its pane holds
+  // opens open, or the reader clicks a tab named Containers and is shown one
+  // word and a caret. With an init or ephemeral group beside it the pane says
+  // something either way, so the shut-everything rule stands.
+  const soleGroup = initContainers.length === 0 && ephemeralContainers.length === 0;
 
   return (
     <>
@@ -425,7 +431,7 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
         containers={initContainers}
         statuses={statusesByName(status.initContainerStatuses)}
       />
-      <Section title="Containers">
+      <Section title="Containers" defaultOpen={soleGroup}>
         {containers.length === 0 ? (
           <EmptyState title="No containers" />
         ) : (
