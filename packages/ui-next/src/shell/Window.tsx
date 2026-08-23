@@ -4,6 +4,7 @@ import { Button, Checkbox, Drawer, LoadingState, TabStrip, TextInput, type Conte
 import { setContexts, setKubeconfigFiles, useContexts } from "../lib/clusters";
 import { loadColumnPrefs } from "../lib/columnPrefs";
 import { loadMarks } from "../lib/marks";
+import { loadPeekWidth } from "../lib/peekWidth";
 import { defaultState, reconcile } from "../lib/tabs";
 import { flushSave, installFlushOnUnload, loadTabsState, scheduleSave } from "../lib/tabsPersist";
 import {
@@ -118,6 +119,10 @@ export function Window({
       // Same reason as `loadMarks` above: without this, the first column
       // toggle spreads over an empty record and erases every other kind's.
       loadColumnPrefs();
+      // And the detail peek's width, for the same reason both of those are
+      // here: unread, the pane opens at its default however wide the reader
+      // last dragged it.
+      loadPeekWidth();
       // Classic threads these through every call for a reason: a context that
       // came from an additional kubeconfig file cannot have a client built for
       // it until the backend has been told the file's path, and the list races

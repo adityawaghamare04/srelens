@@ -114,6 +114,7 @@ import * as store from "../lib/tabsStore";
 import { defaultState } from "../lib/tabs";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
 import { hiddenColumns, loadColumnPrefs, toggleColumn } from "../lib/columnPrefs";
+import { DEFAULT_PEEK_WIDTH, MAX_PEEK_WIDTH, MIN_PEEK_WIDTH, PEEK_WIDTH_KEY, loadPeekWidth } from "../lib/peekWidth";
 import { resetListCache } from "../lib/resourceList";
 import { getView, resetView, setNamespaces } from "../lib/workspace";
 
@@ -196,6 +197,7 @@ beforeEach(() => {
   // The preferences are module state that outlives a test; localStorage is
   // cleared by the shared setup, so re-reading it is a reset.
   loadColumnPrefs();
+  loadPeekWidth();
 });
 
 /**
@@ -271,6 +273,16 @@ const row = (name: string) =>
   Array.from(document.querySelectorAll<HTMLTableRowElement>("tbody tr.tbl-row")).find(
     (tr) => tr.querySelector("td:not(.tbl-check)")?.textContent === name,
   )!;
+
+/**
+ * The peek's drag grip, and the width of the pane it moves.
+ *
+ * The grip is a direct child of the sized element by construction — that is
+ * what an absolutely positioned handle needs — so reading the width off its
+ * parent asks the DOM the same question the reader's eye does.
+ */
+const peekGrip = () => screen.getByRole("separator", { name: "Resize the resource details" });
+const peekWidth = () => (peekGrip().parentElement as HTMLElement).style.width;
 
 /** The props the most recently rendered `ResourceDetail` was handed. */
 const lastDetailProps = () => ({ ...detailProps[detailProps.length - 1] });
@@ -1031,5 +1043,102 @@ describe("the detail pane's two hosts", () => {
     await waitFor(() => expect(paneName()).toBe("web-1"));
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(peekTabs);
+  });
+});
+
+/**
+ * The peek's width. The user's report was that the pane "is not draggable to
+ * increase width", so the grip is the feature; the rest is making sure it
+ * cannot be dragged somewhere useless, and that dragging it does not throw
+ * the pane away and refetch the resource forty times on the way across.
+ */
+describe("the peek's width", () => {
+  async function peekAtWeb1() {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneBody()).toContain("web-1"));
+  }
+
+  it("gives the peek a named grip carrying its width between its bounds", async () => {
+    await peekAtWeb1();
+    expect(peekGrip().getAttribute("aria-orientation")).toBe("vertical");
+    expect(peekGrip().getAttribute("aria-valuenow")).toBe(String(DEFAULT_PEEK_WIDTH));
+    expect(peekGrip().getAttribute("aria-valuemin")).toBe(String(MIN_PEEK_WIDTH));
+    // jsdom's window is 1024 wide, which leaves the peek its whole ceiling.
+    expect(peekGrip().getAttribute("aria-valuemax")).toBe(String(MAX_PEEK_WIDTH));
+    expect(peekWidth()).toBe(`${DEFAULT_PEEK_WIDTH}px`);
+  });
+
+  it("widens as the pointer goes left and narrows as it goes right", async () => {
+    await peekAtWeb1();
+    fireEvent.mouseDown(peekGrip(), { clientX: 800 });
+    // The pane is docked on the right: its left edge moving left is the pane
+    // getting wider. This is the whole of the user's report.
+    fireEvent.mouseMove(window, { clientX: 700 });
+    expect(peekWidth()).toBe(`${DEFAULT_PEEK_WIDTH + 100}px`);
+    fireEvent.mouseMove(window, { clientX: 860 });
+    expect(peekWidth()).toBe(`${DEFAULT_PEEK_WIDTH - 60}px`);
+    fireEvent.mouseUp(window);
+  });
+
+  it("takes the arrow keys, with ArrowLeft the wider one", async () => {
+    await peekAtWeb1();
+    peekGrip().focus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(peekWidth()).toBe(`${DEFAULT_PEEK_WIDTH + 16}px`);
+    await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+    expect(peekWidth()).toBe(`${DEFAULT_PEEK_WIDTH - 16}px`);
+  });
+
+  it("goes no wider than the window leaves room for", async () => {
+    await peekAtWeb1();
+    fireEvent.mouseDown(peekGrip(), { clientX: 800 });
+    fireEvent.mouseMove(window, { clientX: -4000 });
+    fireEvent.mouseUp(window);
+    expect(peekWidth()).toBe(`${MAX_PEEK_WIDTH}px`);
+    // And no narrower than its own content.
+    fireEvent.mouseDown(peekGrip(), { clientX: 800 });
+    fireEvent.mouseMove(window, { clientX: 4000 });
+    fireEvent.mouseUp(window);
+    expect(peekWidth()).toBe(`${MIN_PEEK_WIDTH}px`);
+  });
+
+  it("opens at the width the reader left it at last time", async () => {
+    localStorage.setItem(PEEK_WIDTH_KEY, JSON.stringify(420));
+    loadPeekWidth();
+    await peekAtWeb1();
+    expect(peekWidth()).toBe("420px");
+  });
+
+  it("remembers a drag, and only once it settles", async () => {
+    await peekAtWeb1();
+    fireEvent.mouseDown(peekGrip(), { clientX: 800 });
+    fireEvent.mouseMove(window, { clientX: 780 });
+    fireEvent.mouseMove(window, { clientX: 760 });
+    // A write per pixel of the drag is what the grip's two callbacks avoid.
+    expect(localStorage.getItem(PEEK_WIDTH_KEY)).toBeNull();
+    fireEvent.mouseUp(window);
+    expect(localStorage.getItem(PEEK_WIDTH_KEY)).toBe(String(DEFAULT_PEEK_WIDTH + 40));
+  });
+
+  it("keeps the one pane across a resize, and reads the resource once", async () => {
+    await peekAtWeb1();
+    expect(getObject).toHaveBeenCalledTimes(1);
+    const paneNode = peekPane();
+
+    fireEvent.mouseDown(peekGrip(), { clientX: 800 });
+    for (let x = 790; x >= 700; x -= 10) fireEvent.mouseMove(window, { clientX: x });
+    fireEvent.mouseUp(window);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(peekWidth()).toBe(`${DEFAULT_PEEK_WIDTH + 100}px`);
+    // A width change that remounted the pane would refetch the resource on
+    // every one of those ten frames, and throw away the reader's selected tab
+    // while it was at it.
+    expect(peekPane()).toBe(paneNode);
+    expect(getObject).toHaveBeenCalledTimes(1);
   });
 });
