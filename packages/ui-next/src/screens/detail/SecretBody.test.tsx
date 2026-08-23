@@ -303,8 +303,17 @@ lUc3RsBva1V3RlPz+Jo=
     });
   });
 
+  it("is a run of flat blocks, not a stack of cards", async () => {
+    const { container } = render(<SecretDetailsBody object={secret({ token: "" })} context="ctx" />);
+    await waitFor(() => expect(getSecret).toHaveBeenCalled());
+    const blocks = [...container.children];
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) expect(block.matches("section.section")).toBe(true);
+    expect(container.querySelector(".card")).toBeNull();
+  });
+
   describe("composition with GenericBody", () => {
-    it("renders exactly one Metadata heading and no Pods section", async () => {
+    it("states the Secret's namespace once and renders no Pods section", async () => {
       const s = secret({ token: "" });
       render(
         <GenericBody kind="Secret" object={s} context="ctx">
@@ -312,7 +321,7 @@ lUc3RsBva1V3RlPz+Jo=
         </GenericBody>,
       );
       await waitFor(() => expect(getSecret).toHaveBeenCalled());
-      expect(screen.getAllByRole("heading", { name: "Metadata" })).toHaveLength(1);
+      expect(screen.getAllByText("Namespace")).toHaveLength(1);
       expect(screen.queryAllByRole("heading", { name: "Pods" })).toHaveLength(0);
       expect(podsForSelector).not.toHaveBeenCalled();
     });

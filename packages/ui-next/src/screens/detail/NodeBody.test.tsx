@@ -73,19 +73,27 @@ describe("NodeDetailsBody", () => {
     });
   });
 
+  it("is a run of flat blocks, not a stack of cards", () => {
+    const { container } = render(<NodeDetailsBody object={node({})} />);
+    const blocks = [...container.children];
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) expect(block.matches("section.section")).toBe(true);
+    expect(container.querySelector(".card")).toBeNull();
+  });
+
   describe("composition with GenericBody", () => {
-    it("renders Metadata, Info and Capacity together with no related-pods section", async () => {
+    it("renders the wrapper's facts, Info and Capacity together with no related-pods section", async () => {
       const n = node(
         {},
         { capacity: { cpu: "8" }, allocatable: { cpu: "7800m" } },
-        { name: "node-a", labels: { "kubernetes.io/hostname": "node-a" } },
+        { name: "node-a", creationTimestamp: "2026-08-20T00:00:00Z", labels: { "kubernetes.io/hostname": "node-a" } },
       );
       render(
         <GenericBody kind="Node" object={n} context="ctx">
           <NodeDetailsBody object={n} />
         </GenericBody>,
       );
-      expect(screen.getAllByRole("heading", { name: "Metadata" })).toHaveLength(1);
+      expect(screen.getAllByText("Created")).toHaveLength(1);
       expect(screen.getByRole("heading", { name: "Info" })).toBeDefined();
       expect(screen.getByRole("heading", { name: "Capacity" })).toBeDefined();
       // Node has no `relatedPodSelector` case, so GenericBody fetches nothing.

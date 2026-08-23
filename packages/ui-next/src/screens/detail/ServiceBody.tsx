@@ -7,7 +7,7 @@ import {
   str,
   type K8sObject,
 } from "@srelens/core";
-import { KV, PairList, Panel, Table, type Column } from "@srelens/ui-kit";
+import { KV, PairList, Section, Table, type Column } from "@srelens/ui-kit";
 
 /** A formatted list, one item per line — matches `PodBody`'s/`WorkloadBody`'s
  *  own helper of the same shape, kept local since it's a small presentational
@@ -39,15 +39,19 @@ function ConnectionSection({ object }: { object: K8sObject }) {
   const selector = asRecord(spec.selector) as Record<string, string>;
 
   return (
-    <Panel title="Connection">
+    <Section title="Connection">
       <KV k="Type" v={str(spec.type) || "ClusterIP"} />
       <KV k="Cluster IP" v={str(spec.clusterIP)} mono />
       <KV k="External IP" v={serviceExternalAddress(object) || "—"} mono />
       <KV k="Session affinity" v={str(spec.sessionAffinity)} />
+      {/* `breakValues`: `PairList` truncates by default and no longer writes
+          the value into a row `title` — that attribute was how a Secret's
+          whole applied manifest reached the DOM — so wrapping is the only way
+          a long selector key/value can be read at all. */}
       {Object.keys(selector).length > 0 && (
-        <KV k="Selector" v={<PairList pairs={Object.entries(selector)} />} />
+        <KV k="Selector" v={<PairList pairs={Object.entries(selector)} breakValues />} />
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -89,9 +93,9 @@ function PortsSection({ object }: { object: K8sObject }) {
   });
   if (ports.length === 0) return null;
   return (
-    <Panel title="Ports">
+    <Section title="Ports">
       <Table columns={PORT_COLUMNS} data={ports} getRowKey={(p) => p.key} />
-    </Panel>
+    </Section>
   );
 }
 
@@ -128,9 +132,9 @@ function EndpointSlicesSection({ context, object }: { context: string; object: K
 
   if (names.length === 0) return null;
   return (
-    <Panel title="Endpoint Slices">
+    <Section title="Endpoint Slices">
       <StringList items={names.map((n) => `EndpointSlice/${n}`)} />
-    </Panel>
+    </Section>
   );
 }
 

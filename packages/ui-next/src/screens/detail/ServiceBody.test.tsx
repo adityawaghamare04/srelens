@@ -99,14 +99,30 @@ describe("ServiceDetailsBody", () => {
     });
 
     it("shows the selector as label pairs", () => {
+      // Read off the row's own text. `PairList` deliberately no longer writes
+      // the value into a `title` — a truncated row that carries its value in
+      // an attribute is a disclosure the reader was never shown.
       render(
         <ServiceDetailsBody
           object={service({ selector: { app: "checkout", tier: "backend" } })}
           context="ctx"
         />,
       );
-      expect(screen.getByTitle("app=checkout")).toBeDefined();
-      expect(screen.getByTitle("tier=backend")).toBeDefined();
+      expect(screen.getByText("app=")).toBeDefined();
+      expect(screen.getByText("checkout")).toBeDefined();
+      expect(screen.getByText("tier=")).toBeDefined();
+      expect(screen.getByText("backend")).toBeDefined();
+    });
+
+    it("wraps a long selector value rather than truncating it out of reach", () => {
+      const { container } = render(
+        <ServiceDetailsBody
+          object={service({ selector: { "app.kubernetes.io/name": "checkout-api" } })}
+          context="ctx"
+        />,
+      );
+      expect(container.querySelector(".pairs li.truncate")).toBeNull();
+      expect(container.querySelector(".pairs .v.break-all")).not.toBeNull();
     });
 
     it("omits the selector row for a headless/ExternalName service with none", () => {
@@ -163,6 +179,21 @@ describe("ServiceDetailsBody", () => {
       render(<ServiceDetailsBody object={service({})} context="ctx" />);
       await Promise.resolve();
       expect(screen.queryByText("Endpoint Slices")).toBeNull();
+    });
+  });
+
+  describe("the run of sections", () => {
+    it("is flat blocks divided by rules, not a stack of cards", () => {
+      const { container } = render(
+        <ServiceDetailsBody
+          object={service({ type: "ClusterIP", ports: [{ port: 80, targetPort: 8080 }] })}
+          context="ctx"
+        />,
+      );
+      const blocks = [...container.children];
+      expect(blocks).toHaveLength(2);
+      for (const block of blocks) expect(block.matches("section.section")).toBe(true);
+      expect(container.querySelector(".card")).toBeNull();
     });
   });
 

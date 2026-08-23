@@ -66,18 +66,10 @@ describe("GenericBody", () => {
       },
     );
 
-    it("renders every Metadata fact, with cross-resource references as plain text", () => {
+    it("renders every identity fact, with cross-resource references as plain text", () => {
       render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
-      expect(screen.getByText("Metadata")).toBeDefined();
-      expect(screen.getByText("lease-1")).toBeDefined();
       expect(screen.getByText("kube-node-lease")).toBeDefined();
-      expect(screen.getByText(/ago \(/)).toBeDefined(); // Created: timestampWithAge
       expect(screen.getByText("Node/node-a")).toBeDefined();
-      expect(screen.getByTitle("app=controller")).toBeDefined();
-      // Annotations render behind a collapsed toggle — see the "annotations
-      // secrecy" describe block below for why, and for what a value does and
-      // does not appear in before/after it's expanded.
-      expect(screen.getByRole("button", { name: "Show 1 annotation" })).toBeDefined();
 
       // Namespace and Controlled by are `ResourceLink`/`LinkedResources` in
       // classic that navigate; nothing here can (`PaneBody` has no
@@ -86,11 +78,29 @@ describe("GenericBody", () => {
       expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
 
-    it("omits absent Metadata facts rather than showing them empty", () => {
+    it("heads the first fact list with nothing, the way the design does", () => {
+      // The pane's own header has already named the subject; a "Metadata"
+      // bar above the first list is a second name for it.
+      render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
+      expect(screen.queryByText("Metadata")).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Metadata" })).toBeNull();
+    });
+
+    it("drops Name, which repeats the header verbatim", () => {
+      render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
+      expect(screen.queryByText("Name")).toBeNull();
+      expect(screen.queryByText("lease-1")).toBeNull();
+    });
+
+    it("dates the object by age alone, not age plus an absolute stamp", () => {
+      render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
+      expect(screen.getByText(/^\d+[smhd] ago$/)).toBeDefined();
+      expect(screen.queryByText(/ago \(/)).toBeNull();
+    });
+
+    it("omits absent identity facts rather than showing them empty", () => {
       const bare = object("Lease", {}, {}, { name: "bare-lease" });
       render(<GenericBody kind="Lease" object={bare} context="ctx" />);
-      expect(screen.getByText("Metadata")).toBeDefined();
-      expect(screen.getByText("bare-lease")).toBeDefined();
       expect(screen.queryByText("Namespace")).toBeNull();
       expect(screen.queryByText("Created")).toBeNull();
       expect(screen.queryByText("Controlled by")).toBeNull();
@@ -99,7 +109,98 @@ describe("GenericBody", () => {
     });
   });
 
-  describe("the annotations secrecy gate", () => {
+  describe("the run of sections", () => {
+    it("is flat blocks divided by rules, not a stack of cards", () => {
+      const { container } = render(
+        <GenericBody kind="Lease" object={object("Lease", {}, {}, { name: "l", namespace: "default" })} context="ctx" />,
+      );
+      expect(container.querySelector("section.section")).not.toBeNull();
+      expect(container.querySelector(".card")).toBeNull();
+    });
+
+    it("lands every block as a sibling, so the rule between two of them is drawn", () => {
+      // `.section + .section` is what draws the hairline. A wrapper element
+      // around any block silently removes the rule on both sides of it.
+      const { container } = render(
+        <GenericBody
+          kind="Lease"
+          object={object(
+            "Lease",
+            {},
+            { conditions: [{ type: "Ready", status: "True" }] },
+            { name: "l", namespace: "default", labels: { app: "controller" } },
+          )}
+          context="ctx"
+        />,
+      );
+      const blocks = [...container.children];
+      expect(blocks.length).toBeGreaterThan(1);
+      for (const block of blocks) expect(block.matches("section.section")).toBe(true);
+    });
+
+    it("renders no block at all when a block has nothing to say", () => {
+      // An empty section still has padding and still draws a rule against the
+      // next one, so a missing middle block must be absent, not blank.
+      const { container } = render(
+        <GenericBody kind="Lease" object={object("Lease", {}, {}, { name: "bare-lease" })} context="ctx" />,
+      );
+      expect(container.querySelectorAll("section.section")).toHaveLength(0);
+    });
+
+    it("leaves the nested body first in the run when the object has no identity facts to show", () => {
+      const { container } = render(
+        <GenericBody kind="ConfigMap" object={object("ConfigMap", {}, {}, { name: "cm-1" })} context="ctx">
+          <section className="section" data-testid="nested-body">
+            Nested kind body
+          </section>
+        </GenericBody>,
+      );
+      expect(container.children[0]).toBe(screen.getByTestId("nested-body"));
+    });
+  });
+
+  describe("Labels", () => {
+    const LABELLED = object(
+      "Lease",
+      {},
+      {},
+      { name: "l", namespace: "default", labels: { app: "checkout", tier: "backend" } },
+    );
+
+    it("gets a block of its own rather than a row squeezed into a fact list", () => {
+      render(<GenericBody kind="Lease" object={LABELLED} context="ctx" />);
+      expect(screen.getByRole("heading", { level: 3, name: "Labels" })).toBeDefined();
+      expect(screen.getByText("app=")).toBeDefined();
+      expect(screen.getByText("checkout")).toBeDefined();
+    });
+
+    it("wraps a long value instead of truncating it", () => {
+      // `PairList` no longer writes the value into a `title`, so wrapping is
+      // the only way a long label can be read at all.
+      const { container } = render(<GenericBody kind="Lease" object={LABELLED} context="ctx" />);
+      const rows = [...container.querySelectorAll(".pairs li")];
+      expect(rows).toHaveLength(2);
+      for (const row of rows) expect(row.className).not.toContain("truncate");
+      expect(container.querySelector(".pairs .v.break-all")).not.toBeNull();
+    });
+  });
+
+  describe("Annotations", () => {
+    it("shows them expanded, with no toggle, on an ordinary kind", () => {
+      render(
+        <GenericBody
+          kind="ConfigMap"
+          object={object("ConfigMap", {}, {}, { name: "cm-1", annotations: { "srelens.io/note": "hello" } })}
+          context="ctx"
+        />,
+      );
+      expect(screen.getByRole("heading", { level: 3, name: "Annotations" })).toBeDefined();
+      expect(screen.getByText("hello")).toBeDefined();
+      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
+    });
+  });
+
+  describe("the annotations secrecy gate, which survives on Secret alone", () => {
     // Obviously-fake fixture text — never anything that reads as a real
     // manifest or credential.
     const FIXTURE_VALUE = "fixture-only-not-a-real-last-applied-manifest";
@@ -144,7 +245,7 @@ describe("GenericBody", () => {
       // above) is the count-only "Show 1 annotation" text, not the value.
     });
 
-    it("applies the same gate on any kind, not only Secret — an annotation on any object can carry a manifest", () => {
+    it("gates Secret and nothing else — every other kind's annotations are open, as the design draws them", () => {
       const configMapWithLastApplied = object(
         "ConfigMap",
         {},
@@ -156,27 +257,30 @@ describe("GenericBody", () => {
         },
       );
       render(<GenericBody kind="ConfigMap" object={configMapWithLastApplied} context="ctx" />);
-      expect(documentContains(FIXTURE_VALUE)).toBe(false);
+      // A ConfigMap's applied manifest holds its `data`, which is not secret;
+      // the gate exists for the Secret whose `data` the redaction misses.
+      expect(documentContains(FIXTURE_VALUE)).toBe(true);
+      expect(screen.queryByRole("button", { name: /^Show / })).toBeNull();
     });
   });
 
   describe("a kind with a DETAILS_BODY entry", () => {
-    it("renders the wrapper's Metadata and the nested body together, in classic's order", () => {
+    it("renders the wrapper's facts and the nested body together, in classic's order", () => {
       const { container } = render(
         <GenericBody kind="ConfigMap" object={object("ConfigMap")} context="ctx">
           <div data-testid="nested-body">Nested kind body</div>
         </GenericBody>,
       );
-      expect(screen.getByText("Metadata")).toBeDefined();
+      expect(screen.getByText("Namespace")).toBeDefined();
       expect(screen.getByTestId("nested-body")).toBeDefined();
 
-      // Metadata precedes the nested body in the DOM — classic's
-      // `GenericDetail` nests `KindBody` after its own "Metadata" section.
-      const metadataHeading = screen.getByText("Metadata");
+      // The wrapper's own facts precede the nested body in the DOM — classic's
+      // `GenericDetail` nests `KindBody` after its own metadata section.
+      const namespaceKey = screen.getByText("Namespace");
       const nested = screen.getByTestId("nested-body");
       // eslint-disable-next-line no-bitwise
-      expect(metadataHeading.compareDocumentPosition(nested) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(container.textContent?.indexOf("Metadata")).toBeLessThan(
+      expect(namespaceKey.compareDocumentPosition(nested) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(container.textContent?.indexOf("Namespace")).toBeLessThan(
         container.textContent?.indexOf("Nested kind body") ?? -1,
       );
     });
@@ -215,7 +319,7 @@ describe("GenericBody", () => {
   });
 
   describe("conditions", () => {
-    it("renders conditions as a table", () => {
+    it("renders conditions as the shared rows, not a sortable table", () => {
       render(
         <GenericBody
           kind="Lease"
@@ -227,10 +331,11 @@ describe("GenericBody", () => {
           context="ctx"
         />,
       );
-      expect(screen.getByText("Conditions")).toBeDefined();
+      expect(screen.getByRole("heading", { level: 3, name: "Conditions" })).toBeDefined();
       expect(screen.getByText("Ready")).toBeDefined();
-      expect(screen.getByText("True")).toBeDefined();
-      expect(screen.getByText("AsExpected")).toBeDefined();
+      expect(screen.getByText("True · AsExpected")).toBeDefined();
+      expect(screen.queryByText("Last transition")).toBeNull();
+      expect(screen.queryByRole("columnheader")).toBeNull();
     });
 
     it("reads as empty rather than broken when the object reports no conditions", () => {
@@ -246,14 +351,14 @@ describe("GenericBody", () => {
       );
     });
 
-    it.each([...SELF_DESCRIBING_KINDS])("passes %s's children through without a second Metadata section", (kind) => {
+    it.each([...SELF_DESCRIBING_KINDS])("passes %s's children through without a second identity block", (kind) => {
       render(
         <GenericBody kind={kind} object={object(kind)} context="ctx">
           <div data-testid="own-body">Own Properties section</div>
         </GenericBody>,
       );
       expect(screen.getByTestId("own-body")).toBeDefined();
-      expect(screen.queryByText("Metadata")).toBeNull();
+      expect(screen.queryByText("Namespace")).toBeNull();
     });
 
     // DaemonSet is deliberately NOT in `SELF_DESCRIBING_KINDS` — classic's
@@ -266,7 +371,7 @@ describe("GenericBody", () => {
           <div data-testid="daemonset-body">Scheduling</div>
         </GenericBody>,
       );
-      expect(screen.getByText("Metadata")).toBeDefined();
+      expect(screen.getByText("Namespace")).toBeDefined();
       expect(screen.getByTestId("daemonset-body")).toBeDefined();
     });
   });

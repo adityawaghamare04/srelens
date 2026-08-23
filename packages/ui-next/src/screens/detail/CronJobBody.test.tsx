@@ -162,8 +162,19 @@ describe("CronJobDetailsBody", () => {
     });
   });
 
+  it("is a run of flat blocks, not a stack of cards", async () => {
+    const { container } = render(
+      <CronJobDetailsBody object={cronjob({ schedule: "0 2 * * *" })} context="ctx" />,
+    );
+    await waitFor(() => expect(screen.getByText("No jobs yet")).toBeDefined());
+    const blocks = [...container.children];
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) expect(block.matches("section.section")).toBe(true);
+    expect(container.querySelector(".card")).toBeNull();
+  });
+
   describe("composition with GenericBody", () => {
-    it("renders Metadata and Schedule together with no related-pods section", async () => {
+    it("renders the wrapper's facts and Schedule together with no related-pods section", async () => {
       const cj = cronjob({ schedule: "0 2 * * *" }, {}, { name: "nightly-backup", namespace: "default" });
       render(
         <GenericBody kind="CronJob" object={cj} context="ctx">
@@ -171,7 +182,7 @@ describe("CronJobDetailsBody", () => {
         </GenericBody>,
       );
       await waitFor(() => expect(screen.getByText("No jobs yet")).toBeDefined());
-      expect(screen.getAllByRole("heading", { name: "Metadata" })).toHaveLength(1);
+      expect(screen.getAllByText("Namespace")).toHaveLength(1);
       expect(screen.getByRole("heading", { name: "Schedule" })).toBeDefined();
       // CronJob has no `relatedPodSelector` case, so GenericBody fetches nothing.
       expect(screen.queryByRole("heading", { name: "Pods" })).toBeNull();

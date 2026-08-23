@@ -1,5 +1,5 @@
 import { asRecord, plural, str, type K8sObject } from "@srelens/core";
-import { EmptyState, Panel } from "@srelens/ui-kit";
+import { EmptyState, Section } from "@srelens/ui-kit";
 
 /**
  * One ConfigMap entry — key and value, both shown outright: ConfigMap data
@@ -31,7 +31,7 @@ export function ConfigDetailsBody({ object }: { object: K8sObject }) {
   const data = asRecord(object.data) as Record<string, string>;
   const keys = Object.keys(data);
   return (
-    <Panel title={`Data (${plural(keys.length, "key")})`}>
+    <Section title={`Data (${plural(keys.length, "key")})`}>
       {keys.length === 0 ? (
         <EmptyState title="No data" />
       ) : (
@@ -41,6 +41,6 @@ export function ConfigDetailsBody({ object }: { object: K8sObject }) {
           ))}
         </div>
       )}
-    </Panel>
+    </Section>
   );
 }

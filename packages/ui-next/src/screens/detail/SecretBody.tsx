@@ -13,7 +13,7 @@ import {
   type DockerRegistryRow,
   type K8sObject,
 } from "@srelens/core";
-import { Button, EmptyState, KV, Panel, Spinner, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
+import { Button, EmptyState, KV, Section, Spinner, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
 
 /**
  * A private key's format, read straight off its PEM header — classic's
@@ -107,7 +107,7 @@ function SecretEntry({ name, value }: { name: string; value: string }) {
 function SecretDataSection({ data }: { data: Record<string, string> }) {
   const keys = Object.keys(data);
   return (
-    <Panel title={`Data (${plural(keys.length, "key")})`}>
+    <Section title={`Data (${plural(keys.length, "key")})`}>
       {keys.length === 0 ? (
         <EmptyState title="No data" />
       ) : (
@@ -117,7 +117,7 @@ function SecretDataSection({ data }: { data: Record<string, string> }) {
           ))}
         </div>
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -161,7 +161,7 @@ function TlsSection({ data }: { data: Record<string, string> }) {
   }, [certificate, count]);
   const leaf = certificates?.[0];
   return (
-    <Panel title="TLS material">
+    <Section title="TLS material">
       <KV k="Type" v="kubernetes.io/tls" />
       <KV k="Certificates" v={count > 0 ? plural(count, "certificate") : "Missing tls.crt"} />
       <KV k="Private key" v={privateKeyType(privateKey)} />
@@ -181,7 +181,7 @@ function TlsSection({ data }: { data: Record<string, string> }) {
       {certificates && certificates.length > 0 && (
         <Table columns={CERTIFICATE_COLUMNS} data={certificates} getRowKey={(row) => row.key} />
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -200,7 +200,7 @@ function DockerSection({ data, type }: { data: Record<string, string>; type: str
   const configKey = type === "kubernetes.io/dockercfg" ? ".dockercfg" : ".dockerconfigjson";
   const registries = dockerRegistries(data, type);
   return (
-    <Panel title="Docker registries">
+    <Section title="Docker registries">
       <KV k="Type" v={type} />
       <KV k="Registries" v={plural(registries.length, "registry", "registries")} />
       {data[configKey] && <KV k="Config size" v={formatBytes(decodedByteLength(data[configKey]))} />}
@@ -209,7 +209,7 @@ function DockerSection({ data, type }: { data: Record<string, string>; type: str
       ) : (
         <EmptyState title="No valid registry credentials found" />
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -221,11 +221,11 @@ function DockerSection({ data, type }: { data: Record<string, string>; type: str
 function GeneralSection({ object, keyCount }: { object: K8sObject; keyCount: number }) {
   const immutable = object.immutable === true;
   return (
-    <Panel title="Secret summary">
+    <Section title="Secret summary">
       <KV k="Type" v={str(object.type) || "Opaque"} />
       <KV k="Keys" v={plural(keyCount, "key")} />
       <KV k="Immutable" v={immutable ? "Yes" : "No"} />
-    </Panel>
+    </Section>
   );
 }
 

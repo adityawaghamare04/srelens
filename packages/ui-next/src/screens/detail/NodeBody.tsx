@@ -1,5 +1,5 @@
 import { asRecord, str, type K8sObject } from "@srelens/core";
-import { KV, Panel, StatusPill } from "@srelens/ui-kit";
+import { KV, Section, StatusPill } from "@srelens/ui-kit";
 
 /**
  * A Node's runtime identity — classic's "Info" section, ported fact-for-fact:
@@ -14,7 +14,7 @@ function InfoSection({ object }: { object: K8sObject }) {
   const cordoned = spec.unschedulable === true;
 
   return (
-    <Panel title="Info">
+    <Section title="Info">
       <KV
         k="Scheduling"
         v={
@@ -29,7 +29,7 @@ function InfoSection({ object }: { object: K8sObject }) {
       <KV k="Kernel" v={str(info.kernelVersion)} />
       <KV k="Container runtime" v={str(info.containerRuntimeVersion)} />
       <KV k="Architecture" v={str(info.architecture)} />
-    </Panel>
+    </Section>
   );
 }
 
@@ -43,11 +43,11 @@ function CapacitySection({ object }: { object: K8sObject }) {
   const allocatable = asRecord(status.allocatable);
 
   return (
-    <Panel title="Capacity">
+    <Section title="Capacity">
       <KV k="CPU" v={`${str(allocatable.cpu)} / ${str(capacity.cpu)}`} />
       <KV k="Memory" v={`${str(allocatable.memory)} / ${str(capacity.memory)}`} />
       <KV k="Pods" v={`${str(allocatable.pods)} / ${str(capacity.pods)}`} />
-    </Panel>
+    </Section>
   );
 }
 

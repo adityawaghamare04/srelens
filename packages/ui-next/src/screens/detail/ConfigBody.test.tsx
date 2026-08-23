@@ -57,17 +57,35 @@ describe("ConfigDetailsBody", () => {
     expect(screen.getByText("No data")).toBeDefined();
   });
 
+  it("is a flat block, not a card", () => {
+    const { container } = render(<ConfigDetailsBody object={configMap({ "app.conf": "level=info" })} />);
+    expect(container.querySelector("section.section")).not.toBeNull();
+    expect(container.querySelector(".card")).toBeNull();
+  });
+
   describe("composition with GenericBody", () => {
-    it("renders exactly one Metadata heading and no Pods section", async () => {
+    it("states the ConfigMap's namespace once and renders no Pods section", async () => {
       const cm = configMap({ "app.conf": "level=info" });
       render(
         <GenericBody kind="ConfigMap" object={cm} context="ctx">
           <ConfigDetailsBody object={cm} />
         </GenericBody>,
       );
-      expect(screen.getAllByRole("heading", { name: "Metadata" })).toHaveLength(1);
+      expect(screen.getAllByText("Namespace")).toHaveLength(1);
       expect(screen.queryAllByRole("heading", { name: "Pods" })).toHaveLength(0);
       expect(podsForSelector).not.toHaveBeenCalled();
+    });
+
+    it("lands the wrapper's blocks and the body's own as siblings, so the rules between them draw", () => {
+      const cm = configMap({ "app.conf": "level=info" });
+      const { container } = render(
+        <GenericBody kind="ConfigMap" object={cm} context="ctx">
+          <ConfigDetailsBody object={cm} />
+        </GenericBody>,
+      );
+      const blocks = [...container.children];
+      expect(blocks).toHaveLength(2);
+      for (const block of blocks) expect(block.matches("section.section")).toBe(true);
     });
   });
 });

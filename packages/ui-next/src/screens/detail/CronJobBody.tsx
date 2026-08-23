@@ -9,7 +9,7 @@ import {
   type JobSummary,
   type K8sObject,
 } from "@srelens/core";
-import { KV, LoadingState, Panel, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
+import { KV, LoadingState, Section, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
 
 /** A formatted list, one item per line — matches `PodBody`'s/`WorkloadBody`'s
  *  own helper of the same shape, kept local since it's a small presentational
@@ -52,7 +52,7 @@ function ScheduleSection({ object }: { object: K8sObject }) {
     .filter((job) => job.name);
 
   return (
-    <Panel title="Schedule">
+    <Section title="Schedule">
       <KV k="Schedule" v={str(spec.schedule)} mono />
       <KV k="Suspend" v={spec.suspend === true ? "Yes" : "No"} />
       <KV k="Concurrency policy" v={str(spec.concurrencyPolicy)} />
@@ -68,7 +68,7 @@ function ScheduleSection({ object }: { object: K8sObject }) {
           )
         }
       />
-    </Panel>
+    </Section>
   );
 }
 
@@ -137,21 +137,21 @@ function RecentJobsSection({
   if (state.status === "error") return null; // a missing jobs list shouldn't break the panel
   if (state.status === "loading") {
     return (
-      <Panel title="Recent Jobs">
+      <Section title="Recent Jobs">
         <LoadingState label="Loading jobs" />
-      </Panel>
+      </Section>
     );
   }
 
   return (
-    <Panel title="Recent Jobs">
+    <Section title="Recent Jobs">
       <Table
         columns={RECENT_JOB_COLUMNS}
         data={state.jobs ?? []}
         getRowKey={(j) => j.name}
         emptyText="No jobs yet"
       />
-    </Panel>
+    </Section>
   );
 }
 

@@ -82,6 +82,12 @@ describe("JobDetailsBody", () => {
     });
   });
 
+  it("is a flat block, not a card", () => {
+    const { container } = render(<JobDetailsBody object={job({})} />);
+    expect(container.querySelector("section.section")).not.toBeNull();
+    expect(container.querySelector(".card")).toBeNull();
+  });
+
   describe("composition with GenericBody", () => {
     it("renders exactly one Pods section for a Job reached through GenericBody", async () => {
       const j = job({ selector: { matchLabels: { "job-name": "backup" } } });

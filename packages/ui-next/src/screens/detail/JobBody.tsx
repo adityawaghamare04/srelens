@@ -1,5 +1,5 @@
 import { ageFromTimestamp, asRecord, durationBetween, str, timestampWithAge, type K8sObject } from "@srelens/core";
-import { KV, Panel } from "@srelens/ui-kit";
+import { KV, Section } from "@srelens/ui-kit";
 
 /**
  * A Job's run — classic's "Job" section, ported fact-for-fact: completions,
@@ -22,7 +22,7 @@ export function JobDetailsBody({ object }: { object: K8sObject }) {
       : "—";
 
   return (
-    <Panel title="Job">
+    <Section title="Job">
       <KV k="Completions" v={str(spec.completions)} />
       <KV k="Parallelism" v={str(spec.parallelism)} />
       <KV k="Succeeded" v={str(status.succeeded) || "0"} />
@@ -31,6 +31,6 @@ export function JobDetailsBody({ object }: { object: K8sObject }) {
       <KV k="Started" v={startTime ? timestampWithAge(startTime, now) : "—"} />
       <KV k="Completed" v={completionTime ? timestampWithAge(completionTime, now) : "—"} />
       <KV k="Duration" v={duration} />
-    </Panel>
+    </Section>
   );
 }
