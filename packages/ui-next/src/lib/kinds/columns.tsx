@@ -254,9 +254,16 @@ export const nodeColumns: Column<NodeRow>[] = [
     key: "status",
     header: "Status",
     sortable: true,
+    // The tone comes from `nodeVerdict`, NOT from `phaseKind(n.status)`. The
+    // word and the badges are the mock's, unchanged; only the tone moved. A
+    // cordoned-but-Ready node is `warning`+flagged in core, so reading the
+    // phase alone drew a GREEN "Ready" pill beside the red needs-attention dot
+    // `withRowAffordances` had just given the same row — the exact pairing
+    // `k8sStatus`'s own header says one reading exists to prevent. The dot and
+    // the pill are two channels of one verdict again. (#331)
     render: (n) => (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <StatusPill status={n.status} kind={phaseKind(n.status)} />
+        <StatusPill status={n.status} kind={nodeVerdict(n).health} />
         {n.unschedulable && <Badge tone={BADGE_TONE.warning}>SchedulingDisabled</Badge>}
         {n.taints > 0 && (
           <Badge tone={BADGE_TONE.neutral}>{n.taints > 1 ? `Tainted (${n.taints})` : "Tainted"}</Badge>

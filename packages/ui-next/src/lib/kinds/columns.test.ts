@@ -33,10 +33,12 @@ import {
   jobFlagged,
   nodeFlagged,
   cronJobVerdict,
+  nodeVerdict,
   daemonSetVerdict,
   deploymentVerdict,
   jobVerdict,
   statefulSetVerdict,
+  type NodeRow,
   type PodRow,
 } from "./columns";
 import { customColumns } from "./custom";
@@ -222,6 +224,60 @@ describe("node columns", () => {
     const withMemory = { ...node, memory: 3174 };
     expect(cpu.render!(withCpu)).toBe("2 410m");
     expect(memory.render!(withMemory)).toBe("3.1 Gi");
+  });
+});
+
+/**
+ * The Nodes row's two channels, pinned together.
+ *
+ * `withRowAffordances` draws the unhealthy dot in a hard-coded danger tone off
+ * `flagged`. So the moment `nodeFlagged` existed, the Status pill's own tone
+ * became a SECOND reading of the same fact — and it was `phaseKind(n.status)`,
+ * which calls a cordoned-but-Ready node green. A green "Ready" beside a red
+ * dot is verbatim the pairing `k8sStatus`'s header exists to prevent. (#331)
+ */
+describe("a node's pill and its unhealthy dot are one verdict", () => {
+  const node = (over: Partial<NodeRow>): NodeRow => ({
+    name: "n1", status: "Ready", roles: "worker", version: "1.30", age: "9d",
+    taints: 0, unschedulable: false, ...over,
+  });
+  const statusColumn = nodeColumns.find((c) => c.key === "status")!;
+  const pill = (n: NodeRow) => {
+    const view = render(statusColumn.render!(n) as ReactElement);
+    const el = view.container.querySelector(".status");
+    return { status: el?.textContent ?? "", kind: el?.getAttribute("data-kind") };
+  };
+
+  it("tones a cordoned-but-Ready node's pill amber, beside the dot it now earns", () => {
+    const cordoned = node({ unschedulable: true });
+    expect(nodeFlagged(cordoned)).toBe(true);
+    // Not "success": that is the green-word-beside-a-red-dot frame.
+    expect(pill(cordoned)).toEqual({ status: "Ready", kind: nodeVerdict(cordoned).health });
+    expect(nodeVerdict(cordoned).health).toBe("warning");
+  });
+
+  it("keeps the word the mock draws, and the SchedulingDisabled badge beside it", () => {
+    const view = render(statusColumn.render!(node({ unschedulable: true, taints: 2 })) as ReactElement);
+    // Only the TONE moved to the verdict — the pill still says the bare
+    // readiness word, not core's combined "Ready,SchedulingDisabled" string,
+    // and both badges the mock draws are still there.
+    expect(view.container.querySelector(".status")?.textContent).toBe("Ready");
+    expect(view.container.textContent).toContain("SchedulingDisabled");
+    expect(view.container.textContent).toContain("Tainted (2)");
+  });
+
+  it("never pairs a healthy-toned pill with the dot, nor a danger-toned one without it", () => {
+    for (const status of ["Ready", "NotReady", "Unknown", "SomethingNew"]) {
+      for (const unschedulable of [false, true]) {
+        const n = node({ status, unschedulable });
+        const subject = `${status}${unschedulable ? " · cordoned" : ""}`;
+        // The pill's tone IS the verdict's, so there is only one reading to
+        // be wrong — asserted per case rather than assumed from the render.
+        expect({ subject, kind: pill(n).kind }).toEqual({ subject, kind: nodeVerdict(n).health });
+        if (nodeFlagged(n)) expect({ subject, kind: pill(n).kind }).not.toEqual({ subject, kind: "success" });
+        if (!nodeFlagged(n)) expect({ subject, kind: pill(n).kind }).not.toEqual({ subject, kind: "danger" });
+      }
+    }
   });
 });
 
