@@ -122,14 +122,47 @@ describe("pod columns", () => {
   });
 
   it("flags a pod that is not Running, and only that", () => {
-    const running = { name: "web-0", namespace: "d", phase: "Running", ready: "1/1", restarts: 0, node: "n", age: "1d", image: "redis:7.4-alpine" };
+    const running = { name: "web-0", namespace: "d", phase: "Running", ready: "1/1", restarts: 0, node: "n", age: "1d", image: "redis:7.4-alpine", waitingReason: "" };
     expect(podFlagged(running)).toBe(false);
-    expect(podFlagged({ ...running, phase: "CrashLoopBackOff" })).toBe(true);
     expect(podFlagged({ ...running, phase: "Pending" })).toBe(true);
   });
 
+  it("flags a crash-looping pod, whose phase still reads Running", () => {
+    // The defect: `status.phase` is "Running" for a pod whose only container
+    // is restarting in a back-off loop, so a row that reads nothing but the
+    // phase drew it green with no dot — while the detail header for the very
+    // same pod said CrashLoopBackOff in red.
+    const crashing = { name: "checkout-api-7d", namespace: "d", phase: "Running", ready: "0/1", restarts: 7, node: "n", age: "1d", image: "acme/checkout-api:4f2a1c", waitingReason: "CrashLoopBackOff" };
+    expect(podFlagged(crashing)).toBe(true);
+    const phase = podColumns.find((c) => c.key === "phase")!;
+    const pill = phase.render!(crashing) as { props: { status: string; kind: string } };
+    expect(pill.props.status).toBe("CrashLoopBackOff");
+    expect(pill.props.kind).toBe("danger");
+  });
+
+  it("shows an image-pull failure the same way, and sorts the column on what it shows", () => {
+    const pulling = { name: "web-0", namespace: "d", phase: "Pending", ready: "0/1", restarts: 0, node: "n", age: "1d", image: "acme/missing:1", waitingReason: "ImagePullBackOff" };
+    const phase = podColumns.find((c) => c.key === "phase")!;
+    const pill = phase.render!(pulling) as { props: { status: string; kind: string } };
+    expect(pill.props.status).toBe("ImagePullBackOff");
+    expect(pill.props.kind).toBe("danger");
+    expect(podFlagged(pulling)).toBe(true);
+    // Sorting the Status column on the raw phase would scatter every waiting
+    // pod under "Pending"/"Running" instead of grouping what the reader sees.
+    expect(phase.getSortValue!(pulling)).toBe("ImagePullBackOff");
+  });
+
+  it("leaves a healthy pod reading its phase, not an empty waiting reason", () => {
+    const running = { name: "web-0", namespace: "d", phase: "Running", ready: "1/1", restarts: 0, node: "n", age: "1d", image: "redis:7.4-alpine", waitingReason: "" };
+    const phase = podColumns.find((c) => c.key === "phase")!;
+    const pill = phase.render!(running) as { props: { status: string; kind: string } };
+    expect(pill.props.status).toBe("Running");
+    expect(pill.props.kind).toBe("success");
+    expect(phase.getSortValue!(running)).toBe("Running");
+  });
+
   it("does not flag a Succeeded pod — phaseKind already renders it a green pill, so the dot must agree", () => {
-    const succeeded = { name: "job-abc", namespace: "d", phase: "Succeeded", ready: "0/1", restarts: 0, node: "n", age: "1d", image: "redis:7.4-alpine" };
+    const succeeded = { name: "job-abc", namespace: "d", phase: "Succeeded", ready: "0/1", restarts: 0, node: "n", age: "1d", image: "redis:7.4-alpine", waitingReason: "" };
     expect(podFlagged(succeeded)).toBe(false);
     const phase = podColumns.find((c) => c.key === "phase")!;
     const pill = phase.render!(succeeded) as { props: { kind: string } };

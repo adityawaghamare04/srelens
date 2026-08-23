@@ -2,6 +2,7 @@ import {
   ageSortValue,
   formatStorageSize,
   phaseKind,
+  podStatus,
   type ClusterRoleBindingSummary,
   type ClusterRoleSummary,
   type ConfigMapSummary,
@@ -69,11 +70,14 @@ const metric = (value: number | undefined, format: (value: number) => string) =>
   value == null ? "—" : format(value);
 const metricSort = (value: number | undefined) => value ?? -1;
 
-/** The design's unhealthy dot for a pod: derived from core's `phaseKind`, not
- *  restated here — a phase `phaseKind` calls healthy (e.g. `Succeeded`, which
- *  renders a green pill) must never also earn a "needs attention" dot. The
- *  next phase added to the success set only needs editing in one place. */
-export const podFlagged = (row: PodRow): boolean => phaseKind(row.phase) !== "success";
+/**
+ * The design's unhealthy dot for a pod, and the pill beside it: both read
+ * core's `podStatus`, which is the same function the detail header asks about
+ * the same pod. Nothing here restates a rule, so a row and a header cannot
+ * disagree — they once did, on a crash-looping pod, because this read
+ * `row.phase` alone and a pod in `CrashLoopBackOff` still reports "Running".
+ */
+export const podFlagged = (row: PodRow): boolean => podStatus(row.phase, row.waitingReason).flagged;
 
 export const podColumns: Column<PodRow>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -81,7 +85,14 @@ export const podColumns: Column<PodRow>[] = [
   { key: "ready", header: "Ready", align: "end" },
   {
     key: "phase", header: "Status", sortable: true,
-    render: (p) => <StatusPill status={p.phase} kind={phaseKind(p.phase)} />,
+    render: (p) => {
+      const { status, health } = podStatus(p.phase, p.waitingReason);
+      return <StatusPill status={status} kind={health} />;
+    },
+    // Sorts on what the pill shows, not on the raw phase underneath it:
+    // otherwise every waiting pod scatters under "Pending" and "Running"
+    // instead of grouping with the other pods in the same trouble.
+    getSortValue: (p) => podStatus(p.phase, p.waitingReason).status,
   },
   { key: "restarts", header: "Restarts", sortable: true, align: "end" },
   { key: "cpu", header: "CPU", sortable: true, align: "end", render: (p) => metric(p.cpu, formatCpu), getSortValue: (p) => metricSort(p.cpu) },
