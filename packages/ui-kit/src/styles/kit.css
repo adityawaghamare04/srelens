@@ -595,6 +595,30 @@
   }
   .pane-body { flex: 1; min-height: 0; overflow: auto; }
 
+  /* --- the fixed rail ---------------------------------------------
+     The region beside a main one on almost every screen in the design: a
+     hairline, a small-caps head and a column that scrolls on its own.
+
+     It names NO WIDTH. Four screens want four different ones — events 250,
+     custom resources 264, cluster overview 286, logs 272 — which is four
+     values, not a scale, so the number is the caller's and arrives inline. A
+     width here would be a fifth answer quietly disagreeing with all of them.
+
+     No grip, no cursor, no drag affordance of any kind: only the detail
+     inspector and the left sidebar resize (see `SideRail`'s own note), and
+     `.resize-handle` is where all of that lives. The head is `.pane-head`
+     rather than a class of its own — it is the same small-caps bar a pane
+     wears, and a second copy of it would be a second thing to keep in step. */
+  .side-rail {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-height: 0;
+    background: var(--surface);
+    border-left: 1px solid var(--rule);
+  }
+  .side-rail-body { flex: 1; min-height: 0; overflow: auto; }
+
   /* A flat titled section: the run of blocks a detail body is made of, divided
      by hairline rules rather than boxed in cards. `Panel` draws the card and
      keeps its call sites; this is the other shape, and the two are not one

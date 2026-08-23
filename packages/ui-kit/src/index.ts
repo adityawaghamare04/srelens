@@ -49,6 +49,7 @@ export { Section, type SectionProps } from "./Section";
 export { SegmentBar, type SegmentBarProps } from "./SegmentBar";
 export { Select, type SelectOption, type SelectProps } from "./Select";
 export { Sidebar, type SidebarProps } from "./Sidebar";
+export { SideRail, type SideRailProps } from "./SideRail";
 export { Sparkline } from "./Sparkline";
 export { Spinner, type SpinnerProps } from "./Spinner";
 export { Stat, type StatProps } from "./Stat";

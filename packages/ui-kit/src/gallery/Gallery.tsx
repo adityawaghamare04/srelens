@@ -49,6 +49,7 @@ import { Section } from "../Section";
 import { SegmentBar } from "../SegmentBar";
 import { Select } from "../Select";
 import { Sidebar } from "../Sidebar";
+import { SideRail } from "../SideRail";
 import { Sparkline } from "../Sparkline";
 import { Spinner } from "../Spinner";
 import { Stat } from "../Stat";
@@ -1483,6 +1484,41 @@ export function Gallery() {
             emptyHint="Connect a cluster to see what is in it."
           />
           <p className="flex-1 p-3 text-[0.75rem] text-muted">nothing connected</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>SideRail</h2>
+        {/* The other half of the pair above: the sidebar resizes, this does
+            not. No grip on the hairline, nothing to drag, one number per
+            screen. The wide line in the middle is the whole reason the main
+            region carries `min-w-0` — it scrolls inside its own box instead of
+            shoving the rail off the edge. */}
+        <div className="card flex overflow-hidden" style={{ height: 220 }}>
+          <SideRail
+            head="About this kind"
+            width={264}
+            rail={
+              <>
+                <Section title="Definition">
+                  <KV k="Kind" v="ServiceMonitor" />
+                  <KV k="Scope" v="Namespaced" />
+                  <KV k="Served versions" v="v1, v1beta1" />
+                  <KV k="Storage version" v="v1" />
+                  <KV k="Objects" v="42" />
+                </Section>
+                <Section title="Fetch it yourself">
+                  <KubectlPreview command="kubectl --context prod-eu get servicemonitors.monitoring.coreos.com -A -o wide" />
+                </Section>
+              </>
+            }
+          >
+            <div className="scroll min-h-0 min-w-0 flex-1 p-3">
+              <p className="whitespace-nowrap text-[0.75rem] text-muted">
+                the main region — a table this wide scrolls here rather than widening the row
+              </p>
+            </div>
+          </SideRail>
         </div>
       </section>
 
