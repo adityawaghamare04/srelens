@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PairList } from "./PairList";
 
 /** New: the mock shipped this component with no tests at all. (#320) */
@@ -41,10 +43,37 @@ describe("PairList", () => {
     expect(container.querySelector(".v")?.className).toContain("break-all");
   });
 
-  it("hangs the whole pair off the row as a title", () => {
-    // The truncated row is the one that most needs reading in full.
-    const { container } = render(<PairList pairs={pairs} />);
-    expect(container.querySelector("li")?.getAttribute("title")).toBe("app=web");
+  it("never writes a value into an attribute", () => {
+    // This row used to carry `title={`${k}=${v}`}`, which put the value in the
+    // DOM even when it was visually truncated — and a `kubectl apply`-managed
+    // Secret keeps its whole base64 `data` map inside the
+    // `last-applied-configuration` annotation, which arrives here as a pair.
+    // The detail pane hid annotations behind a toggle to work around exactly
+    // this. Truncation is a visual affordance and must not be a disclosure
+    // boundary that leaks. (#331)
+    const secret: Array<[string, string]> = [
+      ["kubectl.kubernetes.io/last-applied-configuration", '{"data":{"password":"aHVudGVyMg=="}}'],
+    ];
+    const { container } = render(<PairList pairs={secret} />);
+    const row = container.querySelector("li") as HTMLElement;
+    for (const attribute of Array.from(row.attributes)) {
+      expect(attribute.value, `${attribute.name} carries the value`).not.toContain("aHVudGVyMg==");
+    }
+    expect(row.getAttribute("title")).toBeNull();
+  });
+
+  it("offers no way to opt the value back into an attribute", () => {
+    // A prop that puts it back is a prop someone passes on a Secret.
+    const source = readFileSync(join(__dirname, "PairList.tsx"), "utf8");
+    expect(source.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "")).not.toContain("title=");
+  });
+
+  it("reaches the un-truncated form the mock draws", () => {
+    // Full-width monospace lines, one per label, no truncation — which is now
+    // the only way to read a long value in full.
+    const { container } = render(<PairList pairs={pairs} breakValues />);
+    expect(container.querySelector("li")?.className ?? "").not.toContain("truncate");
+    expect(container.querySelector("li")?.textContent).toBe("app=web");
   });
 
   it("renders nothing at all for an empty list", () => {
