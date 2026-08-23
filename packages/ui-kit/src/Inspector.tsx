@@ -7,7 +7,11 @@ import { filled } from "./slot";
 import { toneColor, type Tone } from "./tone";
 
 export interface InspectorFact {
-  /** What the figure is — "Ready", "Restarts", "Age". Always shown. */
+  /**
+   * What the figure is — "Ready", "Restarts", "Age". Read by assistive
+   * technology, not drawn: the design's header shows bare figures, so a value
+   * that needs a word on screen carries its own ("9/12 ready", not "9/12").
+   */
   label: string;
   value: ReactNode;
   /** Tints the figure. Emphasis only: the label and value carry the meaning. */
@@ -71,9 +75,22 @@ export interface InspectorProps {
  * correctly inside whatever landmark it lands in, where a second complementary
  * beside Drawer's would just be noise.
  *
- * The strip is the kit's `Tabs`, not the mock's segmented control, which is a
- * row of buttons with no keyboard contract at all. The look changes; a tablist
- * whose arrow keys work is worth more than the 7px radius.
+ * The strip is the kit's `Tabs` in its segmented variant. The design draws a
+ * rounded segmented control; the version it was drawn from was a row of plain
+ * buttons with no keyboard contract at all, and the kit took the look and left
+ * the buttons — `Tabs` supplies the roving tabindex and the arrow keys, and
+ * wears `.seg` to get the 7px radius as well. Nobody had to choose. (#331)
+ *
+ * **The figures under the status are bare, and that was the user's call.**
+ * This comment used to argue the other way: that "9/12 ready" and "84d" with no
+ * word beside them are unreadable to anyone who did not already know which
+ * column they came from, and so the kit rendered `Ready 9/12  Age 84d` instead.
+ * The user supplied the design and overruled it, and the design is theirs to
+ * decide — so the visible line is now the mock's. What the argument was
+ * actually protecting survives underneath: the facts are still a description
+ * list, and each label is still a `dt` beside its `dd`, only `sr-only`. A
+ * screen reader hears "Age: 84d"; the screen shows "84d". The disagreement was
+ * about the ink, not about the markup, and only the ink changed. (#331)
  */
 export function Inspector({
   name,
@@ -138,7 +155,9 @@ export function Inspector({
                   <span className="sr-only">{flaggedLabel}</span>
                 </>
               )}
-              <h2 id={headingId} className="truncate text-[0.875rem] font-semibold">
+              {/* The largest text on the pane. The peek is read name-first,
+                  and at 14px the subject was the same size as its own tabs. */}
+              <h2 id={headingId} className="truncate text-[1.25rem] font-semibold">
                 {name}
               </h2>
             </div>
@@ -164,16 +183,18 @@ export function Inspector({
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
             {filled(status) && <StatusPill status={status} kind={statusKind} />}
             {facts.length > 0 && (
-              // A description list, because that is what these are. The mock
-              // renders "9/12 ready" and then "6m" with no word at all beside
-              // it, and a bare figure in a header is unreadable to anyone who
-              // did not already know which column it came from.
+              // A description list, because that is what these are — the
+              // pairing is what makes "84d" an age rather than a number. The
+              // terms are hidden rather than dropped: the design shows the
+              // figures bare, and a `dt` costs nothing to anyone reading with
+              // their eyes while being the whole of the meaning to anyone who
+              // is not.
               <dl className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 {facts.map((fact) => (
                   <div key={fact.label} className="flex items-baseline gap-1">
-                    <dt className="path text-faint">{fact.label}</dt>
+                    <dt className="sr-only">{fact.label}</dt>
                     <dd
-                      className="path"
+                      className="fact"
                       style={fact.tone ? { color: toneColor(fact.tone) } : undefined}
                     >
                       {fact.value}
@@ -188,7 +209,13 @@ export function Inspector({
 
       {tabs.length > 0 && (
         <div className="rule-b px-2 py-1.5">
-          <Tabs tabs={tabs} active={active!} onChange={onTabChange ?? (() => {})} label={tabsLabel} />
+          <Tabs
+            tabs={tabs}
+            active={active!}
+            onChange={onTabChange ?? (() => {})}
+            label={tabsLabel}
+            variant="segmented"
+          />
         </div>
       )}
 

@@ -44,6 +44,7 @@ import { Radio } from "../Radio";
 import { ResizeHandle } from "../ResizeHandle";
 import { ResourceTree, type ResourceNode } from "../ResourceTree";
 import { Screen } from "../Screen";
+import { Section } from "../Section";
 import { SegmentBar } from "../SegmentBar";
 import { Select } from "../Select";
 import { Sidebar } from "../Sidebar";
@@ -330,6 +331,15 @@ export function Gallery() {
           <StatusPill status="Terminating" kind="info" />
           <StatusPill status="Unknown" />
         </div>
+        {/* `tinted` colours the word only where the state is bad: red
+            `Degraded`, plain `Running`. Off by default — a table where every
+            cell says something in colour says nothing. */}
+        <div className="kit-gallery__row">
+          <StatusPill status="Degraded" kind="danger" tinted />
+          <StatusPill status="Progressing" kind="warning" tinted />
+          <StatusPill status="Running" kind="success" tinted />
+          <StatusPill status="Unknown" tinted />
+        </div>
       </section>
 
       <section>
@@ -393,6 +403,26 @@ export function Gallery() {
       </section>
 
       <section>
+        <h2>Section</h2>
+        {/* The other shape beside Panel: a run of flat blocks divided by
+            hairline rules, which is what a detail body is made of. The first
+            carries no heading, and no rule is drawn above it. */}
+        <div className="card">
+          <Section>
+            <KV k="Replicas" v="9 ready · 12 desired" />
+            <KV k="Strategy" v="RollingUpdate · surge 25% · unavailable 0" />
+          </Section>
+          <Section title="Conditions">
+            <KV k={<StatusPill status="Available" kind="danger" tinted />} v="False · MinimumReplicasUnavailable" />
+            <KV k={<StatusPill status="ReplicaFailure" kind="success" tinted />} v="False · —" />
+          </Section>
+          <Section title="Labels">
+            <PairList breakValues pairs={[["app.kubernetes.io/name", "checkout-api"]]} />
+          </Section>
+        </div>
+      </section>
+
+      <section>
         <h2>Tabs</h2>
         <Tabs
           tabs={[
@@ -407,6 +437,20 @@ export function Gallery() {
         {/* The keyboard contract is the part worth checking here: the strip is
             one Tab stop, and Left/Right/Home/End move between tabs. */}
         <p className="text-[0.75rem] text-muted">showing: {tab}</p>
+        {/* The segmented variant: the same control and the same keyboard
+            contract, wearing the design's rounded pill instead of the window
+            chrome's flat strip. It is what a detail peek draws. */}
+        <Tabs
+          variant="segmented"
+          tabs={[
+            { id: "pods", label: "Details" },
+            { id: "services", label: "Containers" },
+            { id: "events", label: "Events" },
+          ]}
+          active={tab}
+          onChange={setTab}
+          label="Resource views, segmented"
+        />
       </section>
 
       <section>

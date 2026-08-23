@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Inspector } from "./Inspector";
 
 const TABS = [
@@ -58,34 +60,64 @@ describe("Inspector", () => {
     expect(screen.getByText("Degraded")).toBeDefined();
   });
 
-  it("labels every fact it shows", () => {
-    // "6m" alone says nothing; the label is what makes the figure readable,
-    // and the mock left age and ready unlabelled.
-    setup({
+  it("reads the facts as bare figures", () => {
+    // The mock's header line is `Degraded  9/12 ready  84d` — the figures on
+    // their own, with the word that names them folded into the value where it
+    // is wanted at all. The kit argued for labelled pairs and was overruled by
+    // the user, whose design this is. (#331)
+    const { container } = setup({
       facts: [
-        { label: "Ready", value: "9/12" },
-        { label: "Restarts", value: "7", tone: "sev" as const },
-        { label: "Age", value: "6m" },
+        { label: "Ready", value: "9/12 ready" },
+        { label: "Age", value: "84d" },
       ],
     });
-    // Paired, not merely present: a label sitting beside the wrong figure is
-    // worse than none. (`term` carries no accessible name of its own, so the
-    // pairing is read off the markup.)
-    const ready = screen.getByText("Ready");
-    expect(ready.tagName).toBe("DT");
-    expect(ready.nextElementSibling?.tagName).toBe("DD");
-    expect(ready.nextElementSibling?.textContent).toBe("9/12");
-    expect(screen.getByText("Restarts").nextElementSibling?.textContent).toBe("7");
-    expect(screen.getByText("Age").nextElementSibling?.textContent).toBe("6m");
+    const visible = Array.from(container.querySelectorAll("dd")).map((e) => e.textContent);
+    expect(visible).toEqual(["9/12 ready", "84d"]);
+    expect(Array.from(container.querySelectorAll("dt")).every((e) => e.className.includes("sr-only"))).toBe(true);
+  });
+
+  it("keeps the label for anyone who cannot see which column the figure came from", () => {
+    // Bare on screen, paired in the markup: a `dt` beside its `dd` is what
+    // makes "84d" mean an age to a screen reader. Losing that was the reason
+    // the kit resisted the mock, and it is the part that does not have to go.
+    setup({ facts: [{ label: "Age", value: "84d" }] });
+    const age = screen.getByText("Age");
+    expect(age.tagName).toBe("DT");
+    expect(age.nextElementSibling?.tagName).toBe("DD");
+    expect(age.nextElementSibling?.textContent).toBe("84d");
   });
 
   it("keeps a toned fact readable without its colour", () => {
     // Tone is emphasis. The label and the figure carry the meaning, so a
     // reader who never sees the red still learns there are 7 restarts.
-    setup({ facts: [{ label: "Restarts", value: "7", tone: "sev" as const }] });
-    const value = screen.getByText("7");
-    expect(value.textContent).toBe("7");
+    setup({ facts: [{ label: "Restarts", value: "7 restarts", tone: "sev" as const }] });
+    expect(screen.getByText("7 restarts").textContent).toBe("7 restarts");
     expect(screen.getByText("Restarts")).toBeDefined();
+  });
+
+  it("makes the subject's name the largest thing on the pane", () => {
+    // ~20px in the mock, against the 12px the rest of the header runs at. The
+    // peek is read name-first, and at 14px it was the same size as the tabs.
+    setup();
+    expect(screen.getByRole("heading", { level: 2, name: "checkout-api" }).className).toContain("text-[1.25rem]");
+  });
+
+  it("gives a fact normal ink and leaves muting to a tone", () => {
+    // The design's line is `Degraded  9/12 ready  84d`: the ratio in ordinary
+    // ink, only the age quiet. Rendered muted throughout — which is what the
+    // header's `.path` would have done — there is no way for the screen to
+    // draw the difference at all.
+    const { container } = setup({
+      facts: [
+        { label: "Ready", value: "9/12 ready" },
+        { label: "Age", value: "84d", tone: "muted" as const },
+      ],
+    });
+    const [ready, age] = Array.from(container.querySelectorAll<HTMLElement>("dd"));
+    expect(ready.className).toContain("fact");
+    expect(ready.className).not.toContain("path");
+    expect(ready.style.color).toBe("");
+    expect(age.style.color).toBe("var(--ink-muted)");
   });
 
   it("names no colour of its own for a fact's tone", () => {
@@ -143,6 +175,15 @@ describe("Inspector", () => {
     screen.getByRole("tab", { name: "Details" }).focus();
     await userEvent.keyboard("{ArrowRight}");
     expect(onTabChange).toHaveBeenLastCalledWith("containers");
+  });
+
+  it("draws its panes as the mock's segmented control", () => {
+    // The peek is the frame the mock draws, so the variant is fixed here
+    // rather than asked of every caller: five panes as a rounded outlined
+    // container with the active one a raised pill.
+    const { container } = setup();
+    expect(container.querySelector(".seg")).not.toBeNull();
+    expect(container.querySelector(".tabstrip")).toBeNull();
   });
 
   it("names the tab strip when the caller says what the panes are", () => {
@@ -249,5 +290,35 @@ describe("Inspector keyboard behaviour", () => {
     screen.getByRole("tab", { name: "Details" }).focus();
     await userEvent.keyboard("{Escape}");
     expect(onOuterKeyDown.mock.calls[0][0].defaultPrevented).toBe(false);
+  });
+});
+
+/**
+ * The kit's doc comments are the record of why each component looks as it
+ * does, and the header's shape was argued out in one of them before the user
+ * supplied the mock. A comment left arguing against the code beneath it is
+ * worse than no comment: the next reader takes it for the current decision.
+ */
+describe("the header's figures", () => {
+  it("style themselves from the components layer, not from utilities", () => {
+    // `.fact` sets a colour, and the header puts Tailwind utilities on the
+    // elements around it. Landing in the utilities layer would put it in a
+    // race with those instead of underneath them, and the loser would be
+    // whichever the bundler happened to emit second.
+    const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+    const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+    expect(components).toContain("\n  .fact {");
+  });
+});
+
+describe("Inspector's own record", () => {
+  const source = readFileSync(join(__dirname, "Inspector.tsx"), "utf8");
+
+  it("records that the bare figures were the user's call, not the kit's", () => {
+    expect(source).toMatch(/overrul/i);
+  });
+
+  it("no longer argues that a bare figure is unreadable", () => {
+    expect(source).not.toContain("is unreadable to anyone who");
   });
 });
