@@ -58,6 +58,24 @@ describe("listEvents", () => {
       objectName: "web-1",
     });
   });
+
+  it("carries an event's repeat count through", async () => {
+    const invoke = async () => ({
+      events: [
+        {
+          name: "web.17a",
+          type: "Warning",
+          reason: "BackOff",
+          object: "pod/web",
+          message: "m",
+          age: "12s",
+          count: 37,
+        },
+      ],
+    });
+    const out = await listEvents("ctx", "ns", undefined, invoke as never);
+    expect(out.events?.[0].count).toBe(37);
+  });
 });
 
 describe("applyManifest", () => {

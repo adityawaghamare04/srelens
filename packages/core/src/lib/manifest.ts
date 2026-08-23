@@ -380,6 +380,8 @@ export interface EventSummary {
   object: string;
   message: string;
   age: string;
+  /** How many times this event has fired. The backend sends 1 when absent. */
+  count: number;
 }
 
 export interface EventObjectFilter {

@@ -4,10 +4,10 @@ import React from "react";
 import { ResourceEvents } from "./ResourceEvents";
 
 const events = [
-  { type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "restarting", age: "2m" },
-  { type: "Normal", reason: "Pulled", object: "other-9", message: "pulled image", age: "5m" },
-  { type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned", age: "6m" },
-  { type: "Warning", reason: "Collision", object: "Service/web-1", message: "same name", age: "1m" },
+  { type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "restarting", age: "2m", count: 1 },
+  { type: "Normal", reason: "Pulled", object: "other-9", message: "pulled image", age: "5m", count: 1 },
+  { type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned", age: "6m", count: 1 },
+  { type: "Warning", reason: "Collision", object: "Service/web-1", message: "same name", age: "1m", count: 1 },
 ];
 
 describe("ResourceEvents", () => {

@@ -333,8 +333,8 @@ describe("ResourceDetailView", () => {
     getObject.mockResolvedValue({ object: POD });
     listEvents.mockResolvedValue({
       events: [
-        { name: "web-1.abc", type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "container crashed", age: "5m" },
-        { name: "web-1.def", type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned to node-3", age: "10m" },
+        { name: "web-1.abc", type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "container crashed", age: "5m", count: 1 },
+        { name: "web-1.def", type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned to node-3", age: "10m", count: 1 },
       ],
     });
     const { getByRole, getByText } = render(

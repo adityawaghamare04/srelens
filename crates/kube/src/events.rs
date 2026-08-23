@@ -32,6 +32,8 @@ pub struct EventSummary {
     pub object: String,
     pub message: String,
     pub age: String,
+    /// How many times this event has fired. Absent means once, not none.
+    pub count: i32,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -59,6 +61,7 @@ pub(crate) fn summarise(ev: Event) -> EventSummary {
         object,
         message: ev.message.clone().unwrap_or_default(),
         age,
+        count: ev.count.unwrap_or(1),
     }
 }
 
@@ -127,6 +130,24 @@ mod tests {
         let s = summarise(ev);
         assert_eq!(s.type_, "Warning");
         assert_eq!(s.object, "Pod/web-1");
+    }
+
+    #[test]
+    fn summarise_carries_the_repeat_count() {
+        let mut ev = Event::default();
+        ev.metadata.name = Some("web.17a".into());
+        ev.type_ = Some("Warning".into());
+        ev.reason = Some("BackOff".into());
+        ev.message = Some("Back-off restarting failed container".into());
+        ev.count = Some(37);
+        assert_eq!(summarise(ev).count, 37);
+    }
+
+    #[test]
+    fn summarise_reads_an_absent_count_as_one() {
+        let mut ev = Event::default();
+        ev.metadata.name = Some("web.17b".into());
+        assert_eq!(summarise(ev).count, 1);
     }
 
     #[test]
