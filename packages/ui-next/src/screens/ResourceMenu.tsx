@@ -14,6 +14,7 @@ import {
 import { ConfirmDialog, KubectlPreview, TextInput, type ContextMenuItem } from "@srelens/ui-kit";
 import { detailRoute } from "../lib/detailRoute";
 import { Icons } from "../lib/icons";
+import { ROW_ACTION_LABEL } from "../lib/kinds/rowActions";
 import type { KindActions, ListRow } from "../lib/kinds/types";
 import { openTab } from "../lib/tabsStore";
 
@@ -138,30 +139,30 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
 
     const list: ContextMenuItem[] = [
       {
-        label: "Open in new tab",
+        label: ROW_ACTION_LABEL.openTab,
         onPick: () => openTab(detailRoute(kind, row.namespace ?? null, row.name), { clusterName: context }),
       },
     ];
     if (actions.logs) {
-      list.push({ label: "Follow logs", icon: Icons.logs, onPick: () => openTab(nav(row.name, "logs"), { clusterName: context }) });
+      list.push({ label: ROW_ACTION_LABEL.logs, icon: Icons.logs, onPick: () => openTab(nav(row.name, "logs"), { clusterName: context }) });
     }
     if (actions.shell) {
-      list.push({ label: "Open shell", icon: Icons.terminal, onPick: () => openTab(nav(row.name, "shell"), { clusterName: context }) });
+      list.push({ label: ROW_ACTION_LABEL.shell, icon: Icons.terminal, onPick: () => openTab(nav(row.name, "shell"), { clusterName: context }) });
     }
     if (actions.forward) {
       list.push({
-        label: "Port forward",
+        label: ROW_ACTION_LABEL.forward,
         icon: Icons.portforwards,
         onPick: () => openTab(nav(row.name, "forward"), { clusterName: context }),
       });
     }
     list.push({
-      label: "Edit",
+      label: ROW_ACTION_LABEL.edit,
       icon: Icons.edit,
       onPick: () => openTab(`/edit/${encodeURIComponent(row.name)}`, { clusterName: context }),
     });
     list.push({
-      label: "Copy as kubectl",
+      label: ROW_ACTION_LABEL.copy,
       icon: Icons.copy,
       onPick: () => void copyKubectlCommand(toKubectl({ ...kubectlBase, action: "get", output: "yaml" })),
     });
@@ -169,13 +170,13 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
     if (actions.suspend) {
       const suspended = isSuspended(row);
       list.push({
-        label: suspended ? "Resume" : "Suspend",
+        label: suspended ? ROW_ACTION_LABEL.resume : ROW_ACTION_LABEL.suspend,
         icon: suspended ? Icons.play : Icons.pause,
         onPick: () => open({ type: "suspend", row, suspend: !suspended }),
       });
     }
     if (actions.trigger) {
-      list.push({ label: "Run now", onPick: () => void runNow(row) });
+      list.push({ label: ROW_ACTION_LABEL.trigger, onPick: () => void runNow(row) });
     }
 
     // The destructive group. Every entry in it sets `danger` — shipping only
@@ -183,21 +184,21 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
     // review finding applies here, in a second menu.
     const destructive: ContextMenuItem[] = [];
     if (actions.scale) {
-      destructive.push({ label: "Scale", icon: Icons.scale, danger: true, onPick: () => open({ type: "scale", row }) });
+      destructive.push({ label: ROW_ACTION_LABEL.scale, icon: Icons.scale, danger: true, onPick: () => open({ type: "scale", row }) });
     }
     if (actions.restart) {
       destructive.push({
-        label: "Restart rollout",
+        label: ROW_ACTION_LABEL.restart,
         icon: Icons.restart,
         danger: true,
         onPick: () => open({ type: "restart", row }),
       });
     }
     if (actions.evict) {
-      destructive.push({ label: "Evict", icon: Icons.evict, danger: true, onPick: () => open({ type: "evict", row }) });
+      destructive.push({ label: ROW_ACTION_LABEL.evict, icon: Icons.evict, danger: true, onPick: () => open({ type: "evict", row }) });
     }
     if (actions.delete !== false) {
-      destructive.push({ label: "Delete", icon: Icons.trash, danger: true, onPick: () => open({ type: "delete", row }) });
+      destructive.push({ label: ROW_ACTION_LABEL.delete, icon: Icons.trash, danger: true, onPick: () => open({ type: "delete", row }) });
     }
     if (destructive.length) list.push({ kind: "sep" }, ...destructive);
 

@@ -25,10 +25,12 @@ import {
   type TabItem,
 } from "@srelens/ui-kit";
 import { Icons } from "../../lib/icons";
+import { CUSTOM_RESOURCE_ACTIONS } from "../../lib/kinds/custom";
 import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
 import { ConfigDetailsBody } from "./ConfigBody";
 import { CronJobDetailsBody } from "./CronJobBody";
+import { DetailFooter } from "./DetailFooter";
 import { GenericBody } from "./GenericBody";
 import { JobDetailsBody } from "./JobBody";
 import { NodeDetailsBody } from "./NodeBody";
@@ -487,18 +489,41 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
   const DetailsBody = DETAILS_BODY[kind];
   const ContainersBody = CONTAINERS_BODY[kind];
   const MetricsBody = METRICS_BODY[kind];
+  // Read once: the header draws the verdict, and the footer's Ask asks a
+  // different question of an unhealthy subject than of a healthy one.
+  const header = statusHeader(kind, object);
 
   return (
     <Inspector
       name={name}
       subtitle={subtitle}
-      {...statusHeader(kind, object)}
+      {...header}
       actions={actions}
       tabs={tabs}
       activeTab={active}
       onTabChange={selectTab}
       tabsLabel="Resource views"
       onClose={peek?.onClose}
+      // The design's bar, on both hosts. Nothing about it comes from `peek`:
+      // the peek and the tab are one pane (R-5), and a footer that arrived by
+      // a route only one of them had would be the second thing they disagreed
+      // about. It is not offered on the loading or error states above —
+      // Suspend/Resume reads the object's own `spec`, and half of these
+      // actions are writes against something the pane could not even read.
+      footer={
+        <DetailFooter
+          context={context}
+          kind={kind}
+          namespace={namespace}
+          name={name}
+          // A kind outside `K8S_KIND` has no descriptor at all, which is
+          // precisely the custom-resource case — so it inherits the very
+          // action set `customDescriptor` gives one, Delete withheld and all.
+          actions={descriptor?.actions ?? CUSTOM_RESOURCE_ACTIONS}
+          flagged={header.flagged ?? false}
+          suspended={object.spec?.suspend === true}
+        />
+      }
     >
       {active === PANE_DETAILS && (
         <GenericBody kind={kind} object={object} context={context}>
@@ -537,19 +562,41 @@ function YamlPane({
       <ErrorState title={`Could not load ${describeTarget(kind, namespace, name)}'s manifest`} detail={state.error} />
     );
   }
-  const editor = <CodeEditor value={state.data} readOnly language="yaml" ariaLabel={`${name} manifest`} />;
-  if (!redacted) return editor;
-  // Told, not silently shown less: a manifest quietly missing its values
-  // reads as the manifest the cluster has, and someone comparing it against
-  // `kubectl get -o yaml` would have no idea why the two disagree. Tone
-  // "info" is a `status` region rather than an `alert`, so it never competes
-  // with this pane's own error state for a screen reader's attention.
+  // The height, which the pane got wrong until #331's second round. Three
+  // things have to hold together and only the last of them is obvious:
+  //
+  // - `fill` on the editor. Without it the kit's `CodeEditor` grows with its
+  //   content up to `maxHeight`, which defaults to 520px — a little under 28
+  //   lines of 12px type at a 1.55 line height, which is exactly where the
+  //   manifest was being cut, with the rest of the pane left blank beneath
+  //   it. Its own wrapper's `h-full` did not save it: `height` and
+  //   `max-height` are different properties, and the cap wins the used height.
+  // - a column that owns the pane's height (`h-full`), so the notice and the
+  //   editor divide it rather than stack inside an auto-height box.
+  // - `min-h-0` on the editor's seat. `fill` resolves to `height: 100%`,
+  //   which is nothing at all against a parent whose own height is auto, and
+  //   a flex child's default `min-height: auto` refuses to shrink below its
+  //   content — the pair of them is what makes the editor scroll internally
+  //   instead of pushing the notice off the top.
+  //
+  // Same slot either way, so the redacted case is one more row in the column
+  // rather than a second layout to keep in step.
   return (
-    <div className="flex flex-col gap-2">
-      <Alert tone="info" title="Values redacted">
-        This Secret's values are not shown here. Reveal them one key at a time in the Details pane.
-      </Alert>
-      {editor}
+    <div data-slot="yaml-editor" className="flex h-full flex-col gap-2">
+      {/* Told, not silently shown less: a manifest quietly missing its values
+          reads as the manifest the cluster has, and someone comparing it
+          against `kubectl get -o yaml` would have no idea why the two
+          disagree. Tone "info" is a `status` region rather than an `alert`, so
+          it never competes with this pane's own error state for a screen
+          reader's attention. */}
+      {redacted && (
+        <Alert tone="info" title="Values redacted">
+          This Secret's values are not shown here. Reveal them one key at a time in the Details pane.
+        </Alert>
+      )}
+      <div className="min-h-0 flex-1">
+        <CodeEditor value={state.data} readOnly language="yaml" fill ariaLabel={`${name} manifest`} />
+      </div>
     </div>
   );
 }

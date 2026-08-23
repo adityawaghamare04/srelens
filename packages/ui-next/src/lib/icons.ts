@@ -45,6 +45,7 @@ import {
   ShieldCheck,
   ShipWheel,
   Signpost,
+  Sparkles,
   SlidersHorizontal,
   Scaling,
   Sun,
@@ -172,6 +173,11 @@ export const Icons = {
   /** Promote what is on screen into a tab of its own — the detail peek's
    *  "Open tab". */
   openTab: ExternalLink,
+
+  /** Hand what is on screen to the agent — the row's ask chip wears its own
+   *  inline glyph (the kit takes no icon-set dependency), so this is for the
+   *  detail pane's footer button, which is a `Button` like any other. */
+  ask: Sparkles,
 
   // The application log screen's own actions.
   refresh: RefreshCw,

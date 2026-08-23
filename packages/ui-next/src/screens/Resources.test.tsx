@@ -298,10 +298,18 @@ const lastDetailProps = () => ({ ...detailProps[detailProps.length - 1] });
  * Open a detail route in a tab and render the screen registered for it — the
  * way `Body` does. The tab host takes the same `{ route }` prop every screen
  * does; everything it shows is parsed back out of that string.
+ *
+ * Wrapped in the same `ConsoleProvider` the real shell mounts at the root, and
+ * for the same reason `open` above is: the pane's footer bar reaches
+ * `useConsole()` for its Ask button, in this host exactly as in the peek.
  */
 function openDetailTab(route: string) {
   store.openTab(route);
-  return render(<ResourceDetailScreen route={route} />);
+  return render(
+    <ConsoleProvider>
+      <ResourceDetailScreen route={route} />
+    </ConsoleProvider>,
+  );
 }
 
 /** Open the column picker and hand back its panel. */

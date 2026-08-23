@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { useLayoutEffect } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { createElement, useLayoutEffect, type ReactElement, type ReactNode } from "react";
+import { render as renderBare, screen, waitFor, within, type RenderOptions } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { CrdRef, EventSummary, K8sObject } from "@srelens/core";
 import { toneColor } from "@srelens/ui-kit";
@@ -12,11 +12,14 @@ import type { KindDescriptor, ListRow } from "../../lib/kinds/types";
 // manifest. All four are core's, mocked here so a test controls what "the
 // cluster said" without one — `importOriginal` keeps everything else
 // (K8S_KIND, and the real types) intact.
-const { getObject, getManifest, listEvents, listCrds } = vi.hoisted(() => ({
+const { getObject, getManifest, listEvents, listCrds, deleteResource } = vi.hoisted(() => ({
   getObject: vi.fn(async (): Promise<{ object?: K8sObject; error?: string }> => ({})),
   getManifest: vi.fn(async (): Promise<{ yaml?: string; error?: string }> => ({ yaml: "" })),
   listEvents: vi.fn(async (): Promise<{ events?: EventSummary[]; error?: string }> => ({ events: [] })),
   listCrds: vi.fn(async (): Promise<{ crds?: CrdRef[]; error?: string }> => ({ crds: [] })),
+  // The footer's actions are the row menu's, so the one write a test reaches
+  // for is mocked here too — a confirm that is never taken must reach nothing.
+  deleteResource: vi.fn(async (): Promise<{ error?: string }> => ({})),
 }));
 
 vi.mock("@srelens/core", async (importOriginal) => ({
@@ -25,6 +28,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   getManifest,
   listEvents,
   listCrds,
+  deleteResource,
 }));
 
 // The shell asks the same descriptor the list screen resolves, only to read
@@ -36,7 +40,55 @@ const { descriptorFor } = vi.hoisted(() => ({
 
 vi.mock("../../lib/kinds/descriptors", () => ({ descriptorFor }));
 
+// The kit's `CodeEditor`, unchanged — wrapped only to record what the YAML
+// pane hands it. CodeMirror compiles its sizing into a generated stylesheet
+// with hashed class names and jsdom applies no CSS, so what the editor was
+// ASKED for is the only thing observable here (`CodeEditor.test.tsx` says the
+// same, at greater length). Everything else in the kit stays real.
+const { codeEditorProps } = vi.hoisted(() => ({ codeEditorProps: [] as Record<string, unknown>[] }));
+
+vi.mock("@srelens/ui-kit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@srelens/ui-kit")>();
+  return {
+    ...actual,
+    CodeEditor: (props: Record<string, unknown>) => {
+      codeEditorProps.push({ ...props });
+      return createElement(actual.CodeEditor, props as never);
+    },
+  };
+});
+
+import { ConsoleProvider, useConsole } from "../../console";
 import { ResourceDetail } from "./ResourceDetail";
+
+/** Every question the console was handed, in order. */
+const asked: string[] = [];
+
+/** Stands in for the console dock: the thing `ask` delivers to. */
+function AskProbe() {
+  const { registerSubmit } = useConsole();
+  useLayoutEffect(() => registerSubmit((question) => void asked.push(question)), [registerSubmit]);
+  return null;
+}
+
+/**
+ * Every render goes through the provider the real shell mounts at the root:
+ * the pane's footer reaches `useConsole()` for its Ask button, and that hook
+ * throws rather than quietly handing back nothing. The probe rides along so a
+ * test can read what was actually asked.
+ */
+function Wrapper({ children }: { children: ReactNode }) {
+  return (
+    <ConsoleProvider>
+      <AskProbe />
+      {children}
+    </ConsoleProvider>
+  );
+}
+
+function render(ui: ReactElement, options?: Omit<RenderOptions, "wrapper">) {
+  return renderBare(ui, { wrapper: Wrapper, ...options });
+}
 
 const POD: K8sObject = {
   kind: "Pod",
@@ -122,6 +174,8 @@ describe("ResourceDetail", () => {
     listEvents.mockResolvedValue({ events: [] });
     listCrds.mockResolvedValue({ crds: [] });
     descriptorFor.mockReturnValue(undefined);
+    codeEditorProps.length = 0;
+    asked.length = 0;
   });
 
   it("shows a loading state while the object is in flight", () => {
@@ -737,5 +791,192 @@ describe("ResourceDetail", () => {
     const asTab = render(<ResourceDetail {...props} />);
     await waitFor(() => expect(asTab.getByRole("tab", { name: "Details" })).toBeDefined());
     expect(asTab.queryByRole("button", { name: "Open tab" })).toBeNull();
+  });
+
+  /**
+   * The user's report: the YAML editor took the top third of the pane and the
+   * manifest stopped around line 28, with a blank white field beneath it.
+   *
+   * The cause was the kit's `CodeEditor` default. Left to itself it grows with
+   * its content up to `maxHeight` (520px), and 520px of 12px type at a 1.55
+   * line height is a little under 28 lines — the very place the manifest was
+   * cut. Its wrapper's `h-full` did not save it: `height` and `max-height` are
+   * different properties, and the cap wins on the used height.
+   */
+  describe("the YAML pane's height", () => {
+    async function openYaml(kind: string, name: string) {
+      const view = render(<ResourceDetail context="ctx" kind={kind} namespace="default" name={name} />);
+      await waitFor(() => expect(view.getByRole("tab", { name: "YAML" })).toBeDefined());
+      await userEvent.click(view.getByRole("tab", { name: "YAML" }));
+      return view;
+    }
+
+    it("asks the editor to fill the pane and scroll inside it", async () => {
+      getObject.mockResolvedValue({ object: POD });
+      const { container } = await openYaml("Pod", "web-1");
+      await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+
+      expect(codeEditorProps.at(-1)?.fill).toBe(true);
+    });
+
+    it("gives that editor a parent with a height to fill", async () => {
+      getObject.mockResolvedValue({ object: POD });
+      const { container } = await openYaml("Pod", "web-1");
+      await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+
+      // `fill` resolves to `height: 100%`, which is nothing at all against a
+      // parent whose own height is auto. The pane's body is a definite height;
+      // this is the chain that carries it down to the editor.
+      const host = container.querySelector('[data-slot="yaml-editor"]') as HTMLElement | null;
+      expect(host?.className).toContain("h-full");
+      const seat = host?.querySelector(".cm-editor")?.parentElement?.parentElement;
+      expect(seat?.className).toContain("flex-1");
+      expect(seat?.className).toContain("min-h-0");
+    });
+
+    it("keeps the Secret redaction notice from taking that height away", async () => {
+      getObject.mockResolvedValue({ object: SECRET });
+      getManifest.mockResolvedValue({ yaml: `kind: Secret\ndata:\n  token: ${FIXTURE_B64}\n` });
+      const { container, getByRole } = await openYaml("Secret", "s-1");
+      await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("REDACTED"));
+
+      // The notice is a sibling above the editor, not a block the editor has
+      // to grow under: same slot, same seat, one more row in it.
+      expect(getByRole("status")).toBeDefined();
+      expect(codeEditorProps.at(-1)?.fill).toBe(true);
+      const host = container.querySelector('[data-slot="yaml-editor"]') as HTMLElement | null;
+      expect(host?.className).toContain("h-full");
+      const seat = host?.querySelector(".cm-editor")?.parentElement?.parentElement;
+      expect(seat?.className).toContain("flex-1");
+      expect(seat?.className).toContain("min-h-0");
+    });
+  });
+
+  /**
+   * The design's footer: a wide `Ask`, the kind's own two actions, and an
+   * overflow. The middle pair varies by kind and comes off `KindActions` — no
+   * branch on a kind's name lives here — while `Ask` and the overflow are the
+   * pane's own shape.
+   */
+  describe("the footer action bar", () => {
+    const podDescriptor = () => baseDescriptor({ actions: { logs: true, shell: true, forward: true, evict: true } });
+    const deploymentDescriptor = () =>
+      baseDescriptor({ k8sKind: "Deployment", actions: { logs: true, scale: true, restart: true } });
+
+    /** `Inspector` puts it last inside the pane, and nowhere else. */
+    const footer = () => document.querySelector("section.pane > footer") as HTMLElement | null;
+    const barWords = () => Array.from(footer()?.querySelectorAll("button") ?? []).map((b) => b.textContent);
+
+    it("puts Logs and Edit on a Deployment's bar, behind Ask and before the overflow", async () => {
+      getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
+      descriptorFor.mockReturnValue(deploymentDescriptor());
+      const { getByRole } = render(
+        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
+
+      expect(barWords()).toEqual(["Ask", "Logs", "Edit", "More actions"]);
+    });
+
+    it("swaps that Edit for Shell on a Pod, off the descriptor rather than the kind's name", async () => {
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      descriptorFor.mockReturnValue(podDescriptor());
+      const { getByRole } = render(
+        <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
+
+      expect(barWords()).toEqual(["Ask", "Logs", "Shell", "More actions"]);
+    });
+
+    it("asks the console about this very subject, and asks WHY when it is unhealthy", async () => {
+      getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
+      descriptorFor.mockReturnValue(deploymentDescriptor());
+      const { getByRole } = render(
+        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
+      await userEvent.click(within(footer()!).getByRole("button", { name: /^Ask/ }));
+
+      // The same phrasing a list row's chip sends — one question per gesture,
+      // not two spellings of it.
+      expect(asked).toEqual(["Why is checkout-api unhealthy?"]);
+    });
+
+    it("asks the other question of a healthy subject", async () => {
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      descriptorFor.mockReturnValue(podDescriptor());
+      const { getByRole } = render(
+        <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
+      await userEvent.click(within(footer()!).getByRole("button", { name: /^Ask/ }));
+
+      expect(asked).toEqual(["What is cart-session-store-0 using right now?"]);
+    });
+
+    it("folds the rest behind the overflow, and confirms a destructive one before it runs", async () => {
+      getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
+      descriptorFor.mockReturnValue(deploymentDescriptor());
+      const { getByRole } = render(
+        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
+      await userEvent.click(getByRole("button", { name: "More actions" }));
+
+      const menu = await screen.findByRole("dialog");
+      expect(Array.from(menu.querySelectorAll("button")).map((b) => b.textContent)).toEqual([
+        "Copy as kubectl",
+        "Scale",
+        "Restart rollout",
+        "Delete",
+      ]);
+      // Marked destructive, not merely present: the same tone the row menu
+      // gives the same entries.
+      const del = within(menu).getByRole("button", { name: "Delete" });
+      expect((del as HTMLElement).style.color).toBe(toneColor("sev"));
+
+      // And it takes a confirm. The pane has to RENDER `useRowMenu`'s dialog,
+      // not just its items — a footer wired to the items alone offers Delete
+      // and then does nothing at all.
+      await userEvent.click(del);
+      expect(await screen.findByRole("heading", { name: "Delete Deployment?" })).toBeDefined();
+      expect(deleteResource).not.toHaveBeenCalled();
+    });
+
+    it("withholds Delete from a custom resource, whose GVK the backend cannot resolve", async () => {
+      getObject.mockResolvedValue({ object: { kind: "Widget", metadata: { name: "w-1", namespace: "default" } } });
+      // No descriptor is exactly what a kind outside `K8S_KIND` gets, and it is
+      // the same verdict `customDescriptor` reaches: Delete would always fail,
+      // and an action that cannot work is worse than an absent one.
+      descriptorFor.mockReturnValue(undefined);
+      const { getByRole, queryByRole } = render(
+        <ResourceDetail context="ctx" kind="Widget" namespace="default" name="w-1" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
+
+      expect(barWords()).toEqual(["Ask", "Edit", "Copy as kubectl"]);
+      // Nothing was left over to fold, so there is no overflow to open onto an
+      // empty menu.
+      expect(queryByRole("button", { name: "More actions" })).toBeNull();
+    });
+
+    it("is the same footer in the peek and in the tab", async () => {
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      descriptorFor.mockReturnValue(podDescriptor());
+      const props = { context: "ctx", kind: "Pod", namespace: "checkout", name: "cart-session-store-0" } as const;
+
+      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
+      const inPeek = barWords();
+      expect(inPeek).toEqual(["Ask", "Logs", "Shell", "More actions"]);
+      asPeek.unmount();
+
+      const asTab = render(<ResourceDetail {...props} />);
+      await waitFor(() => expect(asTab.getByRole("tab", { name: "Details" })).toBeDefined());
+      // R-5: one pane, two hosts. The footer is not one of the things `peek`
+      // is allowed to vary.
+      expect(barWords()).toEqual(inPeek);
+    });
   });
 });
