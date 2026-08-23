@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import type { JobSummary, K8sObject } from "@srelens/core";
+import { jobStatus, type JobSummary, type K8sObject } from "@srelens/core";
 
 // The "Recent Jobs" section reads live Jobs for the CronJob's namespace via
 // core's `listJobs` — mocked here so a test controls what "the cluster said"
@@ -136,16 +136,22 @@ describe("CronJobDetailsBody", () => {
       expect(screen.getByText("1h")).toBeDefined();
     });
 
-    it("shows a failed run as Failed", async () => {
-      listJobs.mockResolvedValue({ jobs: [{ ...MINE, failed: 1 }] });
+    /**
+     * The word AND the tone, both from core's `jobStatus` — the same verdict
+     * the Jobs list draws. This component paired them by hand, which is the
+     * shape that let the Workloads table drift from the detail header. (#331)
+     */
+    it.each([
+      ["a failed run", { failed: 1 }],
+      ["a run in progress", { active: 1 }],
+      ["a finished run", {}],
+    ])("draws %s with core's own verdict, tone included", async (_label, over) => {
+      const job = { ...MINE, ...over };
+      listJobs.mockResolvedValue({ jobs: [job] });
+      const { status, health } = jobStatus(job.failed ?? 0, job.active ?? 0);
       render(<CronJobDetailsBody object={cronjob({})} context="ctx" />);
-      await waitFor(() => expect(screen.getByText("Failed")).toBeDefined());
-    });
-
-    it("shows a run in progress as Active", async () => {
-      listJobs.mockResolvedValue({ jobs: [{ ...MINE, active: 1 }] });
-      render(<CronJobDetailsBody object={cronjob({})} context="ctx" />);
-      await waitFor(() => expect(screen.getByText("Active")).toBeDefined());
+      await waitFor(() => expect(screen.getByText(status)).toBeDefined());
+      expect(screen.getByText(status).closest(".status")?.getAttribute("data-kind")).toBe(health);
     });
 
     it("shows No jobs yet for a CronJob that has never run", async () => {

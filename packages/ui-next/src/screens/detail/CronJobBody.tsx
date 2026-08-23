@@ -3,13 +3,14 @@ import {
   ageSortValue,
   asArray,
   asRecord,
+  jobStatus,
   listJobs,
   str,
   timestampWithAge,
   type JobSummary,
   type K8sObject,
 } from "@srelens/core";
-import { KV, LoadingState, Section, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
+import { KV, LoadingState, Section, StatusPill, Table, type Column } from "@srelens/ui-kit";
 import { StringList } from "./sections";
 
 /**
@@ -58,24 +59,20 @@ function ScheduleSection({ object }: { object: K8sObject }) {
   );
 }
 
-/** classic's `CronJobJobs`: whether a spawned Job succeeded, is running, or
- *  failed — not a `phaseKind`-style Pod/workload phase, so kept local rather
- *  than forced onto that formatter. */
-function jobStatus(j: JobSummary): { status: string; kind: StatusKind } {
-  if (j.failed > 0) return { status: "Failed", kind: "danger" };
-  if (j.active > 0) return { status: "Active", kind: "warning" };
-  return { status: "Complete", kind: "success" };
-}
-
 const RECENT_JOB_COLUMNS: Column<JobSummary>[] = [
   { key: "name", header: "Name", render: (j) => <span className="font-mono">{j.name}</span> },
   { key: "completions", header: "Completions", render: (j) => j.completions },
   {
     key: "status",
     header: "Status",
+    // Core's `jobStatus`, not a local pairing of a word with a tone. It was
+    // one — the fifth such table on this branch — and its comment argued it
+    // could not use `phaseKind`, which is true and beside the point: a Job's
+    // own verdict is `jobStatus`, the very function the Jobs list, the Jobs
+    // column table and this CronJob's spawned-Job rows all read. (#331)
     render: (j) => {
-      const { status, kind } = jobStatus(j);
-      return <StatusPill status={status} kind={kind} />;
+      const { status, health } = jobStatus(j.failed, j.active);
+      return <StatusPill status={status} kind={health} />;
     },
   },
   { key: "duration", header: "Duration", render: (j) => j.duration || "—" },
