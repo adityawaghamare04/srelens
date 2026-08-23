@@ -56,41 +56,52 @@ export interface InspectorProps {
  * along the bottom. Selecting a row fills it, and it never navigates — the full
  * view is a control in the header, which is the caller's to place.
  *
- * The mock's version is a pane and a Kubernetes workload viewer welded
- * together: it reads a `Workload`, calls `describe()` for the detail, and
- * hard-codes five panes of pods, containers, conditions and events. None of
- * that can come into the kit, and cutting it out is not a loss — the header is
- * a name, a subtitle, a state and some figures whatever the subject is, and the
- * panes are content the caller already has in hand. So the panes arrive as
- * children and the figures as {@link InspectorFact}s, the same line NavIcon
- * drew when it stopped knowing that pods are boxes. (#320)
+ * Two different things are called a mock in this component's history, so
+ * neither is called that below. **The source pane** is the design-system HTML
+ * this was ported from (#318, #320). **The design frames** are the two
+ * screenshots the user supplied for the resource detail pane (#331). Where the
+ * two disagreed, the frames won.
  *
- * Sizing and docking are not here either. The mock drags its own left edge and
- * remembers the width in localStorage; the kit already has that, with focus
- * handling and an Escape stack besides, in `Drawer`. Two components owning one
- * drag is how they drift, so this one is the contents and the caller picks the
- * container — a flex sibling in a `.panes` row, or a `Drawer` around it, in
- * which case its `onClose` is left off so there is only one Close. That is also
- * why it is a named region rather than the mock's `aside`: a region nests
- * correctly inside whatever landmark it lands in, where a second complementary
- * beside Drawer's would just be noise.
+ * The source pane is a pane and a Kubernetes workload viewer welded together:
+ * it reads a `Workload`, calls `describe()` for the detail, and hard-codes five
+ * panes of pods, containers, conditions and events. None of that can come into
+ * the kit, and cutting it out is not a loss — the header is a name, a subtitle,
+ * a state and some figures whatever the subject is, and the panes are content
+ * the caller already has in hand. So the panes arrive as children and the
+ * figures as {@link InspectorFact}s, the same line NavIcon drew when it stopped
+ * knowing that pods are boxes. (#320)
  *
- * The strip is the kit's `Tabs` in its segmented variant. The design draws a
- * rounded segmented control; the version it was drawn from was a row of plain
- * buttons with no keyboard contract at all, and the kit took the look and left
- * the buttons — `Tabs` supplies the roving tabindex and the arrow keys, and
- * wears `.seg` to get the 7px radius as well. Nobody had to choose. (#331)
+ * Sizing and docking are not here either. The source pane drags its own left
+ * edge and remembers the width in localStorage; the kit already has that, with
+ * focus handling and an Escape stack besides, in `Drawer`. Two components
+ * owning one drag is how they drift, so this one is the contents and the caller
+ * picks the container — a flex sibling in a `.panes` row, or a `Drawer` around
+ * it, in which case its `onClose` is left off so there is only one Close. That
+ * is also why it is a named region rather than the source pane's `aside`: a
+ * region nests correctly inside whatever landmark it lands in, where a second
+ * complementary beside Drawer's would just be noise.
+ *
+ * The strip is the kit's `Tabs` in its segmented variant. The design frames
+ * draw a rounded segmented control; the source pane drew one too, as a row of
+ * plain buttons with no keyboard contract at all. The kit took the look and
+ * left the buttons — `Tabs` supplies the roving tabindex and the arrow keys,
+ * and wears `.seg` to get the 7px radius as well. Nobody had to choose. (#331)
+ *
+ * The status word is tinted, so a bad state is coloured and a good one is not.
+ * That is the frames' rule, and it is fixed here rather than offered as a prop
+ * for the same reason the strip's variant is: this component is the frame. See
+ * the call site for why a prop would have been worse than no prop. (#331)
  *
  * **The figures under the status are bare, and that was the user's call.**
  * This comment used to argue the other way: that "9/12 ready" and "84d" with no
  * word beside them are unreadable to anyone who did not already know which
  * column they came from, and so the kit rendered `Ready 9/12  Age 84d` instead.
- * The user supplied the design and overruled it, and the design is theirs to
- * decide — so the visible line is now the mock's. What the argument was
- * actually protecting survives underneath: the facts are still a description
- * list, and each label is still a `dt` beside its `dd`, only `sr-only`. A
- * screen reader hears "Age: 84d"; the screen shows "84d". The disagreement was
- * about the ink, not about the markup, and only the ink changed. (#331)
+ * The user supplied the frames and overruled it, and the design is theirs to
+ * decide — so the visible line is now theirs. What the argument was actually
+ * protecting survives underneath: the facts are still a description list, and
+ * each label is still a `dt` beside its `dd`, only `sr-only`. A screen reader
+ * hears "Age: 84d"; the screen shows "84d". The disagreement was about the ink,
+ * not about the markup, and only the ink changed. (#331)
  */
 export function Inspector({
   name,
@@ -148,7 +159,7 @@ export function Inspector({
                     className="h-1.5 w-1.5 shrink-0 rounded-full"
                     style={{ background: toneColor("sev") }}
                   />
-                  {/* The mock's dot says "this one" in colour alone, which is
+                  {/* The source pane's dot says "this one" in colour alone, which is
                       nothing to a screen reader and nothing to a colour-blind
                       reader either. The word is the marker; the dot is how it
                       looks. */}
@@ -181,7 +192,18 @@ export function Inspector({
 
         {(filled(status) || facts.length > 0) && (
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-            {filled(status) && <StatusPill status={status} kind={statusKind} />}
+            {filled(status) && (
+              // Tinted, always. The design colours the status word when the
+              // state is bad and leaves it plain when it is not, and this
+              // component is the frame that design draws — the same reason the
+              // strip's variant is fixed here rather than asked of the caller.
+              // It costs nothing to say so: `tinted` is a no-op for success,
+              // info and neutral, so the only word it can ever colour is a
+              // danger or a warning. Reaching it through a prop instead would
+              // have meant a screen passing its own <StatusPill tinted> into
+              // `status`, nesting a pill in a pill and drawing two dots. (#331)
+              <StatusPill status={status} kind={statusKind} tinted />
+            )}
             {facts.length > 0 && (
               // A description list, because that is what these are — the
               // pairing is what makes "84d" an age rather than a number. The
@@ -190,8 +212,12 @@ export function Inspector({
               // their eyes while being the whole of the meaning to anyone who
               // is not.
               <dl className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                {facts.map((fact) => (
-                  <div key={fact.label} className="flex items-baseline gap-1">
+                {facts.map((fact, index) => (
+                  // Not keyed by the label alone: "Ready" is a plausible label
+                  // twice on one subject — pod readiness and container readiness —
+                  // and two rows sharing a key become one another's reconciliation
+                  // target. The list is the caller's order and is never reordered.
+                  <div key={`${index}:${fact.label}`} className="flex items-baseline gap-1">
                     <dt className="sr-only">{fact.label}</dt>
                     <dd
                       className="fact"

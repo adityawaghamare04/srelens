@@ -109,7 +109,15 @@ describe("the status stylesheet", () => {
     const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
     const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
     const selectors = components.match(/\.status\[data-[a-z-]+/g) ?? [];
-    const source = readFileSync(join(__dirname, "StatusPill.tsx"), "utf8");
+    // Comments stripped first. The doc comment beside the JSX names the
+    // selector in prose, so reading the whole file let the guard pass on the
+    // comment alone — delete `data-bad` from the markup and the rule goes
+    // dead again with the suite still green. PairList's "offers no way to opt
+    // the value back in" strips for the same reason.
+    const source = readFileSync(join(__dirname, "StatusPill.tsx"), "utf8").replace(
+      /\/\*[\s\S]*?\*\/|\/\/.*/g,
+      "",
+    );
     for (const selector of selectors) {
       const attribute = selector.slice(".status[".length);
       expect(source, `${selector} matches nothing StatusPill emits`).toContain(attribute);

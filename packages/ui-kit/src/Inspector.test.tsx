@@ -60,6 +60,54 @@ describe("Inspector", () => {
     expect(screen.getByText("Degraded")).toBeDefined();
   });
 
+  it("colours the status word when the state is bad", () => {
+    // Frame A's red `Degraded` is the most distinctive thing in the mock's
+    // header, and it is the whole reason `tinted` exists. Fixed here rather
+    // than asked of the caller, for the same reason the segmented strip is:
+    // Inspector IS the frame the design draws. And it can only ever colour
+    // danger and warning, since `tinted` is a no-op for every other kind.
+    const { container } = setup({ status: "Degraded", statusKind: "danger" });
+    const pill = container.querySelector(".status") as HTMLElement;
+    expect(pill.style.color).toBe("var(--sev)");
+    expect(pill.getAttribute("data-bad")).toBe("true");
+  });
+
+  it("leaves a healthy status word plain", () => {
+    // Frame B: `Running` beside an ok dot is ordinary ink, not green.
+    const { container } = setup({ status: "Running", statusKind: "success" });
+    const pill = container.querySelector(".status") as HTMLElement;
+    expect(pill.style.color).toBe("");
+    expect(pill.getAttribute("data-bad")).toBeNull();
+  });
+
+  it("draws one status dot, not a pill nested in a pill", () => {
+    // `status` is a ReactNode, so a screen that could not reach the colouring
+    // rule would have had to pass its own <StatusPill tinted> — which nests
+    // two pills and draws two dots. Reaching it through the prop is the point.
+    const { container } = setup({ status: "Degraded", statusKind: "danger" });
+    expect(container.querySelectorAll(".status").length).toBe(1);
+    expect(container.querySelectorAll(".status .dot").length).toBe(1);
+  });
+
+  it("does not key a fact by a label two of them can share", () => {
+    // "Ready" is a plausible label twice over on one subject — pod readiness
+    // and container readiness. Keyed by label, React warns and the two rows
+    // become one another's reconciliation target.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { container } = setup({
+      facts: [
+        { label: "Ready", value: "9/12 ready" },
+        { label: "Ready", value: "3/4 containers" },
+      ],
+    });
+    expect(errors.mock.calls.flat().join(" ")).not.toContain("same key");
+    expect(Array.from(container.querySelectorAll("dd")).map((e) => e.textContent)).toEqual([
+      "9/12 ready",
+      "3/4 containers",
+    ]);
+    errors.mockRestore();
+  });
+
   it("reads the facts as bare figures", () => {
     // The mock's header line is `Degraded  9/12 ready  84d` — the figures on
     // their own, with the word that names them folded into the value where it
@@ -320,5 +368,12 @@ describe("Inspector's own record", () => {
 
   it("no longer argues that a bare figure is unreadable", () => {
     expect(source).not.toContain("is unreadable to anyone who");
+  });
+
+  it("does not call two different things 'the mock'", () => {
+    // The early paragraphs mean the design-system HTML this component was
+    // ported from; the header paragraph means the user's screenshots. One
+    // word for both makes the record unreadable to the next person.
+    expect(source).not.toMatch(/\bthe mock\b/);
   });
 });

@@ -19,6 +19,19 @@ describe("Gallery", () => {
     }
   });
 
+  it("writes a header fact the way the kit says to write one", () => {
+    // `InspectorFact.label` is not drawn — it is the `sr-only` term — so a
+    // value that wants a word on screen has to carry its own. The catalogue
+    // was passing `{ label: "Ready", value: "9/12" }` and rendering
+    // `CrashLoopBackOff  9/12  17  6m`: bare figures with no words at all,
+    // which is the mistake the component's own doc comment warns about. The
+    // gallery is the only place anyone sees what a correct call looks like.
+    render(<Gallery />);
+    expect(screen.getByText("9/12 ready")).toBeDefined();
+    expect(screen.getByText("17 restarts")).toBeDefined();
+    expect(screen.getByText("6m old")).toBeDefined();
+  });
+
   it("shows each component's states, not just its happy path", () => {
     render(<Gallery />);
     // The states that break on a real cluster.

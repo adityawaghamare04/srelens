@@ -1441,10 +1441,15 @@ export function Gallery() {
             flagged
             status="CrashLoopBackOff"
             statusKind="danger"
+            /* The figures are drawn bare, so a value that wants a word on
+               screen carries its own — the `label` is the `sr-only` term and
+               is never rendered. Written the other way round this line read
+               `CrashLoopBackOff  9/12  17  6m`, which is the mistake, not the
+               example. `tone` mutes the age; the rest take ordinary ink. */
             facts={[
-              { label: "Ready", value: "9/12" },
-              { label: "Restarts", value: 17, tone: "sev" },
-              { label: "Age", value: "6m" },
+              { label: "Ready", value: "9/12 ready" },
+              { label: "Restarts", value: "17 restarts", tone: "sev" },
+              { label: "Age", value: "6m old", tone: "muted" },
             ]}
             actions={<IconButton icon={DotIcon} label="Open the full view" />}
             onClose={() => {}}
