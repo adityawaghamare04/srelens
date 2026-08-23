@@ -62,13 +62,11 @@ describe("conditionKind", () => {
     expect(conditionKind({ type: "Unavailable", status: "False" })).toBe("success");
   });
 
-  it("inverts the polarity for the NetworkUnavailable alternative", () => {
-    // NOTE: "NetworkUnavailable" contains "Unavailable" as a substring, so this
-    // case is already reached by the bare Unavailable alternative above — the
-    // NetworkUnavailable alternative in the source regex is redundant (dead):
-    // no test can independently prove it necessary, because deleting it from
-    // the regex changes no observable behavior. Reported as a finding about
-    // the moved body, not altered here (this is a move, not a rewrite).
+  it("still reads a node's NetworkUnavailable, through the bare Unavailable alternative", () => {
+    // The regex used to name `NetworkUnavailable` as its own alternative,
+    // which `Unavailable` already matched as a substring — dead weight no
+    // test could prove necessary, since deleting it changed no behaviour. It
+    // is gone; this asserts the type it named still reads correctly.
     expect(conditionKind({ type: "NetworkUnavailable", status: "True" })).toBe("danger");
     expect(conditionKind({ type: "NetworkUnavailable", status: "False" })).toBe("success");
   });
@@ -76,6 +74,39 @@ describe("conditionKind", () => {
   it("inverts the polarity for the Failed alternative, on a type containing none of the others", () => {
     expect(conditionKind({ type: "JobFailed", status: "True" })).toBe("danger");
     expect(conditionKind({ type: "JobFailed", status: "False" })).toBe("success");
+  });
+
+  it("reads a Deployment's ReplicaFailure as the bad-thing type it is", () => {
+    // The one the design mock caught: frame A draws `ReplicaFailure: False`
+    // with an ok dot and an uncoloured name, because False means the bad
+    // thing is NOT happening. Matching `Failed` but not `Failure` inverted
+    // that and painted a healthy Deployment's condition red.
+    expect(conditionKind({ type: "ReplicaFailure", status: "False" })).toBe("success");
+    expect(conditionKind({ type: "ReplicaFailure", status: "True" })).toBe("danger");
+  });
+
+  it("reads every other built-in condition of the same word family", () => {
+    // ReplicaFailure was not the only one: a Namespace reports three
+    // conditions ending in `Failure`, and a Job (1.31+) reports
+    // `FailureTarget`. All five were inverted by the same missing suffix.
+    for (const type of [
+      "NamespaceDeletionContentFailure",
+      "NamespaceDeletionDiscoveryFailure",
+      "NamespaceDeletionGroupVersionParsingFailure",
+      "FailureTarget",
+    ]) {
+      expect(conditionKind({ type, status: "True" })).toBe("danger");
+      expect(conditionKind({ type, status: "False" })).toBe("success");
+    }
+  });
+
+  it("recognises the whole word family, not one inflection of it", () => {
+    // `Fail` rather than `Failed`: whatever a controller author conjugates,
+    // the polarity is the same, and getting it wrong inverts the colour
+    // rather than merely missing it.
+    expect(conditionKind({ type: "Failing", status: "True" })).toBe("danger");
+    expect(conditionKind({ type: "Failure", status: "True" })).toBe("danger");
+    expect(conditionKind({ type: "Failed", status: "True" })).toBe("danger");
   });
 
   it("inverts the polarity for the Dangling alternative, on a type containing none of the others", () => {

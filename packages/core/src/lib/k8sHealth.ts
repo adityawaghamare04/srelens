@@ -46,8 +46,23 @@ export interface Condition {
   lastTransitionTime?: string;
 }
 
+/**
+ * Condition types whose polarity is inverted: `True` means the bad thing IS
+ * happening. Matched as substrings, so one alternative covers a whole family
+ * of types — `Pressure` covers a node's Memory/Disk/PID pressure, and
+ * `Unavailable` covers `NetworkUnavailable` on its own.
+ *
+ * `Fail`, not `Failed`: the suffix is whatever the controller author
+ * conjugated, and the same rule holds for every inflection of it. Reading
+ * only `Failed` inverted five built-in types — a Deployment's and a
+ * ReplicaSet's `ReplicaFailure`, a Namespace's three `…Failure` conditions,
+ * and a Job's `FailureTarget` — painting a healthy `ReplicaFailure: False`
+ * red, which is what the design mock caught.
+ */
+const NEGATIVE_CONDITION = /Pressure|Unavailable|Fail|Dangling/i;
+
 export function conditionKind(c: Condition): HealthKind {
-  const negative = /Pressure|Unavailable|Failed|Dangling|NetworkUnavailable/i.test(c.type);
+  const negative = NEGATIVE_CONDITION.test(c.type);
   if (c.status === "Unknown") return "warning";
   const good = c.status === "True" ? !negative : negative;
   return good ? "success" : "danger";
