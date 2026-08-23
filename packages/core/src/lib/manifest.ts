@@ -1,4 +1,4 @@
-import { parse } from "yaml";
+import { isMap, isScalar, parse, parseDocument, visit } from "yaml";
 import { invokeCapability, type Invoker } from "../transport/transport";
 
 export interface NodeSummary {
@@ -41,6 +41,108 @@ export async function getManifest(
     return { yaml: out.yaml };
   } catch (e) {
     return { error: String(e) };
+  }
+}
+
+/**
+ * What a redacted Secret value is replaced with. Deliberately fixed-width and
+ * self-describing: it names itself as a removal rather than implying a value,
+ * and it is the same string for every key, so the rendered manifest leaks
+ * neither the value nor its length.
+ */
+const REDACTION_MARKER = "REDACTED";
+
+/** The only two top-level maps of a Secret that carry material. */
+const SECRET_VALUE_KEYS = ["data", "stringData"] as const;
+
+/** Opening of every failure message, so they read as one refusal. */
+const REDACTION_FAILED = "This Secret's manifest is not shown, because it could not be redacted:";
+
+/**
+ * Blank the values of a Secret manifest's top-level `data` and `stringData`
+ * maps, keeping their keys.
+ *
+ * `k8s.getObject` redacts Secret values in the backend; `k8s.getManifest`
+ * deliberately does NOT (see `crates/kube/src/manifest.rs`) — it is the raw
+ * serialisation of the object, and classic's YAML view shows it unredacted.
+ * The new design's Secret Details pane gates its values behind an explicit
+ * reveal, so the YAML pane beside it runs the manifest through here first;
+ * otherwise the gate would be worth nothing to anyone who clicks one tab
+ * over. This is a deliberate divergence from classic, not an oversight.
+ *
+ * Only the two top-level keys, and only at the top level: a `data` nested
+ * under `spec`, or one that happens to be an annotation's name, belongs to
+ * something else and is left exactly as the cluster returned it.
+ *
+ * Parsing goes through `parseDocument` rather than `parse` so key order and
+ * comments survive: the reader is meant to be looking at the manifest the
+ * cluster has, not a re-emitted approximation of it.
+ *
+ * FAILS CLOSED. Anything unexpected — a parse error (which includes a
+ * multi-document source), a document that is not a map, a `data` that is not
+ * a map, or an alias that could re-expose a value from somewhere else in the
+ * document — returns `{ error }` and no `yaml` at all. Passing the input
+ * through on a shape this does not understand would be worse than having no
+ * redactor, because the caller would believe it had worked.
+ */
+export function redactSecretManifest(yaml: string): { yaml?: string; error?: string } {
+  let doc;
+  try {
+    doc = parseDocument(yaml);
+  } catch {
+    // Deliberately says nothing about what was thrown. Every message this
+    // function returns is rendered on screen, and both the `yaml` package's
+    // parse errors and a stringified throw quote the offending source line —
+    // which, for a Secret, IS the value. A redactor whose failure path prints
+    // the material it exists to hide is not a redactor.
+    return { error: `${REDACTION_FAILED} it could not be parsed.` };
+  }
+  if (doc.errors.length > 0) {
+    // `code` and `linePos` are safe to name: an enum and a number, never
+    // source text. `message` is not — see above.
+    const first = doc.errors[0];
+    const at = first.linePos ? ` at line ${first.linePos[0].line}` : "";
+    return { error: `${REDACTION_FAILED} it could not be parsed (${first.code}${at}).` };
+  }
+  if (!isMap(doc.contents)) {
+    return { error: `${REDACTION_FAILED} it is not a single YAML mapping.` };
+  }
+
+  // An anchored value under `data` can be referenced by an alias anywhere
+  // else in the document; replacing the anchored node would leave that alias
+  // pointing at nothing, and leaving it would re-emit the value. serde_yaml
+  // (what the backend serialises with) never emits either, so a document
+  // that has them is already outside what this understands.
+  let hasAlias = false;
+  visit(doc, {
+    Alias() {
+      hasAlias = true;
+      return visit.BREAK;
+    },
+  });
+  if (hasAlias) {
+    return {
+      error: `${REDACTION_FAILED} it uses YAML aliases, which could re-expose a redacted value.`,
+    };
+  }
+
+  for (const key of SECRET_VALUE_KEYS) {
+    const node = doc.get(key, true);
+    // Absent, or explicitly empty (`data:`) — nothing to redact either way.
+    if (node === undefined || node === null) continue;
+    if (isScalar(node) && node.value === null) continue;
+    if (!isMap(node)) {
+      return { error: `${REDACTION_FAILED} its \`${key}\` is not a mapping.` };
+    }
+    for (const pair of node.items) {
+      pair.value = doc.createNode(REDACTION_MARKER);
+    }
+  }
+
+  try {
+    return { yaml: doc.toString() };
+  } catch {
+    return { error: `${REDACTION_FAILED} it could not be re-serialised.` };
   }
 }
 

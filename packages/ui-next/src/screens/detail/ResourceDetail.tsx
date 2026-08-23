@@ -4,11 +4,13 @@ import {
   getManifest,
   listCrds,
   listEvents,
+  redactSecretManifest,
   type DynamicGvk,
   type EventSummary,
   type K8sObject,
 } from "@srelens/core";
 import {
+  Alert,
   Badge,
   CodeEditor,
   ErrorState,
@@ -88,6 +90,14 @@ function describeTarget(kind: string, namespace: string | null, name: string): s
  * unresolved: an unresolved `crd` would make `getManifest` guess via the
  * same ambiguous kind→GVR match this function exists to avoid, which can
  * fail confusingly or, worse, resolve to the wrong resource entirely.
+ *
+ * A `kind` claimed by MORE than one CRD is reported the same way, for the
+ * same reason. Two groups can legitimately define the same `.kind`
+ * (`widgets.example.com` and `widgets.other.io`), and this shell is handed a
+ * bare kind string with no group to disambiguate it. Taking the first match
+ * would fetch a manifest from possibly the wrong group and render it as
+ * though it were the right one — a possibly-wrong success, which is worse
+ * than a failure, because nothing on screen would say anything was ambiguous.
  */
 async function resolveCrdGvk(
   context: string,
@@ -97,12 +107,21 @@ async function resolveCrdGvk(
   if (result.error) {
     return { error: `Could not look up ${kind}'s CustomResourceDefinition: ${result.error}` };
   }
-  const match = result.crds?.find((c) => c.kind === kind);
-  if (!match) {
+  const matches = result.crds?.filter((c) => c.kind === kind) ?? [];
+  if (matches.length === 0) {
     return {
       error: `${kind} has no matching CustomResourceDefinition on this cluster, so its manifest cannot be resolved.`,
     };
   }
+  if (matches.length > 1) {
+    // Sorted and de-duplicated so the message reads the same whichever order
+    // `listCrds` happened to return them in.
+    const groups = [...new Set(matches.map((c) => c.group))].sort().join(", ");
+    return {
+      error: `${kind} is claimed by more than one CustomResourceDefinition on this cluster (${groups}), so its manifest cannot be resolved unambiguously.`,
+    };
+  }
+  const match = matches[0];
   return { crd: { group: match.group, version: match.version, plural: match.plural } };
 }
 
@@ -306,6 +325,15 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
   // custom-resource manifest — see `resolveCrdGvk`'s own doc comment for why
   // this is looked up here rather than threaded in from a descriptor.
   const isBuiltInKind = slug !== undefined;
+  // The Details pane keeps a Secret's values out of the DOM until the reader
+  // reveals them; `k8s.getManifest` returns them in the clear (only
+  // `k8s.getObject` redacts — see `crates/kube/src/manifest.rs`), so without
+  // this the reveal gate is worth nothing to anyone who clicks one tab over.
+  // The redaction goes here, on the result, rather than inside `getManifest`:
+  // classic calls that same function and deliberately shows the manifest
+  // unredacted, and classic is frozen. Divergence from classic here is the
+  // point, not an oversight.
+  const isSecret = kind === "Secret";
   const yamlState = useLoad<string>(openedPanes.has(PANE_YAML), target, async () => {
     let crd: DynamicGvk | undefined;
     if (!isBuiltInKind) {
@@ -313,10 +341,15 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
       if (resolved.error) return { error: resolved.error };
       crd = resolved.crd;
     }
-    return getManifest(context, kind, namespace, name, undefined, crd).then((r) => ({
-      data: r.yaml,
-      error: r.error,
-    }));
+    const result = await getManifest(context, kind, namespace, name, undefined, crd);
+    if (result.error !== undefined || result.yaml === undefined || !isSecret) {
+      return { data: result.yaml, error: result.error };
+    }
+    // Fails closed: on any shape it does not understand the redactor returns
+    // an error and no YAML at all, which surfaces as the pane's error rather
+    // than as an unredacted manifest.
+    const redacted = redactSecretManifest(result.yaml);
+    return redacted.error !== undefined ? { error: redacted.error } : { data: redacted.yaml };
   });
   const eventsState = useLoad<EventSummary[]>(openedPanes.has(PANE_EVENTS), target, () =>
     listEvents(context, namespace, { kind, name }).then((r) => ({ data: r.events, error: r.error })),
@@ -374,7 +407,9 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
       )}
       {active === PANE_CONTAINERS && (ContainersBody ? <ContainersBody object={object} context={context} /> : null)}
       {active === PANE_METRICS && (MetricsBody ? <MetricsBody object={object} context={context} /> : null)}
-      {active === PANE_YAML && <YamlPane state={yamlState} kind={kind} namespace={namespace} name={name} />}
+      {active === PANE_YAML && (
+        <YamlPane state={yamlState} kind={kind} namespace={namespace} name={name} redacted={isSecret} />
+      )}
       {active === PANE_EVENTS && <EventsPane state={eventsState} kind={kind} namespace={namespace} name={name} />}
     </Inspector>
   );
@@ -385,11 +420,14 @@ function YamlPane({
   kind,
   namespace,
   name,
+  redacted,
 }: {
   state: LoadState<string>;
   kind: string;
   namespace: string | null;
   name: string;
+  /** This kind's manifest went through `redactSecretManifest` — say so. */
+  redacted: boolean;
 }) {
   if (state.status === "loading") {
     return <LoadingState label={`Loading ${describeTarget(kind, namespace, name)}'s manifest`} />;
@@ -399,7 +437,21 @@ function YamlPane({
       <ErrorState title={`Could not load ${describeTarget(kind, namespace, name)}'s manifest`} detail={state.error} />
     );
   }
-  return <CodeEditor value={state.data} readOnly language="yaml" ariaLabel={`${name} manifest`} />;
+  const editor = <CodeEditor value={state.data} readOnly language="yaml" ariaLabel={`${name} manifest`} />;
+  if (!redacted) return editor;
+  // Told, not silently shown less: a manifest quietly missing its values
+  // reads as the manifest the cluster has, and someone comparing it against
+  // `kubectl get -o yaml` would have no idea why the two disagree. Tone
+  // "info" is a `status` region rather than an `alert`, so it never competes
+  // with this pane's own error state for a screen reader's attention.
+  return (
+    <div className="flex flex-col gap-2">
+      <Alert tone="info" title="Values redacted">
+        This Secret's values are not shown here. Reveal them one key at a time in the Details pane.
+      </Alert>
+      {editor}
+    </div>
+  );
 }
 
 const EVENT_COLUMNS: Column<EventSummary>[] = [

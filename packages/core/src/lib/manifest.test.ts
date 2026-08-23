@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { getManifest, listNodes, applyManifest, diffManifest, parseResourceVersion, listEvents, listResource } from "./manifest";
+import {
+  getManifest,
+  listNodes,
+  applyManifest,
+  diffManifest,
+  parseResourceVersion,
+  listEvents,
+  listResource,
+  redactSecretManifest,
+} from "./manifest";
 
 describe("getManifest", () => {
   it("passes kind/namespace/name and returns yaml", async () => {
@@ -133,5 +142,113 @@ describe("parseResourceVersion", () => {
   });
   it("returns null when absent", () => {
     expect(parseResourceVersion("metadata:\n  name: a\n")).toBeNull();
+  });
+});
+
+// Obviously-fake fixture text — never anything that reads as a real
+// credential, per this screen's secrecy ruling.
+const FIXTURE_VALUE = "ZmFrZS1maXh0dXJlLW5vdC1hLXJlYWwtc2VjcmV0";
+const FIXTURE_VALUE_2 = "ZmFrZS1maXh0dXJlLXNlY29uZC12YWx1ZQ==";
+
+function secretManifest(body: string): string {
+  return `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\n  namespace: default\n${body}`;
+}
+
+describe("redactSecretManifest", () => {
+  it("replaces every value under the top-level data map, keeping the keys", () => {
+    const out = redactSecretManifest(
+      secretManifest(`data:\n  token: ${FIXTURE_VALUE}\n  other: ${FIXTURE_VALUE_2}\n`),
+    );
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).not.toContain(FIXTURE_VALUE);
+    expect(out.yaml).not.toContain(FIXTURE_VALUE_2);
+    // The shape is still readable: the keys say what the Secret holds.
+    expect(out.yaml).toContain("token:");
+    expect(out.yaml).toContain("other:");
+    expect(out.yaml).toContain("REDACTED");
+  });
+
+  it("replaces every value under the top-level stringData map too", () => {
+    const out = redactSecretManifest(secretManifest(`stringData:\n  plain: ${FIXTURE_VALUE}\n`));
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).not.toContain(FIXTURE_VALUE);
+    expect(out.yaml).toContain("plain:");
+  });
+
+  it("does not preserve a value's length, which would leak its size", () => {
+    const short = redactSecretManifest(secretManifest("data:\n  k: YQ==\n"));
+    const long = redactSecretManifest(
+      secretManifest(`data:\n  k: ${"QUFB".repeat(40)}\n`),
+    );
+    expect(short.yaml).toEqual(long.yaml);
+  });
+
+  it("leaves a `data` key that is not the Secret's own alone", () => {
+    const out = redactSecretManifest(
+      `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\n  annotations:\n    data: annotation-value-not-a-secret\nspec:\n  data:\n    nested: nested-value-not-a-secret\ndata:\n  token: ${FIXTURE_VALUE}\n`,
+    );
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).toContain("annotation-value-not-a-secret");
+    expect(out.yaml).toContain("nested-value-not-a-secret");
+    expect(out.yaml).not.toContain(FIXTURE_VALUE);
+  });
+
+  it("preserves key order and comments, so the pane shows the cluster's own manifest", () => {
+    const out = redactSecretManifest(
+      `# top comment\napiVersion: v1\nkind: Secret\nzz: last\nmetadata:\n  name: s-1\ndata:\n  token: ${FIXTURE_VALUE}\n`,
+    );
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).toContain("# top comment");
+    const lines = (out.yaml ?? "").split("\n");
+    expect(lines.indexOf("apiVersion: v1")).toBeLessThan(lines.indexOf("zz: last"));
+    expect(lines.indexOf("zz: last")).toBeLessThan(lines.findIndex((l) => l.startsWith("metadata:")));
+  });
+
+  it("passes a Secret with no data at all through as a map, unchanged in substance", () => {
+    const out = redactSecretManifest(secretManifest("type: Opaque\n"));
+    expect(out.error).toBeUndefined();
+    expect(out.yaml).toContain("type: Opaque");
+  });
+
+  describe("failing closed", () => {
+    it("returns an error, and never the input, for a manifest that does not parse", () => {
+      const bad = `data:\n\ttoken: ${FIXTURE_VALUE}\n`;
+      const out = redactSecretManifest(bad);
+      expect(out.error).toBeTruthy();
+      expect(out.yaml).toBeUndefined();
+      // The `yaml` package's own parse errors quote the offending source
+      // line — which, for a Secret, IS the value. The error is rendered on
+      // screen, so it must never carry the manifest's text.
+      expect(out.error).not.toContain(FIXTURE_VALUE);
+      expect(out.error).not.toContain("token");
+    });
+
+    it("returns an error for a document that is not a map", () => {
+      for (const input of ["just a string", "- a\n- b\n", ""]) {
+        const out = redactSecretManifest(input);
+        expect(out.error).toBeTruthy();
+        expect(out.yaml).toBeUndefined();
+      }
+    });
+
+    it("returns an error when `data` is present but is not a map, rather than passing it through", () => {
+      const out = redactSecretManifest(secretManifest(`data: ${FIXTURE_VALUE}\n`));
+      expect(out.error).toBeTruthy();
+      expect(out.yaml).toBeUndefined();
+    });
+
+    it("returns an error when an alias could re-expose a redacted value elsewhere in the document", () => {
+      const out = redactSecretManifest(
+        `kind: Secret\ndata:\n  token: &t ${FIXTURE_VALUE}\nmetadata:\n  annotations:\n    copy: *t\n`,
+      );
+      expect(out.error).toBeTruthy();
+      expect(out.yaml).toBeUndefined();
+    });
+
+    it("never returns partially redacted text alongside an error", () => {
+      const out = redactSecretManifest(secretManifest(`data: ${FIXTURE_VALUE}\n`));
+      expect(out.yaml).toBeUndefined();
+      expect(out.error).not.toContain(FIXTURE_VALUE);
+    });
   });
 });

@@ -55,6 +55,26 @@ const CONFIGMAP: K8sObject = {
   metadata: { name: "cm-1", namespace: "default" },
 };
 
+/** Scans the whole rendered document for a substring — text content, `title`,
+ *  `aria-label`, `data-*`, everything, including markup a screen reader or a
+ *  DOM inspector would see even while visually hidden. A boolean assertion
+ *  rather than an element query, so a failure here never prints the secret
+ *  text into the test output. Same helper, and the same reasoning, as
+ *  `SecretBody.test.tsx`'s. */
+function documentContains(value: string): boolean {
+  return document.body.innerHTML.includes(value);
+}
+
+// Obviously-fake fixture text — never anything that reads as a real
+// credential, per this screen's secrecy ruling.
+const FIXTURE_B64 = "ZmFrZS1maXh0dXJlLW5vdC1hLXJlYWwtc2VjcmV0";
+
+const SECRET: K8sObject = {
+  kind: "Secret",
+  apiVersion: "v1",
+  metadata: { name: "s-1", namespace: "default" },
+};
+
 function baseDescriptor(overrides: Partial<KindDescriptor<ListRow>> = {}): KindDescriptor<ListRow> {
   return { k8sKind: "Pod", columns: [], source: "watch", scope: "namespaced", actions: {}, ...overrides };
 }
@@ -442,5 +462,119 @@ describe("ResourceDetail", () => {
     expect(withoutClose.queryByRole("button", { name: "Close inspector" })).toBeNull();
     expect(withoutClose.getAllByRole("tab").map((t) => t.textContent)).toEqual(tabsWithClose);
     expect(withoutClose.getByRole("heading", { name: "web-1" }).textContent).toEqual(headingWithClose);
+  });
+
+  describe("the Secret YAML pane's redaction", () => {
+    // The Details pane gates a Secret's values behind an explicit reveal.
+    // The YAML pane sits one tab over and, left alone, hands the very same
+    // values over with no gate at all — `k8s.getManifest` does not redact
+    // (only `k8s.getObject` does). This is a deliberate divergence from
+    // classic, which shows the manifest unredacted.
+    it("keeps a Secret's values out of the document entirely", async () => {
+      getObject.mockResolvedValue({ object: SECRET });
+      getManifest.mockResolvedValue({
+        yaml: `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\ndata:\n  token: ${FIXTURE_B64}\n`,
+      });
+      const { getByRole, container } = render(
+        <ResourceDetail context="ctx" kind="Secret" namespace="default" name="s-1" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+      await userEvent.click(getByRole("tab", { name: "YAML" }));
+
+      // Positive control first, so the absence assertion below cannot pass
+      // vacuously on an editor that simply rendered nothing.
+      await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("REDACTED"));
+      expect(container.querySelector(".cm-content")?.textContent).toContain("token:");
+      expect(documentContains(FIXTURE_B64)).toBe(false);
+    });
+
+    it("tells the reader the values are redacted and where to reveal them", async () => {
+      getObject.mockResolvedValue({ object: SECRET });
+      getManifest.mockResolvedValue({ yaml: `kind: Secret\ndata:\n  token: ${FIXTURE_B64}\n` });
+      const { getByRole, container } = render(
+        <ResourceDetail context="ctx" kind="Secret" namespace="default" name="s-1" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+      await userEvent.click(getByRole("tab", { name: "YAML" }));
+      await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("REDACTED"));
+
+      // Shown less, and TOLD so — a silently shortened manifest reads as the
+      // real one. `Alert` tone "info" is a `status` region, not an `alert`,
+      // so it never collides with the pane's own error state.
+      const notice = getByRole("status").textContent ?? "";
+      expect(notice.toLowerCase()).toContain("redacted");
+      expect(notice).toContain("Details");
+    });
+
+    it("shows an error, and never the raw manifest, when a Secret's manifest cannot be redacted", async () => {
+      getObject.mockResolvedValue({ object: SECRET });
+      // Tabs are not legal YAML indentation — the redactor cannot parse this,
+      // and must fail closed rather than pass the input through.
+      getManifest.mockResolvedValue({ yaml: `kind: Secret\ndata:\n\ttoken: ${FIXTURE_B64}\n` });
+      const { getByRole, container } = render(
+        <ResourceDetail context="ctx" kind="Secret" namespace="default" name="s-1" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+      await userEvent.click(getByRole("tab", { name: "YAML" }));
+      await waitFor(() => expect(getByRole("alert")).toBeDefined());
+      expect(documentContains(FIXTURE_B64)).toBe(false);
+      expect(container.querySelector(".cm-content")).toBeNull();
+    });
+
+    it("leaves a non-Secret kind's manifest untouched, with no redaction notice", async () => {
+      getObject.mockResolvedValue({ object: CONFIGMAP });
+      getManifest.mockResolvedValue({ yaml: "kind: ConfigMap\ndata:\n  greeting: hello-world\n" });
+      const { getByRole, queryByRole, container } = render(
+        <ResourceDetail context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />,
+      );
+      await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+      await userEvent.click(getByRole("tab", { name: "YAML" }));
+      await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("hello-world"));
+      expect(container.querySelector(".cm-content")?.textContent).not.toContain("REDACTED");
+      expect(queryByRole("status")).toBeNull();
+    });
+  });
+
+  it("reports the ambiguity when two CustomResourceDefinitions claim the same kind", async () => {
+    // Two groups can legitimately define the same `.kind`. Taking the first
+    // match would fetch a manifest from possibly the wrong group and show it
+    // as if it were right — a possibly-wrong success, which is worse than a
+    // failure.
+    getObject.mockResolvedValue({ object: { kind: "Widget", metadata: { name: "w-1", namespace: "default" } } });
+    listCrds.mockResolvedValue({
+      crds: [
+        { name: "widgets.example.com", group: "example.com", version: "v1", kind: "Widget", plural: "widgets", namespaced: true },
+        { name: "widgets.other.io", group: "other.io", version: "v1", kind: "Widget", plural: "widgets", namespaced: true },
+      ],
+    });
+    const { getByRole } = render(<ResourceDetail context="ctx" kind="Widget" namespace="default" name="w-1" />);
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getByRole("alert")).toBeDefined());
+    const text = getByRole("alert").textContent ?? "";
+    expect(text).toContain("Widget");
+    expect(text).toContain("example.com");
+    expect(text).toContain("other.io");
+    // Never guessed at: no manifest is fetched from either group.
+    expect(getManifest).not.toHaveBeenCalled();
+  });
+
+  it("still resolves a kind claimed by exactly one CustomResourceDefinition among several", async () => {
+    getObject.mockResolvedValue({ object: { kind: "Widget", metadata: { name: "w-1", namespace: "default" } } });
+    listCrds.mockResolvedValue({
+      crds: [
+        { name: "gadgets.example.com", group: "example.com", version: "v1", kind: "Gadget", plural: "gadgets", namespaced: true },
+        { name: "widgets.other.io", group: "other.io", version: "v2", kind: "Widget", plural: "widgets", namespaced: true },
+      ],
+    });
+    const { getByRole } = render(<ResourceDetail context="ctx" kind="Widget" namespace="default" name="w-1" />);
+    await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
+    await userEvent.click(getByRole("tab", { name: "YAML" }));
+    await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1));
+    expect(getManifest).toHaveBeenCalledWith("ctx", "Widget", "default", "w-1", undefined, {
+      group: "other.io",
+      version: "v2",
+      plural: "widgets",
+    });
   });
 });
