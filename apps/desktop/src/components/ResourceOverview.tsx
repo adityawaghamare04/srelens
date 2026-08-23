@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeftRight, ChevronDown, ChevronUp, ScrollText, SquareTerminal } from "lucide-react";
-import type { X509Certificate } from "@peculiar/x509";
 import { getObject, getSecret, type K8sObject } from "@srelens/core";
+import { certificateRows, type CertificateRow } from "@srelens/core";
 import { listEndpointSlices } from "@srelens/core";
 import { serviceExternalAddress } from "@srelens/core";
 import { podsForPvc, formatStorageSize } from "@srelens/core";
@@ -1264,78 +1264,6 @@ function SecretData({ data }: { data: Record<string, string> }) {
       )}
     </Section>
   );
-}
-
-interface CertificateRow {
-  key: string;
-  role: string;
-  subject: string;
-  issuer: string;
-  serial: string;
-  validFrom: string;
-  validUntil: string;
-  status: string;
-  keyAlgorithm: string;
-  sans: string[];
-  size: string;
-}
-
-function publicKeyAlgorithm(certificate: X509Certificate): string {
-  const algorithm = certificate.publicKey.algorithm as Algorithm & {
-    modulusLength?: number;
-    namedCurve?: string;
-  };
-  if (algorithm.namedCurve) return `${algorithm.name} ${algorithm.namedCurve}`;
-  if (algorithm.modulusLength) return `${algorithm.name} ${algorithm.modulusLength}-bit`;
-  return algorithm.name;
-}
-
-async function certificateRows(pem: string): Promise<CertificateRow[]> {
-  await import("reflect-metadata");
-  const { SubjectAlternativeNameExtension, X509Certificate } = await import("@peculiar/x509");
-  const matches = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? [];
-  return matches.map((pemCertificate, index) => {
-    const fallback: CertificateRow = {
-      key: String(index),
-      role: index === 0 ? "Leaf" : `Chain ${index}`,
-      subject: "Unable to parse certificate",
-      issuer: "",
-      serial: "",
-      validFrom: "",
-      validUntil: "",
-      status: "Invalid",
-      keyAlgorithm: "",
-      sans: [],
-      size: formatBytes(new TextEncoder().encode(pemCertificate).length),
-    };
-    try {
-      const certificate = new X509Certificate(pemCertificate);
-      const now = Date.now();
-      const expires = certificate.notAfter.getTime();
-      const starts = certificate.notBefore.getTime();
-      const status = now < starts
-        ? "Not yet valid"
-        : now > expires
-          ? "Expired"
-          : expires - now < 30 * 86_400_000
-            ? "Expires soon"
-            : "Valid";
-      const san = certificate.getExtension(SubjectAlternativeNameExtension);
-      return {
-        ...fallback,
-        subject: certificate.subject,
-        issuer: certificate.issuer,
-        serial: certificate.serialNumber,
-        validFrom: certificate.notBefore.toISOString(),
-        validUntil: certificate.notAfter.toISOString(),
-        status,
-        keyAlgorithm: publicKeyAlgorithm(certificate),
-        sans: san?.names.items.map((name) => name.value) ?? [],
-      };
-    } catch {
-      return fallback;
-    }
-  });
 }
 
 function privateKeyType(pem: string): string {
