@@ -30,7 +30,7 @@ import {
   Table,
   type Column,
 } from "@srelens/ui-kit";
-import { AnnotationLines, ConditionsSection } from "./ConditionsSection";
+import { AnnotationsSection, ConditionsSection, LabelsSection, StringList } from "./sections";
 
 /**
  * Kubernetes' own labels for a pod volume's source kind, keyed on which field
@@ -49,18 +49,6 @@ const VOLUME_TYPE_LABELS: Record<string, string> = {
   csi: "CSI",
 };
 
-/** A formatted list, one item per line — env vars, mounts, ports, probe chips. */
-function StringList({ items }: { items: string[] }) {
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item, i) => (
-        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 /**
  * What a pod volume points at, as plain text — "PersistentVolumeClaim/data",
@@ -263,37 +251,7 @@ function PodVolumesSection({ object }: { object: K8sObject }) {
   );
 }
 
-/**
- * The object's labels, as a block of full-width `key=value` lines.
- *
- * `breakValues` is not decoration: `PairList` truncates by default and no
- * longer writes the value into a row `title` — that attribute was how a
- * Secret's whole applied manifest reached the DOM — so wrapping is now the
- * only way a long label can be read at all.
- */
-function LabelsSection({ labels }: { labels: Record<string, string> }) {
-  const pairs = Object.entries(labels);
-  if (pairs.length === 0) return null;
-  return (
-    <Section title="Labels">
-      <PairList pairs={pairs} breakValues />
-    </Section>
-  );
-}
 
-/**
- * The object's annotations, through the shared rule that holds back the
- * applied manifest — see `AnnotationLines`. The heading is here rather than
- * there because a block with nothing in it must not draw its own rule.
- */
-function AnnotationsSection({ annotations }: { annotations: Record<string, string> }) {
-  if (Object.keys(annotations).length === 0) return null;
-  return (
-    <Section title="Annotations">
-      <AnnotationLines annotations={annotations} />
-    </Section>
-  );
-}
 
 /**
  * A pod's Details pane, as a flat run of blocks divided by hairline rules —
@@ -326,7 +284,7 @@ export function PodDetailsBody({ object }: { object: K8sObject }) {
     <PodVolumesSection key="volumes" object={object} />,
     <ConditionsSection key="conditions" conditions={orderPodConditions(conditions)} />,
     <LabelsSection key="labels" labels={meta.labels ?? {}} />,
-    <AnnotationsSection key="annotations" annotations={meta.annotations ?? {}} />,
+    <AnnotationsSection key="annotations" kind="Pod" annotations={meta.annotations ?? {}} />,
   ];
 
   return <>{sections}</>;

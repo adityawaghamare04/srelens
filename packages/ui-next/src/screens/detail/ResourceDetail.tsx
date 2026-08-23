@@ -156,7 +156,14 @@ async function resolveCrdGvk(
   return { crd: { group: match.group, version: match.version, plural: match.plural } };
 }
 
-type PaneBody = (props: { object: K8sObject; context: string }) => ReactNode;
+/**
+ * `kind` is the route's, not `object.kind`. A body dispatched on one kind and
+ * reading another off the payload is two sources of truth for the fact its own
+ * dispatch turned on — live today only because the API server happens to
+ * return `kind` on a single-object GET. A body that does not need it simply
+ * omits it from its own props. (#331)
+ */
+type PaneBody = (props: { kind: string; object: K8sObject; context: string }) => ReactNode;
 
 /**
  * The Details pane's per-kind content. Tasks 10-13 each append one entry
@@ -168,7 +175,7 @@ type PaneBody = (props: { object: K8sObject; context: string }) => ReactNode;
  * a table for later tasks to extend, not a switch for this component to
  * grow.
  */
-const DETAILS_BODY: Record<string, PaneBody> = {
+export const DETAILS_BODY: Record<string, PaneBody> = {
   Pod: PodDetailsBody,
   Deployment: WorkloadDetailsBody,
   StatefulSet: WorkloadDetailsBody,
@@ -527,11 +534,11 @@ export function ResourceDetail({ context, kind, namespace, name, peek }: Resourc
     >
       {active === PANE_DETAILS && (
         <GenericBody kind={kind} object={object} context={context}>
-          {DetailsBody && <DetailsBody object={object} context={context} />}
+          {DetailsBody && <DetailsBody kind={kind} object={object} context={context} />}
         </GenericBody>
       )}
-      {active === PANE_CONTAINERS && (ContainersBody ? <ContainersBody object={object} context={context} /> : null)}
-      {active === PANE_METRICS && (MetricsBody ? <MetricsBody object={object} context={context} /> : null)}
+      {active === PANE_CONTAINERS && (ContainersBody ? <ContainersBody kind={kind} object={object} context={context} /> : null)}
+      {active === PANE_METRICS && (MetricsBody ? <MetricsBody kind={kind} object={object} context={context} /> : null)}
       {active === PANE_YAML && (
         <YamlPane state={yamlState} kind={kind} namespace={namespace} name={name} redacted={isSecret} />
       )}

@@ -1,7 +1,18 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { Condition } from "@srelens/core";
-import { AnnotationLines, ConditionsSection, partitionAnnotations } from "./ConditionsSection";
+import {
+  AnnotationsSection,
+  AnnotationLines,
+  ConditionsSection,
+  LabelsSection,
+  StringList,
+  partitionAnnotations,
+} from "./sections";
 
 const DEPLOYMENT_CONDITIONS: Condition[] = [
   { type: "Available", status: "False", reason: "MinimumReplicasUnavailable" },
@@ -178,5 +189,130 @@ describe("AnnotationLines", () => {
       withheld: [APPLIED],
     });
     expect(partitionAnnotations({ app: "web" })).toEqual({ shown: [["app", "web"]], withheld: [] });
+  });
+});
+
+/** Whether a string appears anywhere in the rendered markup — text, `title`,
+ *  `aria-label`, `data-*`, everything a DOM inspector or a screen reader would
+ *  see. A boolean rather than an element query, so a failure never prints the
+ *  sensitive value into the test output. */
+function documentContains(value: string): boolean {
+  return document.body.innerHTML.includes(value);
+}
+
+describe("StringList", () => {
+  it("gives every item its own line", () => {
+    const { container } = render(<StringList items={["10.1.2.3", "fd00::1"]} />);
+    expect([...container.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["10.1.2.3", "fd00::1"]);
+  });
+
+  it("renders an empty list as an empty list, not as an absent block", () => {
+    const { container } = render(<StringList items={[]} />);
+    expect(container.querySelectorAll("li")).toHaveLength(0);
+    expect(container.querySelector("ul")).not.toBeNull();
+  });
+});
+
+describe("LabelsSection", () => {
+  it("heads the block and prints every pair", () => {
+    render(<LabelsSection labels={{ app: "web", tier: "front" }} />);
+    expect(screen.getByRole("heading", { level: 3, name: "Labels" })).toBeDefined();
+    expect(screen.getByText("web")).toBeDefined();
+    expect(screen.getByText("front")).toBeDefined();
+  });
+
+  it("renders nothing at all when the object has none — an empty block still draws its own rule", () => {
+    const { container } = render(<LabelsSection labels={{}} />);
+    expect(container.innerHTML).toBe("");
+  });
+});
+
+/**
+ * The gate, pinned on the component that now holds it rather than on one of
+ * the three bodies that used to hold three copies of it.
+ *
+ * Two of those copies — `PodBody`'s and `WorkloadBody`'s — had NO `Secret`
+ * branch. That was safe only because the four kinds those bodies serve are
+ * `SELF_DESCRIBING_KINDS`, none of which can be a Secret: a security gate
+ * resting on a membership list in a third file. These tests fail for the right
+ * reason whichever body renders the section, because there is only one
+ * section. (#331)
+ */
+describe("AnnotationsSection — the secrecy gate, wherever it is rendered from", () => {
+  // Obviously-fake fixture text — never anything that reads as a real
+  // manifest or credential.
+  const FIXTURE_VALUE = "fixture-only-not-a-real-last-applied-manifest";
+  const APPLIED_KEY = "kubectl.kubernetes.io/last-applied-configuration";
+
+  it("keeps a Secret's annotation value out of the document until a reader asks", async () => {
+    render(<AnnotationsSection kind="Secret" annotations={{ "srelens.io/rotated-from": FIXTURE_VALUE }} />);
+    // An ORDINARY annotation key, deliberately: the shared legibility rule
+    // drops `last-applied-configuration` on every kind, so using that key
+    // would prove nothing about the gate.
+    expect(documentContains(FIXTURE_VALUE)).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Show 1 annotation" }));
+    expect(documentContains(FIXTURE_VALUE)).toBe(true);
+  });
+
+  it("still gates a Secret whose applied manifest the shared rule would have withheld anyway", () => {
+    // The two rules must not be confused for one. `AnnotationLines` drops
+    // `last-applied-configuration` for legibility and would happen to drop
+    // this value too — but a Secret never reaches it. The gate is what keeps
+    // the value out, and it is still the gate doing it.
+    render(<AnnotationsSection kind="Secret" annotations={{ [APPLIED_KEY]: FIXTURE_VALUE }} />);
+    expect(documentContains(FIXTURE_VALUE)).toBe(false);
+    expect(screen.getByRole("button", { name: "Show 1 annotation" })).toBeDefined();
+  });
+
+  it("gates Secret and nothing else — every other kind's annotations are open, as the design draws them", () => {
+    for (const kind of ["Pod", "Deployment", "StatefulSet", "ReplicaSet", "ConfigMap", "Lease"]) {
+      const { unmount } = render(
+        <AnnotationsSection kind={kind} annotations={{ "srelens.io/last-applied-by": "dana@acme.io" }} />,
+      );
+      expect({ kind, open: documentContains("dana@acme.io") }).toEqual({ kind, open: true });
+      expect({ kind, toggle: screen.queryByRole("button", { name: /^Show / }) }).toEqual({ kind, toggle: null });
+      unmount();
+    }
+  });
+
+  it("renders nothing at all for an object with no annotations", () => {
+    const { container } = render(<AnnotationsSection kind="Secret" annotations={{}} />);
+    expect(container.innerHTML).toBe("");
+  });
+});
+
+/**
+ * The copies cannot come back silently.
+ *
+ * `StringList` had SIX byte-identical definitions across this directory,
+ * `LabelsSection` three and `AnnotationsSection` three — and two of the
+ * `AnnotationsSection` copies were missing the `Secret` branch above. Every one
+ * of them was justified in a comment saying it was too small to share. Read
+ * off the source rather than inferred from behaviour, because a re-added copy
+ * would behave identically on the day it was written; that is exactly why the
+ * first six were never noticed. (#331)
+ */
+describe("one definition each, across every detail body", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const sources = readdirSync(here)
+    .filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+    .map((f) => ({ file: f, text: readFileSync(join(here, f), "utf8") }));
+
+  it.each(["StringList", "LabelsSection", "AnnotationsSection", "AnnotationsToggle", "AnnotationLines", "RelatedPodsSection", "ConditionsSection"])(
+    "defines %s exactly once, in sections.tsx",
+    (name) => {
+      const definedIn = sources
+        .filter(({ text }) => new RegExp(`function ${name}\\(`).test(text))
+        .map(({ file }) => file);
+      expect(definedIn).toEqual(["sections.tsx"]);
+    },
+  );
+
+  it("reads a directory with every body in it, so the sweep above is not vacuous", () => {
+    const files = sources.map((s) => s.file);
+    expect(files).toContain("sections.tsx");
+    for (const body of ["CronJobBody", "GenericBody", "PodBody", "SecretBody", "ServiceBody", "WorkloadBody"]) {
+      expect(files).toContain(`${body}.tsx`);
+    }
   });
 });

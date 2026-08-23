@@ -14,6 +14,7 @@ import {
   type K8sObject,
 } from "@srelens/core";
 import { Button, EmptyState, KV, Section, Spinner, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
+import { StringList } from "./sections";
 
 /**
  * A private key's format, read straight off its PEM header — classic's
@@ -34,20 +35,6 @@ function certificateCount(pem: string): number {
   return pem.match(/-----BEGIN CERTIFICATE-----/g)?.length ?? 0;
 }
 
-/** A plain, unlinked string list — the same small local component every other
- *  detail body in this directory (PodBody, ServiceBody, ...) repeats for a
- *  KV row whose value is a handful of short strings rather than prose. */
-function StringList({ items }: { items: string[] }) {
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item, i) => (
-        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 /** classic's inline ternary for a certificate row's status pill, factored out
  *  so both the "Certificate status" KV row and the per-certificate table's

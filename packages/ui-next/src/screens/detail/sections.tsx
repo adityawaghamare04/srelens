@@ -1,12 +1,17 @@
 /**
  * The blocks a detail body is built from that more than one body needs — the
- * conditions list, the annotation rule, the managed-pods table. Each of them
- * was written two or three times before it was written once, and every copy
- * had drifted from the others by the time they were compared. (#331)
+ * string list, the labels and annotations blocks, the conditions list, the
+ * managed-pods table. Each of them was written between two and SIX times
+ * before it was written once, and every copy had drifted from the others by
+ * the time they were compared. (#331)
+ *
+ * The file was `ConditionsSection.tsx` while it held one block. It holds six
+ * now, so it is named for what it is: this design's shared detail sections.
  */
 import { useEffect, useState } from "react";
 import {
   conditionKindWithReason,
+  plural,
   podMetrics,
   podsForSelector,
   podStatus,
@@ -15,6 +20,7 @@ import {
   type PodSummary,
 } from "@srelens/core";
 import {
+  Button,
   KV,
   LoadingState,
   PairList,
@@ -23,6 +29,29 @@ import {
   Table,
   type Column,
 } from "@srelens/ui-kit";
+import { formatCpu, formatMemory } from "../../lib/kinds/columns";
+
+/**
+ * A formatted list, one item per line — a pod's IPs, an owner reference, a
+ * container's ports, a certificate's SANs.
+ *
+ * One implementation, replacing SIX byte-identical ones: `CronJobBody`,
+ * `GenericBody`, `PodBody`, `SecretBody`, `ServiceBody` and `WorkloadBody`
+ * each carried their own, every one of them justified in a comment saying it
+ * was too small to share. Six copies of four lines is still six places to fix
+ * a wrapping bug in. (#331)
+ */
+export function StringList({ items }: { items: string[] }) {
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {items.map((item, i) => (
+        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export interface ConditionsSectionProps {
   /**
@@ -157,6 +186,123 @@ export function AnnotationLines({ annotations }: { annotations: Record<string, s
   );
 }
 
+/**
+ * The object's labels, as a block of full-width `key=value` lines.
+ *
+ * `breakValues` is not decoration. `PairList` truncates by default and no
+ * longer writes the value into a `title` attribute — that attribute was how a
+ * Secret's whole applied manifest reached the DOM — so wrapping is now the
+ * only way a long label is readable at all. Omitted outright when the object
+ * has none, rather than shown as classic's chip widget does ("None").
+ *
+ * One implementation, replacing three identical ones (`GenericBody`,
+ * `PodBody`, `WorkloadBody`). (#331)
+ */
+export function LabelsSection({ labels }: { labels: Record<string, string> }) {
+  const pairs = Object.entries(labels);
+  if (pairs.length === 0) return null;
+  return (
+    <Section title="Labels">
+      <PairList pairs={pairs} breakValues />
+    </Section>
+  );
+}
+
+/**
+ * Annotations, collapsed behind an explicit toggle and mounting nothing until
+ * expanded — classic's `Expandable`/`ChipMap`.
+ *
+ * Reached by `Secret` alone; every other kind shows its annotations outright
+ * (see {@link AnnotationsSection} below for why the exception is exactly one
+ * kind wide). Nothing here uses `title`, `aria-label`, or any `data-*` for a
+ * value; the toggle's own accessible name is just its visible "Show"/"Hide"
+ * text, counting entries, never naming one.
+ *
+ * Deliberately not `PairList`, even now that `PairList` writes no `title`:
+ * this is the one place a value must be absent from the document rather than
+ * merely unshown, and a component that renders its pairs unconditionally
+ * cannot promise that.
+ */
+function AnnotationsToggle({ annotations }: { annotations: Record<string, string> }) {
+  const [open, setOpen] = useState(false);
+  const entries = Object.entries(annotations);
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <Button type="button" variant="ghost" size="xs" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide" : `Show ${plural(entries.length, "annotation")}`}
+      </Button>
+      {open && (
+        <ul className="flex flex-col gap-0.5">
+          {entries.map(([k, v]) => (
+            <li key={k} className="break-all font-mono text-[0.8125rem]">
+              {k}={v}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The object's annotations — open, the way the design draws them, on every
+ * kind but `Secret`.
+ *
+ * DO NOT "simplify" the exception away. A `kubectl apply`-managed Secret
+ * carries its ENTIRE applied manifest, base64 `data` map included, inside the
+ * `kubectl.kubernetes.io/last-applied-configuration` annotation, and
+ * `k8s.getObject`'s Secret redaction blanks `data`/`stringData` only — it
+ * never touches `metadata.annotations`. So for this one kind an annotation
+ * value IS the secret, and the toggle is what keeps it out of the document
+ * until a reader asks for it, exactly as `SecretBody` keeps each `data` value
+ * out until it is revealed.
+ *
+ * The kit fixed the other half of this: `PairList` used to put every value in
+ * a row `title`, so a value the reader saw three characters of was sitting
+ * whole in the markup. That fix is why every other kind can now open — an
+ * annotation on a ConfigMap or a Deployment holds that object's own spec,
+ * which the pane shows anyway — but it does nothing for text that is visible
+ * on purpose, which is what a Secret's annotation would be.
+ *
+ * Every other kind goes through the shared {@link AnnotationLines}, so there
+ * is one rule about how annotations print and what a pane holds back. Note
+ * what that does NOT do: holding `last-applied-configuration` back is a
+ * LEGIBILITY rule — a manifest on one line buries every other annotation in a
+ * 352px pane — and it is not redaction. It happens to drop the annotation a
+ * Secret's `data` map arrives in, and that is a side effect, not a promise:
+ * every other annotation on every kind is still printed exactly as it
+ * arrives. The `Secret` branch therefore stays whatever `AnnotationLines`
+ * withholds, and a Secret must never be routed through it instead.
+ *
+ * WHY THIS LIVES HERE AND NOWHERE ELSE. It was written three times —
+ * `GenericBody`'s with the `Secret` branch, `PodBody`'s and `WorkloadBody`'s
+ * without it. That was safe only by accident: the four kinds those two bodies
+ * serve are `SELF_DESCRIBING_KINDS`, none of which can be a Secret. So a
+ * security gate rested on a membership list two files away, and adding a
+ * fifth kind to that set would have run the ungated copy with nothing
+ * failing. `kind` is required rather than optional for the same reason — a
+ * caller has to say which kind it is drawing, and cannot get the gate by
+ * default. (#331)
+ */
+export function AnnotationsSection({
+  kind,
+  annotations,
+}: {
+  kind: string;
+  annotations: Record<string, string>;
+}) {
+  if (Object.keys(annotations).length === 0) return null;
+  return (
+    <Section title="Annotations">
+      {kind === "Secret" ? (
+        <AnnotationsToggle annotations={annotations} />
+      ) : (
+        <AnnotationLines annotations={annotations} />
+      )}
+    </Section>
+  );
+}
+
 interface RelatedPod extends PodSummary {
   cpu?: number;
   memory?: number;
@@ -174,8 +320,12 @@ const RELATED_POD_COLUMNS: Column<RelatedPod>[] = [
   { key: "name", header: "Name", render: (p) => <span className="font-mono">{p.name}</span> },
   { key: "node", header: "Node", render: (p) => <span className="font-mono">{p.node || "—"}</span> },
   { key: "ready", header: "Ready", render: (p) => p.ready },
-  { key: "cpu", header: "CPU", render: (p) => (p.cpu != null ? (p.cpu / 1000).toFixed(3) : "—") },
-  { key: "memory", header: "Memory", render: (p) => (p.memory != null ? `${p.memory} Mi` : "—") },
+  // `formatCpu`/`formatMemory`, the same two the list and the Workloads table
+  // render these very fields through. They were formatted twice: one pod read
+  // "2 410m" / "3.1 Gi" in the list and "2.410" / "3174 Mi" in the workload's
+  // own Pods table, two panes apart. (#331)
+  { key: "cpu", header: "CPU", render: (p) => (p.cpu != null ? formatCpu(p.cpu) : "—") },
+  { key: "memory", header: "Memory", render: (p) => (p.memory != null ? formatMemory(p.memory) : "—") },
   {
     key: "status",
     header: "Status",

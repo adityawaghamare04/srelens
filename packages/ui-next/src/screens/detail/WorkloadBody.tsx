@@ -11,27 +11,19 @@ import {
   type K8sObject,
   type ReplicaSetSummary,
 } from "@srelens/core";
-import { EmptyState, KV, LoadingState, PairList, Section, Table, type Column } from "@srelens/ui-kit";
-import { AnnotationLines, ConditionsSection, RelatedPodsSection } from "./ConditionsSection";
+import { KV, LoadingState, PairList, Section, Table, type Column } from "@srelens/ui-kit";
+import {
+  AnnotationsSection,
+  ConditionsSection,
+  LabelsSection,
+  RelatedPodsSection,
+  StringList,
+} from "./sections";
 import { SELF_DESCRIBING_KINDS } from "./GenericBody";
 
 /** The annotation a Deployment records its current rollout number in. */
 const REVISION_ANNOTATION = "deployment.kubernetes.io/revision";
 
-/** A formatted list, one item per line — matches `PodBody`'s own helper of
- *  the same shape, kept local since it's a small presentational detail, not
- *  a shared formatter. */
-function StringList({ items }: { items: string[] }) {
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item, i) => (
-        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 /**
  * "RollingUpdate · surge 25% · unavailable 0" / "RollingUpdate · partition 2"
@@ -282,37 +274,7 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
   );
 }
 
-/**
- * The object's labels, as a block of full-width `key=value` lines.
- *
- * `breakValues` is not decoration: `PairList` truncates by default and no
- * longer writes the value into a row `title` — that attribute was how a
- * Secret's whole applied manifest reached the DOM — so wrapping is now the
- * only way a long label can be read at all.
- */
-function LabelsSection({ labels }: { labels: Record<string, string> }) {
-  const pairs = Object.entries(labels);
-  if (pairs.length === 0) return null;
-  return (
-    <Section title="Labels">
-      <PairList pairs={pairs} breakValues />
-    </Section>
-  );
-}
 
-/**
- * The object's annotations, through the shared rule that holds back the
- * applied manifest — see `AnnotationLines`. The heading is here rather than
- * there because a block with nothing in it must not draw its own rule.
- */
-function AnnotationsSection({ annotations }: { annotations: Record<string, string> }) {
-  if (Object.keys(annotations).length === 0) return null;
-  return (
-    <Section title="Annotations">
-      <AnnotationLines annotations={annotations} />
-    </Section>
-  );
-}
 
 /**
  * The Details pane for Deployment, StatefulSet, DaemonSet and ReplicaSet —
@@ -332,6 +294,16 @@ function AnnotationsSection({ annotations }: { annotations: Record<string, strin
  * reason: a DaemonSet is wrapped by `GenericBody`, which supplies all three,
  * so rendering them here too would show each of them twice.
  *
+ * `kind` is the route's, handed down by `ResourceDetail` — not `object.kind`,
+ * which this read until the whole-branch review. The API server happens to
+ * return `kind` on a single-object GET, so the two agreed; but the pane is
+ * dispatched on the route's kind and a body that re-derives it is a second
+ * source of truth for the fact its own dispatch turned on. Taking the prop
+ * also retires an `if (!kind)` guard that returned a bare `EmptyState` into
+ * the run of sections, breaking the `.section + .section` hairline chain:
+ * `DETAILS_BODY[""]` is undefined, so no empty kind can reach this at all.
+ * (#331)
+ *
  * Related pods (classic's `ManagedPods`) follow the same rule. DaemonSet is
  * deliberately excluded: classic's `DaemonSetBody` renders ONLY its Scheduling
  * section — it is the generic `GenericDetail` wrapper that supplies a
@@ -339,8 +311,15 @@ function AnnotationsSection({ annotations }: { annotations: Record<string, strin
  * wrapper) already adds one via `relatedPodSelector` for every kind that isn't
  * self-describing.
  */
-export function WorkloadDetailsBody({ object, context }: { object: K8sObject; context: string }) {
-  const kind = str(object.kind);
+export function WorkloadDetailsBody({
+  kind,
+  object,
+  context,
+}: {
+  kind: string;
+  object: K8sObject;
+  context: string;
+}) {
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const namespace = str(meta.namespace);
@@ -351,8 +330,6 @@ export function WorkloadDetailsBody({ object, context }: { object: K8sObject; co
   const conditions = asArray(asRecord(object.status).conditions) as unknown as Condition[];
   const annotations = meta.annotations ?? {};
   const revisions = useDeployRevisions(context, namespace, name, kind === "Deployment");
-
-  if (!kind) return <EmptyState title="No workload data" />;
 
   return (
     <>
@@ -369,7 +346,7 @@ export function WorkloadDetailsBody({ object, context }: { object: K8sObject; co
         <>
           <ConditionsSection conditions={conditions} />
           <LabelsSection labels={meta.labels ?? {}} />
-          <AnnotationsSection annotations={annotations} />
+          <AnnotationsSection kind={kind} annotations={annotations} />
         </>
       )}
     </>

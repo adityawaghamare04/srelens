@@ -23,8 +23,29 @@ vi.mock("@srelens/core", async (importOriginal) => ({
   listReplicaSets,
 }));
 
+import { formatCpu, formatMemory } from "../../lib/kinds/columns";
 import { GenericBody } from "./GenericBody";
-import { WorkloadDetailsBody } from "./WorkloadBody";
+import { WorkloadDetailsBody as Body } from "./WorkloadBody";
+
+/**
+ * The body under test, with the ROUTE's kind supplied the way `ResourceDetail`
+ * supplies it. Defaulted from the fixture's own `kind` so the cases below read
+ * as they did — that is plumbing for this file, not the `str(object.kind)`
+ * re-derivation the body itself carried until the whole-branch review. One
+ * case below passes a kind the object contradicts, which is what proves the
+ * prop is the thing being read.
+ */
+function WorkloadDetailsBody({
+  kind,
+  object,
+  context,
+}: {
+  kind?: string;
+  object: K8sObject;
+  context: string;
+}) {
+  return <Body kind={kind ?? String(object.kind ?? "")} object={object} context={context} />;
+}
 
 function workload(
   kind: string,
@@ -451,6 +472,38 @@ describe("WorkloadDetailsBody", () => {
       expect(screen.queryByText("Running")).toBeNull();
     });
 
+    it("formats CPU and memory the way the list and the Workloads table do, not a second way", async () => {
+      // One pod read "2 410m" / "3.1 Gi" in the list and "2.410" / "3174 Mi"
+      // in this very table, two panes apart, because this column set did its
+      // own arithmetic instead of calling `formatCpu`/`formatMemory`. The
+      // expected strings are taken from those two functions rather than
+      // written out, so the pin cannot drift from them either. (#331)
+      podsForSelector.mockResolvedValue({ pods: [POD_A] });
+      podMetrics.mockResolvedValue({
+        metrics: [{ name: "web-abc-1", namespace: "default", cpuMillicores: 2410, memoryMiB: 3174 }],
+      });
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", { replicas: 1, selector: { matchLabels: { app: "web" } } })}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("web-abc-1")).toBeDefined());
+      // Read off the cells rather than through `getByText`: `formatCpu`
+      // groups thousands with a thin space (U+2009), which the query's own
+      // whitespace normalizer would collapse on one side of the comparison
+      // and not the other.
+      const cells = [...screen.getByText("web-abc-1").closest("tr")!.querySelectorAll("td")].map(
+        (td) => td.textContent,
+      );
+      expect(cells).toContain(formatCpu(2410));
+      expect(cells).toContain(formatMemory(3174));
+      // The two forms this replaced, named so a revert is caught by its own
+      // output rather than only by the absence of the right one.
+      expect(cells).not.toContain("2.410");
+      expect(cells).not.toContain("3174 Mi");
+    });
+
     it("shows No pods when the selector matches nothing", async () => {
       podsForSelector.mockResolvedValue({ pods: [] });
       render(
@@ -639,6 +692,61 @@ describe("WorkloadDetailsBody", () => {
       expect(screen.getAllByRole("heading", { name: "Pods" })).toHaveLength(1);
       expect(podsForSelector).toHaveBeenCalledTimes(1);
       expect(podsForSelector).toHaveBeenCalledWith("ctx", "kube-system", { app: "logging" });
+    });
+  });
+
+  /**
+   * The kind is the route's, and the body takes it as a prop rather than
+   * re-deriving it from `object.kind`. Two sources of truth for one fact
+   * agreed only because the API server happens to return `kind` on a
+   * single-object GET — nothing structural made them agree. (#331)
+   */
+  describe("the kind it draws is the one it was handed", () => {
+    it("draws a DaemonSet's per-node Scheduling block when told DaemonSet, whatever the payload says", () => {
+      // The payload says Deployment; the route says DaemonSet. Only one of
+      // the two can be what the body reads, and this pins which.
+      render(
+        <WorkloadDetailsBody
+          kind="DaemonSet"
+          object={workload("Deployment", { selector: { matchLabels: { app: "logging" } } }, { desiredNumberScheduled: 4, numberReady: 4 })}
+          context="ctx"
+        />,
+      );
+      expect(screen.getByRole("heading", { name: "Scheduling" })).toBeDefined();
+      expect(screen.getByText("Desired")).toBeDefined();
+      // The replica facts block is the pane's unheaded first section; its
+      // "Replicas" row is what says it was drawn.
+      expect(screen.queryByText("Replicas")).toBeNull();
+    });
+
+    it("draws the replica Properties block when told Deployment, whatever the payload says", () => {
+      render(
+        <WorkloadDetailsBody
+          kind="Deployment"
+          object={workload("DaemonSet", { replicas: 3, selector: { matchLabels: { app: "web" } } }, { readyReplicas: 3 })}
+          context="ctx"
+        />,
+      );
+      expect(screen.getByText("Replicas")).toBeDefined();
+      expect(screen.queryByRole("heading", { name: "Scheduling" })).toBeNull();
+    });
+
+    it("draws a complete run of sections for an object carrying no kind of its own", async () => {
+      // The `if (!kind)` guard this replaced returned a bare `EmptyState`
+      // into the run, which is not a `.section` and so silently cost the
+      // hairline rule on both sides of it. With the kind coming from the
+      // dispatch key it cannot be empty — `DETAILS_BODY[""]` is undefined —
+      // and the object's own missing `kind` changes nothing.
+      const { container } = render(
+        <WorkloadDetailsBody
+          kind="Deployment"
+          object={{ apiVersion: "apps/v1", metadata: { name: "web", namespace: "default" }, spec: { replicas: 1 }, status: {} } as K8sObject}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("Replicas")).toBeDefined());
+      expect(screen.queryByText("No workload data")).toBeNull();
+      expect([...container.children].every((el) => el.matches("section.section"))).toBe(true);
     });
   });
 });

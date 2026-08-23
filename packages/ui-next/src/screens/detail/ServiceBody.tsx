@@ -8,21 +8,7 @@ import {
   type K8sObject,
 } from "@srelens/core";
 import { KV, PairList, Section, Table, type Column } from "@srelens/ui-kit";
-
-/** A formatted list, one item per line — matches `PodBody`'s/`WorkloadBody`'s
- *  own helper of the same shape, kept local since it's a small presentational
- *  detail, not a shared formatter. */
-function StringList({ items }: { items: string[] }) {
-  return (
-    <ul className="flex flex-col gap-0.5">
-      {items.map((item, i) => (
-        <li key={`${item}-${i}`} className="font-mono text-[0.8125rem]">
-          {item}
-        </li>
-      ))}
-    </ul>
-  );
-}
+import { StringList } from "./sections";
 
 /**
  * How the Service is reached — classic's "Connection" section, ported
