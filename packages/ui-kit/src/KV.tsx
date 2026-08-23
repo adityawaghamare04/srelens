@@ -6,8 +6,6 @@ export interface KVProps {
   v: ReactNode;
   /** Set the value in the monospace face — for identifiers, not for prose. */
   mono?: boolean;
-  /** The value in full, for when the column is narrower than it is. */
-  title?: string;
   className?: string;
 }
 
@@ -22,14 +20,21 @@ export interface KVProps {
  * often as it is used through {@link KVList} — a `dt` with no `dl` around it is
  * markup a browser gives no meaning to, and no prop or convention can make a
  * caller remember the wrapper. (#320)
+ *
+ * `KV` used to take an explicit `title` for the value cell, and {@link KVList}
+ * set one from every string value without being asked. Neither was standing
+ * in for truncation: `.kv-v` wraps a long value onto another line rather than
+ * cutting it off (`overflow-wrap: anywhere`, no `text-overflow`), so the
+ * title was only ever a second, unredacted copy of the value sitting in the
+ * DOM — the same disclosure hole `PairList` removed after a `kubectl
+ * apply`-managed Secret leaked through it via an annotation. There is no prop
+ * to put it back, for the same reason. (#331)
  */
-export function KV({ k, v, mono, title, className }: KVProps) {
+export function KV({ k, v, mono, className }: KVProps) {
   return (
     <dl className={cx("kv", className)}>
       <dt className="kv-k">{k}</dt>
-      <dd className={cx("kv-v", mono && "code")} title={title}>
-        {v}
-      </dd>
+      <dd className={cx("kv-v", mono && "code")}>{v}</dd>
     </dl>
   );
 }
@@ -62,7 +67,6 @@ export function KVList({ rows, mono }: KVListProps) {
           k={k}
           v={v}
           mono={typeof v === "string" && mono ? mono(v) : undefined}
-          title={typeof v === "string" ? v : undefined}
         />
       ))}
     </>

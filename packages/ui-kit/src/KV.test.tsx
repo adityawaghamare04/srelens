@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { KV, KVList } from "./KV";
 
 /** New: the mock shipped these components with no tests at all. (#320) */
@@ -38,14 +40,25 @@ describe("KV", () => {
     expect(container.querySelector(".kv-v.code")).toBeNull();
   });
 
-  it("hangs the full value off the value cell as a title", () => {
-    const { container } = render(<KV k="Image" v="nginx:1.25" title="nginx:1.25" />);
-    expect(container.querySelector(".kv-v")?.getAttribute("title")).toBe("nginx:1.25");
-  });
-
-  it("adds no title attribute when there is none to add", () => {
+  it("adds no title attribute", () => {
     const { container } = render(<KV k="Status" v="Running" />);
     expect(container.querySelector(".kv-v")?.hasAttribute("title")).toBe(false);
+  });
+
+  it("never writes a value into an attribute", () => {
+    // KV used to accept an explicit `title` set to the value in full. `.kv-v`
+    // wraps a long value onto another line rather than truncating it
+    // (`overflow-wrap: anywhere`, no `text-overflow`), so the title was never
+    // standing in for truncation here — it was only ever a second copy of the
+    // value sitting in the DOM, the same disclosure hole `PairList` removed
+    // after a `kubectl apply`-managed Secret leaked through it. (#331)
+    const secret = "FAKE-NOT-A-REAL-TOKEN-aHVudGVyMg==";
+    const { container } = render(<KV k="Token" v={secret} />);
+    const cell = container.querySelector(".kv-v") as HTMLElement;
+    for (const attribute of Array.from(cell.attributes)) {
+      expect(attribute.value, `${attribute.name} carries the value`).not.toContain(secret);
+    }
+    expect(cell.hasAttribute("title")).toBe(false);
   });
 
   it("forwards className onto the row", () => {
@@ -106,13 +119,28 @@ describe("KVList", () => {
     expect(container.querySelector(".kv-v")?.hasAttribute("title")).toBe(false);
   });
 
-  it("hangs a text value off its cell as a title", () => {
-    const { container } = render(<KVList rows={[["Image", "nginx:1.25"]]} />);
-    expect(container.querySelector(".kv-v")?.getAttribute("title")).toBe("nginx:1.25");
+  it("never writes a value into an attribute", () => {
+    // This row used to derive `title` from every string value, unasked — the
+    // same disclosure hole `PairList` removed after a `kubectl
+    // apply`-managed Secret leaked through it via an annotation. (#331)
+    const secret = "FAKE-NOT-A-REAL-TOKEN-aHVudGVyMg==";
+    const { container } = render(<KVList rows={[["Token", secret]]} />);
+    const cell = container.querySelector(".kv-v") as HTMLElement;
+    for (const attribute of Array.from(cell.attributes)) {
+      expect(attribute.value, `${attribute.name} carries the value`).not.toContain(secret);
+    }
+    expect(cell.hasAttribute("title")).toBe(false);
   });
 
   it("renders nothing at all for an empty list", () => {
     const { container } = render(<KVList rows={[]} />);
     expect(container.innerHTML).toBe("");
+  });
+
+  it("offers no way to opt a value back into an attribute", () => {
+    // A prop that puts it back is a prop someone passes on a Secret. Guards
+    // both KV and KVList, which share this file. (#331)
+    const source = readFileSync(join(__dirname, "KV.tsx"), "utf8");
+    expect(source.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, "")).not.toContain("title=");
   });
 });

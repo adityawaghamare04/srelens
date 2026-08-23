@@ -794,7 +794,7 @@ export function Gallery() {
             markup anywhere — which is why it is used standalone as often as
             through a list. */}
         <KV k="Status" v="Running" />
-        <KV k="Image" v="nginx:1.25" mono title="nginx:1.25" />
+        <KV k="Image" v="nginx:1.25" mono />
       </section>
 
       <section>
