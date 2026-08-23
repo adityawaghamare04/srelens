@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect } from "react";
+import { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -54,17 +54,34 @@ vi.mock("@srelens/core", async (importOriginal) => ({
  * hoisted above this module's own imports, and the JSX runtime binding is not
  * guaranteed to be initialised when the factory runs.
  */
-const { detailProps } = vi.hoisted(() => ({
+const { detailProps, detailFrames } = vi.hoisted(() => ({
   detailProps: [] as Array<Record<string, unknown>>,
+  detailFrames: [] as Array<{ heading: string | null; body: string }>,
 }));
 
 vi.mock("./detail/ResourceDetail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./detail/ResourceDetail")>();
-  const { createElement } = await import("react");
+  const { createElement, useLayoutEffect } = await import("react");
   return {
     ...actual,
     ResourceDetail: (props: Record<string, unknown>) => {
       detailProps.push({ ...props });
+      // The frame probe lives HERE, wrapped directly around the pane, because
+      // this is the only component that re-renders when the peek's subject
+      // changes. A probe rendered as a sibling of `<Resources>` does not: the
+      // peek is state inside `KindList`, so the sibling never re-renders, its
+      // layout effect never fires again, and the recording comes back empty —
+      // an assertion over nothing, which is what the first cut of this test
+      // was. Layout effects run bottom-up, so by the time this one fires the
+      // pane below it has already committed its DOM: what it reads is the
+      // frame a browser would paint.
+      useLayoutEffect(() => {
+        const pane = document.querySelector("section.pane");
+        detailFrames.push({
+          heading: pane?.querySelector("h2")?.textContent ?? null,
+          body: pane?.querySelector(".pane-body")?.textContent ?? "",
+        });
+      });
       return createElement(actual.ResourceDetail, props as never);
     },
   };
@@ -168,6 +185,7 @@ beforeEach(() => {
     }),
   );
   detailProps.length = 0;
+  detailFrames.length = 0;
 
   resetContexts();
   setContexts([CTX]);
@@ -849,6 +867,7 @@ describe("the detail pane's two hosts", () => {
     fireEvent.click(row("web-1"));
     await waitFor(() => expect(paneBody()).toContain("web-1"));
     expect(getObject).toHaveBeenCalledTimes(1);
+    const rendersAfterFirstClick = detailProps.length;
 
     fireEvent.click(row("web-1"));
     // A second read would be issued from an effect, so let every pending one
@@ -858,37 +877,33 @@ describe("the detail pane's two hosts", () => {
     });
     expect(paneName()).toBe("web-1");
     expect(getObject).toHaveBeenCalledTimes(1);
+    // And not so much as a re-render: `peekAt` hands back the previous state
+    // object when the row clicked is the one already on show, so React bails
+    // out before the pane is asked for anything. Counted through the mock
+    // wrapper, which records one entry per render of the pane.
+    expect(detailProps.length).toBe(rendersAfterFirstClick);
+
+    // The counter above is live, not merely stuck: a click on a DIFFERENT row
+    // does move it. Without this the assertion would still pass if the pane
+    // had stopped rendering altogether.
+    fireEvent.click(row("api-7"));
+    await waitFor(() => expect(paneBody()).toContain("api-7"));
+    expect(detailProps.length).toBeGreaterThan(rendersAfterFirstClick);
   });
 
   it("never pairs one row's heading with another row's body, and keeps one pane across the switch", async () => {
     // Settled assertions cannot see this: RTL flushes effects synchronously,
     // so a bad frame is overwritten before `waitFor` resolves. A real browser
-    // paints whatever was committed. This records every committed frame the
-    // way `ResourceDetail.test.tsx` does, one layer out — the peek host is
-    // where a wrong `key`, or state split across two updates, would defeat
-    // the gate that component already has.
-    const frames: Array<{ heading: string | null; body: string }> = [];
-    function FrameProbe() {
-      useLayoutEffect(() => {
-        frames.push({ heading: paneName(), body: paneBody() });
-      });
-      return null;
-    }
-
-    store.openTab("/k/pods");
-    render(
-      <ConsoleProvider>
-        <Resources route="/k/pods" />
-        <AskPeek />
-        <FrameProbe />
-      </ConsoleProvider>,
-    );
+    // paints whatever was committed. `detailFrames` (recorded by the mock
+    // wrapper around the pane — see its comment for why it has to live there)
+    // holds every frame the switch below committed.
+    open("/k/pods");
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
 
     fireEvent.click(row("web-1"));
     await waitFor(() => expect(paneBody()).toContain("web-1"));
     const paneNode = peekPane();
-    frames.length = 0;
+    detailFrames.length = 0;
 
     fireEvent.click(row("api-7"));
     await waitFor(() => expect(paneBody()).toContain("api-7"));
@@ -899,7 +914,12 @@ describe("the detail pane's two hosts", () => {
     // `ResourceDetail`'s own target gate rather than honour it.
     expect(peekPane()).toBe(paneNode);
 
-    const mismatched = frames.filter((frame) => {
+    // The probe has to have seen something, or the assertion below is over an
+    // empty list and says nothing at all. That is not a hypothetical: the
+    // first cut of this test recorded nothing and passed anyway.
+    expect(detailFrames.length).toBeGreaterThan(0);
+
+    const mismatched = detailFrames.filter((frame) => {
       if (!frame.heading) return false;
       const other = frame.heading === "web-1" ? "api-7" : "web-1";
       return frame.body.includes(other) && !frame.body.includes(frame.heading);
@@ -982,6 +1002,7 @@ describe("the detail pane's two hosts", () => {
     list.unmount();
 
     detailProps.length = 0;
+  detailFrames.length = 0;
     openDetailTab("/k/Pod/default/web-1");
     await waitFor(() => expect(paneName()).toBe("web-1"));
     const fromTab = lastDetailProps();
