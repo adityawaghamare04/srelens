@@ -17,6 +17,7 @@
  * Whoever calls `certificateRows` still only pays for the parser's bytes when
  * that code path actually runs.
  */
+import type { HealthKind } from "./k8sHealth";
 import { asRecord, str } from "./k8sRaw";
 import { formatBytes } from "./k8sQuantity";
 import type { X509Certificate } from "@peculiar/x509";
@@ -68,6 +69,14 @@ export function dockerRegistries(data: Record<string, string>, type: string): Do
  *  renders it: role in the chain, the facts parsed off it, and its encoded
  *  size. `status`/`subject`/etc. are "" or "Invalid" (never omitted) when the
  *  PEM block itself failed to parse. */
+/**
+ * The five words {@link certificateRows} can put on a certificate, and the
+ * whole of that vocabulary. A union rather than `string` so
+ * {@link CERTIFICATE_HEALTH} below is a TOTAL table: a sixth word added here
+ * is a compile error at the tone table rather than a silent red pill.
+ */
+export type CertificateStatus = "Valid" | "Expires soon" | "Expired" | "Not yet valid" | "Invalid";
+
 export interface CertificateRow {
   key: string;
   role: string;
@@ -76,10 +85,40 @@ export interface CertificateRow {
   serial: string;
   validFrom: string;
   validUntil: string;
-  status: string;
+  status: CertificateStatus;
   keyAlgorithm: string;
   sans: string[];
   size: string;
+}
+
+/**
+ * The tone each certificate word carries — the pairing, beside the vocabulary
+ * that produces it.
+ *
+ * ui-next held this as `certificateStatusKind`, a three-branch ternary whose
+ * `else` swept "Expired", "Not yet valid" and "Invalid" into danger. That is
+ * the sixth hand-paired word/tone table found on this branch, and it had the
+ * same defect as the other five: it lived in a different package from the
+ * words, so it could only be checked by reading both. Enumerated here instead,
+ * one entry per word, and total by construction.
+ *
+ * "Not yet valid" is amber, not red, and that judgement belongs with the
+ * vocabulary: a certificate whose `notBefore` is in the future is a rotation
+ * staged early, not a broken one — the same call core already makes for a
+ * running Job (amber, no dot) versus a failed one. `Expired` and `Invalid`
+ * are red because they are the two states where TLS is actually not working.
+ */
+const CERTIFICATE_HEALTH: Record<CertificateStatus, HealthKind> = {
+  Valid: "success",
+  "Expires soon": "warning",
+  "Not yet valid": "warning",
+  Expired: "danger",
+  Invalid: "danger",
+};
+
+/** The tone for a certificate's status word. */
+export function certificateHealth(status: CertificateStatus): HealthKind {
+  return CERTIFICATE_HEALTH[status];
 }
 
 /** The public key's algorithm and size/curve, e.g. "RSASSA-PKCS1-v1_5
@@ -123,7 +162,7 @@ export async function certificateRows(pem: string): Promise<CertificateRow[]> {
       const now = Date.now();
       const expires = certificate.notAfter.getTime();
       const starts = certificate.notBefore.getTime();
-      const status = now < starts
+      const status: CertificateStatus = now < starts
         ? "Not yet valid"
         : now > expires
           ? "Expired"

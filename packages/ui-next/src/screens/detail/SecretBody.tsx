@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   absoluteTimestamp,
+  certificateHealth,
   certificateRows,
   decodeBase64,
   decodedByteLength,
@@ -13,7 +14,7 @@ import {
   type DockerRegistryRow,
   type K8sObject,
 } from "@srelens/core";
-import { Button, EmptyState, KV, Section, Spinner, StatusPill, Table, type Column, type StatusKind } from "@srelens/ui-kit";
+import { Button, EmptyState, KV, Section, Spinner, StatusPill, Table, type Column } from "@srelens/ui-kit";
 import { StringList } from "./sections";
 
 /**
@@ -36,22 +37,13 @@ function certificateCount(pem: string): number {
 }
 
 
-/** classic's inline ternary for a certificate row's status pill, factored out
- *  so both the "Certificate status" KV row and the per-certificate table's
- *  Status column use the same mapping. */
-function certificateStatusKind(status: string): StatusKind {
-  if (status === "Valid") return "success";
-  if (status === "Expires soon") return "warning";
-  return "danger";
-}
-
 const CERTIFICATE_COLUMNS: Column<CertificateRow>[] = [
   { key: "role", header: "Certificate", render: (row) => row.role },
   { key: "subject", header: "Subject", render: (row) => <span className="font-mono">{row.subject}</span> },
   {
     key: "status",
     header: "Status",
-    render: (row) => <StatusPill status={row.status} kind={certificateStatusKind(row.status)} />,
+    render: (row) => <StatusPill status={row.status} kind={certificateHealth(row.status)} />,
   },
   { key: "size", header: "Size", render: (row) => row.size },
 ];
@@ -153,7 +145,7 @@ function TlsSection({ data }: { data: Record<string, string> }) {
       <KV k="Certificates" v={count > 0 ? plural(count, "certificate") : "Missing tls.crt"} />
       <KV k="Private key" v={privateKeyType(privateKey)} />
       {leaf && (
-        <KV k="Certificate status" v={<StatusPill status={leaf.status} kind={certificateStatusKind(leaf.status)} />} />
+        <KV k="Certificate status" v={<StatusPill status={leaf.status} kind={certificateHealth(leaf.status)} />} />
       )}
       {leaf?.subject && <KV k="Subject" v={leaf.subject} />}
       {leaf?.issuer && <KV k="Issuer" v={leaf.issuer} />}

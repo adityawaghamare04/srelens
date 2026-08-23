@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import "reflect-metadata";
 import { X509Certificate } from "@peculiar/x509";
-import { decodeBase64, dockerRegistries, publicKeyAlgorithm, certificateRows } from "./k8sSecret";
+import {
+  certificateHealth,
+  certificateRows,
+  decodeBase64,
+  dockerRegistries,
+  publicKeyAlgorithm,
+  type CertificateStatus,
+} from "./k8sSecret";
 
 // Classic (apps/desktop/src/components/ResourceOverview.test.tsx) never unit-tests
 // decodeBase64 or dockerRegistries directly — it only exercises them indirectly
@@ -226,5 +233,42 @@ describe("certificateRows", () => {
   it("gives every row a byte size formatted from its own PEM block, even when parsing fails", async () => {
     const [row] = await certificateRows(UNPARSEABLE_CERT_PEM);
     expect(row.size).toMatch(/^[\d.]+ (B|KiB|MiB)$/);
+  });
+});
+
+/**
+ * The tone beside the vocabulary. ui-next held this as a three-branch ternary
+ * — the sixth hand-paired word/tone table found on this branch — in a
+ * different package from the words it was pairing, so nothing could check the
+ * two against each other. (#331)
+ */
+describe("certificateHealth", () => {
+  it("tones each of the five words core can emit, and none of them by accident", () => {
+    expect(certificateHealth("Valid")).toBe("success");
+    expect(certificateHealth("Expires soon")).toBe("warning");
+    // A certificate staged early is not a broken one — amber, where the
+    // ui-next ternary's `else` branch swept it into danger with the other two.
+    expect(certificateHealth("Not yet valid")).toBe("warning");
+    expect(certificateHealth("Expired")).toBe("danger");
+    expect(certificateHealth("Invalid")).toBe("danger");
+  });
+
+  it("answers for every word in the type, so the table cannot be partial", () => {
+    // `CERTIFICATE_HEALTH` is typed `Record<CertificateStatus, HealthKind>`,
+    // which makes a MISSING entry a compile error and a sixth word added to
+    // `certificateRows`' ternary chain a compile error too — the status there
+    // is annotated `CertificateStatus`. This is the runtime half: every word
+    // in the union resolves to one of the kit's five tones, never `undefined`
+    // leaking through as a pill with no colour.
+    const words: CertificateStatus[] = ["Valid", "Expires soon", "Expired", "Not yet valid", "Invalid"];
+    const tones = words.map(certificateHealth);
+    expect(tones).toHaveLength(words.length);
+    for (const tone of tones) expect(["success", "warning", "danger", "info", "neutral"]).toContain(tone);
+  });
+
+  it("gives an unparseable block a danger tone through the same table", async () => {
+    const [row] = await certificateRows(UNPARSEABLE_CERT_PEM);
+    expect(row.status).toBe("Invalid");
+    expect(certificateHealth(row.status)).toBe("danger");
   });
 });
