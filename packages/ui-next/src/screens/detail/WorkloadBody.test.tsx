@@ -542,8 +542,14 @@ describe("WorkloadDetailsBody", () => {
     it("shows each revision's number, name, pod count and age", async () => {
       listReplicaSets.mockResolvedValue({ replicasets: [REVISION_119, REVISION_1] });
       render(<WorkloadDetailsBody object={CHECKOUT_API} context="ctx" />);
-      await waitFor(() => expect(screen.getByRole("heading", { name: "Deploy Revisions" })).toBeDefined());
-      expect(screen.getByText("checkout-api-7d9f")).toBeDefined();
+      // Settles on a ROW, not on the section heading: `DeployRevisionsSection`
+      // draws that heading over its `LoadingState` too, so a `waitFor` on it
+      // returns before `listReplicaSets` has answered and the six reads below
+      // race the fetch. It failed the full-suite gate once, under the load of
+      // 195 files in parallel, and passed on its own every time — the same
+      // loading-frame signal that made the two-hosts test flaky. (#331)
+      await waitFor(() => expect(screen.getByText("checkout-api-7d9f")).toBeDefined());
+      expect(screen.getByRole("heading", { name: "Deploy Revisions" })).toBeDefined();
       expect(screen.getByText("9/12")).toBeDefined();
       expect(screen.getByText("6m")).toBeDefined();
       expect(screen.getByText("web-abc123")).toBeDefined();
