@@ -9,6 +9,15 @@ const DEPLOYMENT_CONDITIONS: Condition[] = [
   { type: "ReplicaFailure", status: "False" },
 ];
 
+/** The colour `StatusPill` painted a condition's name with, empty when it
+ *  left the name plain. Read off the inline style the component documents as
+ *  its own mechanism rather than off a `data-*` attribute, which is the kit's
+ *  to add or drop. */
+function tone(container: HTMLElement, name: string): string {
+  const pill = [...container.querySelectorAll(".status")].find((el) => el.textContent === name);
+  return (pill as HTMLElement | undefined)?.style.color ?? "no such condition";
+}
+
 describe("ConditionsSection", () => {
   it("names the block and gives every condition a row", () => {
     const { container } = render(<ConditionsSection conditions={DEPLOYMENT_CONDITIONS} />);
@@ -40,13 +49,12 @@ describe("ConditionsSection", () => {
 
   it("colours the name of a bad condition and leaves a good one plain", () => {
     // The design's asymmetric rule: red `Available`, plain `Progressing`
-    // beside its own ok dot. `StatusPill` owns which kinds count as bad, so
-    // this asserts the flag reached it, not a colour computed here.
+    // beside its own ok dot. `StatusPill` owns which kinds count as bad and
+    // paints the word with an inline tone; this asserts the flag reached it,
+    // not a colour computed here.
     const { container } = render(<ConditionsSection conditions={DEPLOYMENT_CONDITIONS} />);
-    const pills = [...container.querySelectorAll(".status")];
-    const byName = new Map(pills.map((p) => [p.textContent, p]));
-    expect(byName.get("Available")?.getAttribute("data-bad")).toBe("true");
-    expect(byName.get("Progressing")?.getAttribute("data-bad")).toBeNull();
+    expect(tone(container, "Available")).toBe("var(--sev)");
+    expect(tone(container, "Progressing")).toBe("");
   });
 
   it("takes every tone from core's one heuristic, including where that heuristic is wrong", () => {
@@ -58,9 +66,7 @@ describe("ConditionsSection", () => {
     // and every other reader of a condition's tone would get it too, not in a
     // second heuristic kept here.
     const { container } = render(<ConditionsSection conditions={DEPLOYMENT_CONDITIONS} />);
-    const pills = [...container.querySelectorAll(".status")];
-    const replicaFailure = pills.find((p) => p.textContent === "ReplicaFailure");
-    expect(replicaFailure?.getAttribute("data-bad")).toBe("true");
+    expect(tone(container, "ReplicaFailure")).toBe("var(--sev)");
   });
 
   it("says the state in words, never in colour alone", () => {
