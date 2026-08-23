@@ -53,6 +53,7 @@ import {
   NamespaceErrorAlert,
   NamespacePicker,
   NoClusterScreen,
+  StaleSelectionAlert,
   columnOptionsFor,
   emptyTableCopy,
   toggleColumnVisibility,
@@ -453,6 +454,12 @@ function WorkloadList({
       </FilterBar>
 
       <NamespaceErrorAlert error={namespaceError} />
+
+      <StaleSelectionAlert
+        selection={selection}
+        namespaces={namespaces}
+        onReset={() => setNamespaces(context.stableId, [])}
+      />
 
       {allLoading ? (
         <div className="scroll min-h-0 flex-1">

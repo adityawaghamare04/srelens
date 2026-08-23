@@ -2,6 +2,16 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import * as ws from "./workspace";
 
+function fakeStorage() {
+  const m = new Map<string, string>();
+  return {
+    getItem: (k: string) => m.get(k) ?? null,
+    setItem: (k: string, v: string) => void m.set(k, v),
+    removeItem: (k: string) => void m.delete(k),
+    m,
+  };
+}
+
 beforeEach(() => ws.resetView());
 
 describe("workspace view", () => {
@@ -108,5 +118,85 @@ describe("workspace view", () => {
     ws.setNamespaces("never-set", []);
     off();
     expect(seen).not.toHaveBeenCalled();
+  });
+});
+
+describe("persisted namespace selection", () => {
+  it("persists a set selection and reads it back after a reload", () => {
+    const s = fakeStorage();
+    ws.loadNamespaces(s);
+    ws.setNamespaces("prod", ["default", "billing"], s);
+    expect(JSON.parse(s.m.get(ws.NAMESPACES_KEY)!)).toEqual({ prod: ["default", "billing"] });
+    ws.loadNamespaces(fakeStorage()); // forget the in-memory state
+    ws.loadNamespaces(s); // and read it back off the same storage
+    expect(ws.getView().namespaces.prod).toEqual(["default", "billing"]);
+  });
+
+  it("keeps the selection when the cluster is looked up again — the key is the stableId, never a name the store never sees", () => {
+    const s = fakeStorage();
+    ws.setNamespaces("ctx-1", ["prod"], s);
+    ws.loadNamespaces(fakeStorage()); // forget
+    ws.loadNamespaces(s); // reload, as a fresh launch would
+    // A rename in the kubeconfig cannot touch this: `setNamespaces`/`useNamespaces`
+    // take a `stableId` and nothing else, so there is no name for a rename to change.
+    expect(ws.getView().namespaces["ctx-1"]).toEqual(["prod"]);
+  });
+
+  it("removes the key from storage when cleared, rather than persisting an empty array", () => {
+    const s = fakeStorage();
+    ws.setNamespaces("prod", ["default"], s);
+    ws.setNamespaces("prod", [], s);
+    const stored = JSON.parse(s.m.get(ws.NAMESPACES_KEY) ?? "{}");
+    expect("prod" in stored).toBe(false);
+  });
+
+  it("survives a storage that throws on both read and write, costing only the selection", () => {
+    const bad = {
+      getItem: () => {
+        throw new Error("no reads");
+      },
+      setItem: () => {
+        throw new Error("no writes");
+      },
+      removeItem: () => {},
+    };
+    ws.setLink("prod", "connected");
+    expect(() => ws.loadNamespaces(bad)).not.toThrow();
+    expect(() => ws.setNamespaces("prod", ["default"], bad)).not.toThrow();
+    // Only the selection is at the mercy of storage; links stay untouched.
+    expect(ws.getView().links.prod).toEqual({ state: "connected" });
+  });
+
+  it("loading namespaces leaves links and expanded exactly as they were", () => {
+    ws.setLink("prod", "connected");
+    ws.toggleExpanded("workloads");
+    const s = fakeStorage();
+    ws.loadNamespaces(s);
+    expect(ws.getView().links.prod).toEqual({ state: "connected" });
+    expect(ws.getView().expanded).toEqual(["workloads"]);
+  });
+
+  it("reads a document that is not valid JSON, or not a map, as nothing stored", () => {
+    for (const raw of ["{oops", "[]", "7", "null", '"hello"']) {
+      expect(ws.parseStoredNamespaces(raw)).toEqual({});
+    }
+    expect(ws.parseStoredNamespaces(null)).toEqual({});
+  });
+
+  it("drops one cluster's malformed entry without losing the others", () => {
+    const raw = JSON.stringify({ prod: ["default", "billing"], dev: "not-an-array", stage: [1, 2] });
+    expect(ws.parseStoredNamespaces(raw)).toEqual({ prod: ["default", "billing"] });
+  });
+
+  it("keeps the same array reference across reads until the selection actually changes, so useSyncExternalStore cannot loop", () => {
+    const s = fakeStorage();
+    ws.loadNamespaces(s);
+    const { result, rerender } = renderHook(() => ws.useNamespaces("prod"));
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+    act(() => ws.setNamespaces("prod", ["default"], s));
+    expect(result.current).not.toBe(first);
+    expect(result.current).toEqual(["default"]);
   });
 });

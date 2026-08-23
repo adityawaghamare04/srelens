@@ -42,6 +42,7 @@ import {
   NamespaceErrorAlert,
   NamespacePicker,
   NoClusterScreen,
+  StaleSelectionAlert,
   columnOptionsFor,
   emptyTableCopy,
   toggleColumnVisibility,
@@ -335,6 +336,14 @@ function KindList({
       </FilterBar>
 
       {!clusterScoped && <NamespaceErrorAlert error={namespaceError} />}
+
+      {!clusterScoped && (
+        <StaleSelectionAlert
+          selection={selection}
+          namespaces={namespaces}
+          onReset={() => setNamespaces(context.stableId, [])}
+        />
+      )}
 
       {showRows && list.error && (
         // Rows and an error together: the last good list is still on screen

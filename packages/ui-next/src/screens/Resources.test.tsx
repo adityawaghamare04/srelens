@@ -620,7 +620,7 @@ describe("Resources", () => {
     open("/k/pods");
 
     expect(await screen.findByText("Remembered namespaces are gone")).toBeTruthy();
-    expect(screen.getByText(/deleted-ns/)).toBeTruthy();
+    expect(screen.getByText("deleted-ns no longer exist on this cluster.")).toBeTruthy();
 
     // The alert's dismiss action is the recovery: back to "all namespaces",
     // written through the same store a manual clear would use.

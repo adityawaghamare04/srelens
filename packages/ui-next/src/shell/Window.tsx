@@ -5,6 +5,7 @@ import { setContexts, setKubeconfigFiles, useContexts } from "../lib/clusters";
 import { loadColumnPrefs } from "../lib/columnPrefs";
 import { loadMarks } from "../lib/marks";
 import { loadPeekWidth } from "../lib/peekWidth";
+import { loadNamespaces } from "../lib/workspace";
 import { defaultState, reconcile } from "../lib/tabs";
 import { flushSave, installFlushOnUnload, loadTabsState, scheduleSave } from "../lib/tabsPersist";
 import {
@@ -123,6 +124,10 @@ export function Window({
       // here: unread, the pane opens at its default however wide the reader
       // last dragged it.
       loadPeekWidth();
+      // And the namespace selection each cluster was narrowed to — unlike
+      // `links`/`expanded` on the same store, this one is persisted, and
+      // unread it costs the reader their picker choice on every launch.
+      loadNamespaces();
       // Classic threads these through every call for a reason: a context that
       // came from an additional kubeconfig file cannot have a client built for
       // it until the backend has been told the file's path, and the list races
