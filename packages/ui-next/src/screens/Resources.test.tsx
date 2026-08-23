@@ -1026,15 +1026,45 @@ describe("the detail pane's two hosts", () => {
     await waitFor(() => expect(paneName()).toBe("web-1"));
     const fromTab = lastDetailProps();
 
-    // `onClose` is the one prop allowed to differ: the peek is dismissible,
-    // the tab is closed by the strip.
-    expect(typeof fromPeek.onClose).toBe("function");
-    expect(fromTab.onClose).toBeUndefined();
-    delete fromPeek.onClose;
-    delete fromTab.onClose;
+    // `peek` is the ONE prop allowed to differ, and it stayed one when the
+    // header grew a second peek-only affordance: it carries both of the peek
+    // host's controls — dismiss, and promote to a tab — so a host cannot hand
+    // over one without the other, and the tab host hands over neither.
+    const peekControls = fromPeek.peek as { onClose?: unknown; onOpenTab?: unknown };
+    expect(typeof peekControls.onClose).toBe("function");
+    expect(typeof peekControls.onOpenTab).toBe("function");
+    expect(fromTab.peek).toBeUndefined();
+    delete fromPeek.peek;
+    delete fromTab.peek;
 
     expect(fromPeek).toEqual({ context: "prod-eu", kind: "Pod", namespace: "default", name: "web-1" });
     expect(fromTab).toEqual(fromPeek);
+  });
+
+  it("promotes the peeked row to its own tab, at the very route a double click opens", async () => {
+    open("/k/pods");
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    fireEvent.click(row("web-1"));
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Open tab" }));
+
+    await waitFor(() => expect(tabFor("/k/Pod/default/web-1")).toBeTruthy());
+    expect(store.currentWorkspace().activeId).toBe(tabFor("/k/Pod/default/web-1").id);
+    const routes = store.currentWorkspace().tabs.map((t) => t.route);
+
+    // The same route the row's own activate gesture mints. `openTab` dedupes
+    // by route, so two spellings of one resource would quietly become two
+    // tabs — which is the bug the route model was built to stop.
+    fireEvent.doubleClick(row("web-1"));
+    expect(store.currentWorkspace().tabs.map((t) => t.route)).toEqual(routes);
+  });
+
+  it("offers no Open tab in the full-tab host, which is already the tab", async () => {
+    openDetailTab("/k/Pod/default/web-1");
+
+    await waitFor(() => expect(paneName()).toBe("web-1"));
+    expect(screen.queryByRole("button", { name: "Open tab" })).toBeNull();
   });
 
   it("offers the same panes in both hosts for the same resource", async () => {

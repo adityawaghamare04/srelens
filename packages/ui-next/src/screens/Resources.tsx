@@ -274,6 +274,22 @@ function KindList({
 
   const columnOptions = columnOptionsFor(allColumns);
 
+  // Read out here rather than inside the function below: a function
+  // declaration closes over the widest type `descriptor` ever has, so the
+  // narrowing the guard above performed is not in scope within one.
+  const k8sKind = descriptor.k8sKind;
+
+  /**
+   * Promote a row to a tab of its own — the row's double click and the peek
+   * header's "Open tab" alike. One expression rather than two: `openTab`
+   * dedupes by route string, so two spellings of the same resource would
+   * quietly become two tabs, which is the very bug the route model was built
+   * to stop.
+   */
+  function openRowTab(rowNamespace: string | null, rowName: string) {
+    openTab(detailRoute(k8sKind, rowNamespace, rowName), { clusterName: name });
+  }
+
   // Loading and error each replace the table with their own state below; the
   // stale-rows alert and the bulk bar only ever mean something once there is
   // a table to warn about or select from.
@@ -374,9 +390,7 @@ function KindList({
               // `Table` owns both gestures, so a row is reachable from the
               // keyboard either way.
               onRowClick={(row) => peekAt(row.namespace ?? null, row.name)}
-              onRowActivate={(row) =>
-                openTab(detailRoute(descriptor.k8sKind, row.namespace ?? null, row.name), { clusterName: name })
-              }
+              onRowActivate={(row) => openRowTab(row.namespace ?? null, row.name)}
               rowMenu={rowMenuItems}
               rowMenuLabel={`${title} actions`}
               {...emptyTableCopy(rows.length, lower, name, clusterScoped ? "" : " in the namespaces you are looking at")}
@@ -419,7 +433,14 @@ function KindList({
               kind={descriptor.k8sKind}
               namespace={peek.namespace}
               name={peek.name}
-              onClose={() => setPeek(null)}
+              // The one prop the tab host does not pass, carrying both of the
+              // controls the design gives the peek's header. Promoting does
+              // not dismiss: the reader asked for a tab, not for the list to
+              // stop showing them what they were looking at.
+              peek={{
+                onClose: () => setPeek(null),
+                onOpenTab: () => openRowTab(peek.namespace, peek.name),
+              }}
             />
           </div>
         )}
@@ -436,7 +457,10 @@ function KindList({
  *
  * One tab, one resource, filled edge to edge by the very same
  * `ResourceDetail` the list's peek mounts, with the very same props bar
- * `onClose` (R-5). Everything it shows comes out of the route string:
+ * `peek` (R-5) — the object holding the peek's own close and its "Open tab",
+ * neither of which means anything to a pane that IS the tab.
+ *
+ * Everything it shows comes out of the route string:
  * `/k/<kind>/<namespace>/<name>` already carries the Kubernetes kind — not
  * the list screen's slug, and not for built-in kinds only, since
  * `customDescriptorFor` mints a CRD's route from `crd.kind` too — so there is

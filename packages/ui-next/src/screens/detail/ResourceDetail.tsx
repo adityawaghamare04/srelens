@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   K8S_KIND,
+  ageFromTimestamp,
   getManifest,
   listCrds,
   listEvents,
   redactSecretManifest,
+  resourceStatusLine,
   type DynamicGvk,
   type EventSummary,
   type K8sObject,
@@ -12,14 +14,17 @@ import {
 import {
   Alert,
   Badge,
+  Button,
   CodeEditor,
   ErrorState,
   Inspector,
   LoadingState,
   Table,
   type Column,
+  type InspectorProps,
   type TabItem,
 } from "@srelens/ui-kit";
+import { Icons } from "../../lib/icons";
 import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
 import { ConfigDetailsBody } from "./ConfigBody";
@@ -32,6 +37,28 @@ import { SecretDetailsBody } from "./SecretBody";
 import { ServiceDetailsBody } from "./ServiceBody";
 import { WorkloadDetailsBody } from "./WorkloadBody";
 
+/**
+ * The peek host's own controls, both of them, in one object.
+ *
+ * The design gives the header two affordances the full tab has no use for:
+ * dismiss the peek, and promote what is in it to a tab. They are not two
+ * facts — they are one fact ("this pane is the peek") wearing two buttons —
+ * so they arrive together rather than as two optional callbacks. A host
+ * cannot pass one without the other, and `Resources.test`'s prop-by-prop
+ * comparison of the two hosts still has exactly one prop to except.
+ */
+export interface ResourceDetailPeek {
+  /** Dismiss the peek. Also what its Escape key reaches. */
+  onClose: () => void;
+  /**
+   * Promote this subject to a tab of its own. The host's, not this pane's:
+   * the list already mints that route for a row's double click, and one
+   * expression producing both is what stops the button and the gesture
+   * drifting onto two tabs for one resource.
+   */
+  onOpenTab: () => void;
+}
+
 export interface ResourceDetailProps {
   context: string;
   /** The Kubernetes kind ("Pod", "Deployment", ...) — the same value
@@ -40,12 +67,14 @@ export interface ResourceDetailProps {
   namespace: string | null;
   name: string;
   /**
-   * Present only in the peek host — the tab host has its own way to close a
-   * tab and leaves this off. Nothing else here may vary on its presence: the
-   * peek and the tab are the same pane in two hosts (R-5), and this is the
-   * one prop that tells them apart.
+   * Present only in the peek host — the tab host closes through the strip and
+   * is already the tab, so it leaves this off. Still the ONE prop that tells
+   * the two hosts apart: the peek and the tab are the same pane in two hosts
+   * (R-5), and everything that varies between them is inside this object.
+   * That is why the design's "Open tab" button did not arrive as a second
+   * top-level callback — see {@link ResourceDetailPeek}.
    */
-  onClose?: () => void;
+  peek?: ResourceDetailPeek;
 }
 
 /**
@@ -245,6 +274,64 @@ function useLoad<T>(
   return state.targetKey === targetKey ? state : { status: "loading" };
 }
 
+/**
+ * The design's third header line, for a kind that has one.
+ *
+ * `resourceStatusLine` decides the word, its tone and the unhealthy dot
+ * together, off the fetched object; the age is not in its answer because it
+ * is not a health fact, so it comes off the metadata here. `null` back from it
+ * is an ANSWER, not a gap — a ConfigMap has no health and a custom resource's
+ * `status` is its own operator's business — and it takes the whole line with
+ * it, age included: a lone age with nothing to qualify it reads as the rest
+ * having gone missing.
+ *
+ * Two things about the facts that are silent when wrong, both of them
+ * `InspectorFact`'s doing:
+ *
+ * - `label` is never drawn — it is an `sr-only` `dt`. So the VALUE carries its
+ *   own noun ("9/12 ready", not "9/12"), which is the user's ruling over the
+ *   kit's objection, and the label is the term a screen reader hears. It has
+ *   to say something the value does not. "Progress" rather than "Ready"
+ *   because the phrase is not always about readiness: a Job's reads
+ *   "3/3 complete".
+ * - a fact defaults to normal ink. Only the age is quiet in the mock, so only
+ *   the age asks for a tone.
+ */
+function statusHeader(
+  kind: string,
+  object: K8sObject,
+): Pick<InspectorProps, "status" | "statusKind" | "facts" | "flagged"> {
+  const line = resourceStatusLine(kind, object);
+  if (!line) return {};
+  const facts: InspectorProps["facts"] = [];
+  if (line.readyText) facts.push({ label: "Progress", value: line.readyText });
+  const created = object.metadata?.creationTimestamp;
+  // Only when there is one: `ageFromTimestamp` answers "—" for an absent
+  // stamp, and an em dash in the header is noise, not information.
+  if (created) facts.push({ label: "Age", value: ageFromTimestamp(created), tone: "muted" });
+  // `HealthKind` and `StatusKind` are the same five words by construction —
+  // core says so in `k8sHealth`'s own comment — so the verdict passes straight
+  // through rather than being re-mapped into a second opinion.
+  return { status: line.status, statusKind: line.health, facts, flagged: line.flagged };
+}
+
+/**
+ * The design's other header affordance: promote this subject to a tab of its
+ * own. Outlined and labelled, beside the close rather than instead of it —
+ * the mock draws two separate controls, and a peek that could only be left by
+ * closing it is a peek the reader has to re-find.
+ */
+function OpenTabButton({ onClick }: { onClick: () => void }) {
+  const Glyph = Icons.openTab;
+  return (
+    <Button type="button" variant="outline" size="xs" onClick={onClick}>
+      {/* The word is the accessible name; the glyph only decorates it. */}
+      <Glyph size={12} aria-hidden="true" />
+      Open tab
+    </Button>
+  );
+}
+
 const PANE_DETAILS = "details";
 const PANE_CONTAINERS = "containers";
 const PANE_METRICS = "metrics";
@@ -257,17 +344,19 @@ const PANE_EVENTS = "events";
  * Mounted in two hosts per the spec's R-5 ruling — a peek pane inside the
  * list, and a full tab of its own — rendering the very same component with
  * the very same props, so a pane opened one way and reached the other way is
- * never a different pane. The peek passes `onClose`; the tab does not; that
- * is the ONLY thing either host varies. Everything on screen comes from
- * `useObject`, the single read both hosts share, which is what makes it
- * impossible for the peek and the tab to disagree about what they show.
+ * never a different pane. The peek passes `peek`; the tab does not; that is
+ * the ONLY thing either host varies, and the design's two peek-only header
+ * controls both live inside that one object rather than beside it (see
+ * {@link ResourceDetailPeek}). Everything on screen comes from `useObject`,
+ * the single read both hosts share, which is what makes it impossible for the
+ * peek and the tab to disagree about what they show.
  *
  * Which extra panes a kind offers (Containers, Metrics) comes off its
  * `KindDescriptor` — never a branch on `kind` in this component. The
  * Details/Containers/Metrics pane bodies are per-kind content that Tasks
  * 10-13 port in; see the `*_BODY` tables above for the seam they fill.
  */
-export function ResourceDetail({ context, kind, namespace, name, onClose }: ResourceDetailProps) {
+export function ResourceDetail({ context, kind, namespace, name, peek }: ResourceDetailProps) {
   const { object, status, error } = useObject(context, kind, namespace, name);
   const [activeTab, setActiveTab] = useState<string>(PANE_DETAILS);
 
@@ -356,10 +445,14 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
   );
 
   const subtitle = namespace ? `${kind} · ${namespace}` : kind;
+  // Offered on every state, not only the settled one: a resource that is slow
+  // to load, or that failed to, is exactly the one a reader wants in a tab of
+  // its own rather than in a peek that the next row click will replace.
+  const actions = peek && <OpenTabButton onClick={peek.onOpenTab} />;
 
   if (status === "loading") {
     return (
-      <Inspector name={name} subtitle={subtitle} onClose={onClose}>
+      <Inspector name={name} subtitle={subtitle} actions={actions} onClose={peek?.onClose}>
         <LoadingState label={`Loading ${describeTarget(kind, namespace, name)}`} />
       </Inspector>
     );
@@ -369,18 +462,23 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
     // Names the object that failed, not just "failed" — several panes can be
     // open at once, and a bare failure doesn't say which one broke.
     return (
-      <Inspector name={name} subtitle={subtitle} onClose={onClose}>
+      <Inspector name={name} subtitle={subtitle} actions={actions} onClose={peek?.onClose}>
         <ErrorState title={`Could not load ${describeTarget(kind, namespace, name)}`} detail={error} />
       </Inspector>
     );
   }
 
+  // `Details Containers YAML Events Metrics`, the design's order. Metrics
+  // trails the two panes every kind has because it is the one nothing offers
+  // yet — `METRICS_BODY` is empty and no descriptor sets `panes.metrics` — and
+  // getting the order right now is cheaper than remembering it later, when the
+  // first kind to opt in would otherwise land it in the wrong place.
   const tabs: TabItem[] = [
     { id: PANE_DETAILS, label: "Details" },
     ...(hasContainers ? [{ id: PANE_CONTAINERS, label: "Containers" }] : []),
-    ...(hasMetrics ? [{ id: PANE_METRICS, label: "Metrics" }] : []),
     { id: PANE_YAML, label: "YAML" },
     { id: PANE_EVENTS, label: "Events" },
+    ...(hasMetrics ? [{ id: PANE_METRICS, label: "Metrics" }] : []),
   ];
   // Falls back to Details rather than pointing at a tab that isn't offered —
   // relevant if a kind's panes could ever shrink under a mounted shell.
@@ -394,11 +492,13 @@ export function ResourceDetail({ context, kind, namespace, name, onClose }: Reso
     <Inspector
       name={name}
       subtitle={subtitle}
+      {...statusHeader(kind, object)}
+      actions={actions}
       tabs={tabs}
       activeTab={active}
       onTabChange={selectTab}
       tabsLabel="Resource views"
-      onClose={onClose}
+      onClose={peek?.onClose}
     >
       {active === PANE_DETAILS && (
         <GenericBody kind={kind} object={object} context={context}>

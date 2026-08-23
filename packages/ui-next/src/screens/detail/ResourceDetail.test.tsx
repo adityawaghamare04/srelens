@@ -3,6 +3,7 @@ import { useLayoutEffect } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { CrdRef, EventSummary, K8sObject } from "@srelens/core";
+import { toneColor } from "@srelens/ui-kit";
 import type { KindDescriptor, ListRow } from "../../lib/kinds/types";
 
 // `useObject` reads `getObject`; the YAML and Events panes read `getManifest`
@@ -73,6 +74,41 @@ const SECRET: K8sObject = {
   kind: "Secret",
   apiVersion: "v1",
   metadata: { name: "s-1", namespace: "default" },
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** An ISO timestamp a whole number of days old, so `ageFromTimestamp` reads it
+ *  back as exactly that many days. Relative rather than a fixed date: the
+ *  clock cannot be frozen here (`userEvent` needs real timers) and a literal
+ *  stamp would rot into a bigger number every day. */
+function daysAgo(days: number): string {
+  return new Date(Date.now() - days * DAY_MS).toISOString();
+}
+
+/** Frame A of the mock: a Deployment short of its replicas. */
+const DEGRADED_DEPLOYMENT: K8sObject = {
+  kind: "Deployment",
+  apiVersion: "apps/v1",
+  metadata: { name: "checkout-api", namespace: "checkout", creationTimestamp: daysAgo(84) },
+  spec: { replicas: 12 },
+  status: { readyReplicas: 9 },
+};
+
+/** Frame B of the mock: a Pod doing exactly what it was asked to. */
+const RUNNING_POD: K8sObject = {
+  kind: "Pod",
+  apiVersion: "v1",
+  metadata: { name: "cart-session-store-0", namespace: "checkout", creationTimestamp: daysAgo(211) },
+  status: { phase: "Running", containerStatuses: [{ name: "redis", ready: true, state: { running: {} } }] },
+};
+
+/** A kind `resourceStatusLine` has no verdict for, aged so an age fact would
+ *  have something to draw if one were drawn at all. */
+const AGED_CONFIGMAP: K8sObject = {
+  kind: "ConfigMap",
+  apiVersion: "v1",
+  metadata: { name: "cm-1", namespace: "default", creationTimestamp: daysAgo(30) },
 };
 
 function baseDescriptor(overrides: Partial<KindDescriptor<ListRow>> = {}): KindDescriptor<ListRow> {
@@ -442,11 +478,11 @@ describe("ResourceDetail", () => {
     expect(mismatched).toEqual([]);
   });
 
-  it("behaves identically with and without onClose, apart from the close affordance", async () => {
+  it("behaves identically in both hosts, apart from the peek's own controls", async () => {
     getObject.mockResolvedValue({ object: POD });
     const props = { context: "ctx", kind: "Pod", namespace: "default", name: "web-1" } as const;
 
-    const withClose = render(<ResourceDetail {...props} onClose={vi.fn()} />);
+    const withClose = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
     await waitFor(() => expect(withClose.getByRole("tab", { name: "YAML" })).toBeDefined());
     expect(withClose.getByRole("button", { name: "Close inspector" })).toBeDefined();
     const tabsWithClose = withClose.getAllByRole("tab").map((t) => t.textContent);
@@ -576,5 +612,130 @@ describe("ResourceDetail", () => {
       version: "v2",
       plural: "widgets",
     });
+  });
+
+  /**
+   * The mock's third header line — a toned dot, the state, the ready ratio and
+   * the age — and the two affordances at its top right.
+   */
+  describe("the header the design draws", () => {
+    it("reads the state, the ready ratio and the age across one line", async () => {
+      getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
+      const { getByText, container } = render(
+        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+      );
+      await waitFor(() => expect(getByText("Degraded")).toBeDefined());
+      // Bare figures, each carrying its own noun — the user's call, taken over
+      // the kit's own objection (see `Inspector`'s doc comment).
+      expect(getByText("9/12 ready")).toBeDefined();
+      expect(getByText("84d")).toBeDefined();
+      expect(container.querySelector("header")?.textContent).not.toContain("Ready 9/12");
+    });
+
+    it("names every bare figure for a reader who cannot see it", async () => {
+      getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
+      const { container, getByText } = render(
+        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+      );
+      await waitFor(() => expect(getByText("Degraded")).toBeDefined());
+      // `InspectorFact.label` is never drawn — it is an `sr-only` `dt`. A fact
+      // handed a label that merely repeats what the value already says on
+      // screen leaves a screen reader with nothing, which is the whole reason
+      // the user's bare-figure ruling was survivable.
+      const terms = Array.from(container.querySelectorAll("header dt"));
+      expect(terms.map((t) => t.textContent)).toEqual(["Progress", "Age"]);
+      terms.forEach((t) => expect(t.className).toContain("sr-only"));
+    });
+
+    it("draws the age quietly and the ready ratio in normal ink", async () => {
+      getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
+      const { getByText } = render(
+        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+      );
+      await waitFor(() => expect(getByText("Degraded")).toBeDefined());
+      expect(getByText("84d").style.color).toBe(toneColor("muted"));
+      // A fact defaults to normal ink; only the age is quiet in the mock.
+      expect(getByText("9/12 ready").style.color).toBe("");
+    });
+
+    it("colours the state and marks the name only when the subject is unhealthy", async () => {
+      getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
+      const bad = render(
+        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+      );
+      await waitFor(() => expect(bad.getByText("Degraded")).toBeDefined());
+      expect(bad.container.querySelector("header .status")?.getAttribute("data-bad")).toBe("true");
+      // The mock's dot before the NAME. Colour alone says nothing to a
+      // colour-blind reader and nothing at all to a screen reader, so the kit
+      // pairs it with a word only the latter hears.
+      expect(bad.getByText("Needs attention")).toBeDefined();
+      bad.unmount();
+
+      getObject.mockResolvedValue({ object: RUNNING_POD });
+      const good = render(
+        <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+      );
+      // Read off the HEADER's own pill: the Details body below it states the
+      // pod's phase as well, so a bare text query finds two "Running"s.
+      const headerStatus = () => good.container.querySelector("header .status");
+      await waitFor(() => expect(headerStatus()?.textContent).toBe("Running"));
+      expect(headerStatus()?.getAttribute("data-bad")).toBeNull();
+      expect(good.queryByText("Needs attention")).toBeNull();
+      expect(good.getByText("1/1 ready")).toBeDefined();
+      expect(good.getByText("211d")).toBeDefined();
+    });
+
+    it("draws no status line at all for a kind that has no health of its own", async () => {
+      getObject.mockResolvedValue({ object: AGED_CONFIGMAP });
+      const { container, getByRole } = render(
+        <ResourceDetail context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />,
+      );
+      await waitFor(() => expect(getByRole("heading", { name: "cm-1" })).toBeDefined());
+      // `resourceStatusLine` returning null is an answer, not a gap: a
+      // ConfigMap has no health, and half a line — an age with nothing to
+      // qualify it — would read as the rest having gone missing.
+      expect(container.querySelector("header .status")).toBeNull();
+      expect(container.querySelector("header dl")).toBeNull();
+    });
+  });
+
+  it("orders the panes the way the design does", async () => {
+    getObject.mockResolvedValue({ object: RUNNING_POD });
+    descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true, metrics: true } }));
+    const { getAllByRole, getByRole } = render(
+      <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+    );
+    await waitFor(() => expect(getByRole("tab", { name: "Metrics" })).toBeDefined());
+    // `Details Containers YAML Events Metrics`. Metrics is deferred and no
+    // kind's descriptor asks for it yet, so this order only bites the day one
+    // does — which is exactly when nobody would think to check it.
+    expect(getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "Details",
+      "Containers",
+      "YAML",
+      "Events",
+      "Metrics",
+    ]);
+  });
+
+  it("offers Open tab in the peek host only, and leaves the promotion to the host", async () => {
+    getObject.mockResolvedValue({ object: POD });
+    const onOpenTab = vi.fn();
+    const onClose = vi.fn();
+    const props = { context: "ctx", kind: "Pod", namespace: "default", name: "web-1" } as const;
+
+    const asPeek = render(<ResourceDetail {...props} peek={{ onClose, onOpenTab }} />);
+    await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
+    await userEvent.click(asPeek.getByRole("button", { name: "Open tab" }));
+    expect(onOpenTab).toHaveBeenCalledTimes(1);
+    // Promoting is not dismissing: what the peek does with itself afterwards
+    // is the host's business, not the pane's.
+    expect(onClose).not.toHaveBeenCalled();
+    asPeek.unmount();
+
+    // The tab host IS the tab. An Open tab there would open itself.
+    const asTab = render(<ResourceDetail {...props} />);
+    await waitFor(() => expect(asTab.getByRole("tab", { name: "Details" })).toBeDefined());
+    expect(asTab.queryByRole("button", { name: "Open tab" })).toBeNull();
   });
 });

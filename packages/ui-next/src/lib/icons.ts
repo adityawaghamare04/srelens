@@ -10,6 +10,7 @@ import {
   Copy,
   Cpu,
   Database,
+  ExternalLink,
   FileCog,
   FilePlus,
   FolderOpen,
@@ -167,6 +168,10 @@ export const Icons = {
   helmreleases: ShipWheel,
   toolbox: Wrench,
   newresource: FilePlus,
+
+  /** Promote what is on screen into a tab of its own — the detail peek's
+   *  "Open tab". */
+  openTab: ExternalLink,
 
   // The application log screen's own actions.
   refresh: RefreshCw,
