@@ -188,12 +188,59 @@ export function useLogStream(
     setView(bufferRef.current);
     setStatus("connecting");
     setError(undefined);
+
+    if (targets.length === 0) {
+      // F1: a quiet not-yet, not a failure. `startLogStream` throws on an
+      // empty target list — a plain string `describeError` cannot classify —
+      // but there is nothing wrong here: the caller (typically a screen mid
+      // subject-resolution) just doesn't have a target list yet. Never call
+      // it with one; leave `status` at "connecting" and stop, without ever
+      // touching `firstRunRef`, so the eventual real first connect — once
+      // targets do arrive — still counts as the initial connect rather than
+      // a "restart" announcing scrollback lost that was never there to lose.
+      return;
+    }
+
+    // `firstRunRef` flips only on an actual connect attempt, never on the
+    // empty-targets skip above.
     if (!firstRunRef.current) {
+      // F6 (inert today): this repo runs no StrictMode, so this effect body
+      // runs once per real mount or dependency change. Under StrictMode,
+      // React double-invokes it (mount, synthetic cleanup, mount again), and
+      // that second synthetic run would find `firstRunRef.current` already
+      // false and count a phantom restart here — a `restartCount` lie. Not
+      // fixing it now: there is no StrictMode anywhere in this codebase to
+      // make it reachable, and restructuring working code around a
+      // hypothetical would just be a different way to get it wrong.
       setRestartCount((c) => c + 1);
     }
     firstRunRef.current = false;
 
     const streamTargets: LogTarget[] = targets.map((t) => ({ ...t }));
+
+    // F3: `status` disagreeing across targets. `onStatus` fires once per
+    // underlying pod/container connection transition — core's resilient log
+    // loop (crates/kube/src/logs.rs) emits one "reconnecting" per failed
+    // connect attempt and one "live" per success — but the payload never says
+    // which target it was for. Last-writer-wins therefore lets any single
+    // target's blip overwrite the whole stream's indicator, flapping
+    // "Following" on a large workload even though most of it streams fine.
+    //
+    // What a reader is actually asking when they look at that indicator is
+    // "is my tail still moving" — which it is while most targets are still
+    // delivering. Since individual events can't be attributed to a target,
+    // the only fact available is how many targets there are. A genuine
+    // stream-wide outage announces itself fast: every target fails its next
+    // attempt within moments of each other. A single wobbly target can only
+    // ever contribute one "reconnecting" per backoff cycle before either
+    // recovering (a "live" resets the count) or failing again. Requiring as
+    // many consecutive "reconnecting" signals — with no "live" in between —
+    // as there are targets before downgrading treats the aggregate as down
+    // only once that many drop signals have arrived, which is plausible for
+    // the whole stream and not for one pod out of many. A single-target
+    // stream keeps exactly today's behaviour: threshold 1, so its first
+    // "reconnecting" still flips the status immediately.
+    let reconnectStreak = 0;
 
     startLogStream(
       context,
@@ -201,7 +248,14 @@ export function useLogStream(
       streamTargets,
       onLine,
       (s) => {
-        if (!cancelled) setStatus(s);
+        if (cancelled) return;
+        if (s === "live") {
+          reconnectStreak = 0;
+          setStatus("live");
+        } else {
+          reconnectStreak += 1;
+          if (reconnectStreak >= streamTargets.length) setStatus("reconnecting");
+        }
       },
       { timestamps, sinceSeconds, tailLines },
     ).then(

@@ -183,6 +183,74 @@ describe("useLogStream", () => {
     await waitFor(() => expect(result.current.status).toBe("reconnecting"));
   });
 
+  it("treats an empty target list as a quiet not-yet state, never calling startLogStream or erroring", async () => {
+    // Mirrors the real `startLogStream`'s guard (`packages/core/src/lib/logsStream.ts`):
+    // it throws a plain string on an empty target list that `describeError`
+    // can't classify. If the hook ever called it with `[]`, this mock would
+    // reproduce that exact failure.
+    startLogStream.mockImplementation(() =>
+      Promise.reject(new Error("cannot start live logs without a pod target")),
+    );
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", []));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(startLogStream).not.toHaveBeenCalled();
+    expect(result.current.status).not.toBe("error");
+    expect(result.current.error).toBeUndefined();
+  });
+
+  it("connects for the first time, not a restart, once targets arrive after starting empty", async () => {
+    const s = fakeStream();
+    const { result, rerender } = renderHook(
+      ({ targets }: { targets: LogTarget[] }) => useLogStream("kind-dev", "default", targets),
+      { initialProps: { targets: [] as LogTarget[] } },
+    );
+    expect(startLogStream).not.toHaveBeenCalled();
+
+    rerender({ targets: [target] });
+    await s.connect();
+
+    expect(startLogStream).toHaveBeenCalledTimes(1);
+    expect(result.current.restartCount).toBe(0);
+  });
+
+  it("does not flap the aggregate status when only one of several targets is reconnecting", async () => {
+    const s = fakeStream();
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", [target, otherTarget]));
+    await s.connect();
+
+    act(() => s.status("live"));
+    await waitFor(() => expect(result.current.status).toBe("live"));
+
+    // One target out of two blips — not enough on its own to call the whole
+    // stream down.
+    act(() => s.status("reconnecting"));
+    expect(result.current.status).toBe("live");
+
+    // It recovers before a second target would also need to report trouble.
+    act(() => s.status("live"));
+    expect(result.current.status).toBe("live");
+  });
+
+  it("flags the stream reconnecting once as many drop signals arrive as it has targets", async () => {
+    const s = fakeStream();
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", [target, otherTarget]));
+    await s.connect();
+
+    act(() => s.status("live"));
+    await waitFor(() => expect(result.current.status).toBe("live"));
+
+    act(() => s.status("reconnecting"));
+    expect(result.current.status).toBe("live");
+    act(() => s.status("reconnecting"));
+    await waitFor(() => expect(result.current.status).toBe("reconnecting"));
+  });
+
   it("surfaces a start failure through describeError", async () => {
     const s = fakeStream();
     const { result } = renderHook(() => useLogStream("kind-dev", "default", [target]));

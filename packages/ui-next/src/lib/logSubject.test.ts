@@ -142,6 +142,37 @@ describe("resolveLogSubject", () => {
     expect(result.detail).toContain("Deployment/web");
   });
 
+  it("says a workload whose pods exist but have no app container is empty, not resolved to nothing", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        // The pod exists and answers, but has no app container to follow —
+        // e.g. every container it does have is an init container.
+        "Pod/web-abc": podObject([]),
+      },
+      pods: { pods: [{ name: "web-abc" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    expect(result.status).toBe("empty");
+    if (result.status !== "empty") throw new Error("expected empty");
+    expect(result.detail).toContain("Deployment/web");
+  });
+
+  it("labels lines with the pod alone when every target shares one container name", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        "Pod/web-abc": podObject(["app"]),
+        "Pod/web-def": podObject(["app"]),
+      },
+      pods: { pods: [{ name: "web-abc" }, { name: "web-def" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    expect(result.status).toBe("resolved");
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.targets.map((t) => t.label).sort()).toEqual(["web-abc", "web-def"]);
+  });
+
   it("reports a pod that has gone", async () => {
     const invoke = fakeInvoke({ objects: {} });
     const result = await resolveLogSubject(podSubject, invoke);

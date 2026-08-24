@@ -56,10 +56,14 @@ export type LogSubject = PodSubject | WorkloadSubject;
  * What `resolveLogSubject` produces.
  *
  * `"resolved"` is the only state that carries targets, and it always carries
- * every one of them — see the module doc for why a partial list is never
- * returned. `"empty"` is a workload whose selector matched no pods: a fact
- * worth saying on its own, not a stream opened against nothing that can ever
- * produce a line. `"error"` covers every failure along the way — the
+ * at least one — see the module doc for why a partial list is never
+ * returned, and note the guarantee is about *targets*, not pods: a workload
+ * whose pods exist but whose containers all resolve to nothing (every pod's
+ * `spec.containers` empty, however that could happen) is exactly as
+ * unfollowable as one with no pods, so `"empty"` gates on the target count,
+ * not the pod count — a `"resolved"` with zero targets would be a lie, and
+ * it is the caller's target list that matters, not how many pods contributed
+ * to it. `"error"` covers every failure along the way — the
  * workload's own `getObject`, `podsForSelector`, or a pod's `getObject` (which
  * is also how a pod subject whose pod has gone is reported) — already run
  * through `describeError` so a screen can render it without inventing a
@@ -104,11 +108,15 @@ async function podsInScope(
  * watching, and an ephemeral debug container is a separate, deliberate
  * action a reader takes on purpose, not something a log stream tails unasked.
  *
- * Lines are labelled — `pod` alone, or `pod/container` — only when more than
- * one target is in scope; a single pod, single container stream carries no
- * label. That fact is decided here, once, and lives on each target's own
- * `label` rather than as a flag a caller has to recompute: a screen (or the
- * stream itself) reads `target.label` and is done.
+ * Lines are labelled only when more than one target is in scope; a single
+ * pod, single container stream carries no label. When they are labelled, the
+ * label is `pod` alone if every target in scope shares the same container
+ * name — naming the container would repeat the one word on every row, which
+ * is noise, not information, in a 200px gutter — and `pod/container`
+ * otherwise, when containers actually need disambiguating. That fact is
+ * decided here, once, and lives on each target's own `label` rather than as
+ * a flag a caller has to recompute: a screen (or the stream itself) reads
+ * `target.label` and is done.
  */
 export async function resolveLogSubject(
   subject: LogSubject,
@@ -143,11 +151,25 @@ export async function resolveLogSubject(
       .map((c) => ({ pod, container: c.name })),
   );
 
+  // Every in-scope pod answered, but none of them had an app container to
+  // follow — as unfollowable as no pods at all, and "resolved" with an empty
+  // target list would say otherwise. Gate on what a caller can actually use.
+  if (raw.length === 0) {
+    return {
+      status: "empty",
+      detail:
+        subject.type === "workload"
+          ? `${subject.kind}/${subject.name} has no containers to follow.`
+          : `${subject.name} has no containers to follow.`,
+    };
+  }
+
   const label = raw.length > 1;
+  const singleContainerName = new Set(raw.map((r) => r.container)).size <= 1;
   const targets: LogTarget[] = raw.map(({ pod, container }) => ({
     pod,
     container,
-    label: label ? `${pod}/${container}` : "",
+    label: !label ? "" : singleContainerName ? pod : `${pod}/${container}`,
   }));
 
   return { status: "resolved", targets };
