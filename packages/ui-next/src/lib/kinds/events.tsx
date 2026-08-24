@@ -33,6 +33,28 @@ const NONE = "—";
 const OBJECT_MAX_WIDTH = 220;
 
 /**
+ * What the Message cell draws at most, past which it truncates.
+ *
+ * §8 gives Message `w-full` and no number, because in a mock the table is one
+ * screenshot wide. Here it needs one. `Table` measures every column's natural
+ * width on first layout and pins it into a fixed layout, and `.tbl td` is
+ * `white-space: nowrap` — so a cell with no cap measures as the ENTIRE
+ * message, `truncate` never fires (nothing ever makes the box narrower than
+ * its text), and the columns behind it are pushed out of the container. On the
+ * demo cluster, whose longest message is 130 characters, that put both `Count`
+ * and `Age` off-screen at 1600 px: the repeat count a whole backend task added
+ * was invisible.
+ *
+ * So this is the same inline cap the Object cell above carries, at the widest
+ * value in the table — Message is still the column that takes the slack, and
+ * the full text stays one hover away on `title`. The number itself is the one
+ * thing here that wants an eye rather than a test: it is set so the eight
+ * columns land inside the list area a 1600 px window leaves beside the 250 px
+ * rail, which is an estimate of a layout jsdom cannot measure.
+ */
+const MESSAGE_MAX_WIDTH = 320;
+
+/**
  * Which namespace an event came from. Empty for a cluster-scoped one (an event
  * about a Node), which is a real answer and not a missing one.
  *
@@ -147,7 +169,11 @@ export const eventColumns: Column<EventRow>[] = [
     // toolbar's whole-row search, which is how a reader finds one.
     sortable: false,
     render: (e) => (
-      <span className="path block truncate text-faint" title={e.message}>
+      <span
+        className="path block truncate text-faint"
+        style={{ maxWidth: MESSAGE_MAX_WIDTH }}
+        title={e.message}
+      >
         {e.message}
       </span>
     ),

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   eventVerdict,
+  plural,
   rowInSelection,
   watchNamespaceForSelection,
   type ClusterContext,
@@ -77,6 +78,14 @@ const SEGMENTS: TabItem[] = [
  * fields on the field itself, and a search that also matched the namespace
  * column would quietly disagree with the words under the reader's cursor while
  * the picker beside it is what narrows by namespace.
+ *
+ * **One divergence from §8, deliberately:** it matches `message` and `reason`
+ * case-insensitively but `object` case-SENSITIVELY. All three are matched the
+ * same way here, because that is what `filterTableData` does and so what every
+ * other list in the app does. A field that changed its matching rule between
+ * the three fields its own placeholder names is a rule no reader could learn,
+ * and the case-sensitive half is the one that fails closed: a reader typing
+ * `pod/web` would be told there is no such event.
  */
 const SEARCH_KEYS = new Set(["reason", "message", "object"]);
 
@@ -245,8 +254,13 @@ function EventList({
       fill
       actions={
         <>
-          {/* §8's two header actions, in its order. */}
-          <Eyebrow>{`${filtered.length} ${lower} \u00b7 ${warnings} warnings`}</Eyebrow>
+          {/* §8's two header actions, in its order. `<n> events · <m>
+              warnings` is that document's notation for the shape of the line,
+              not its copy — nothing in it asks for the letter `s` when n is 1,
+              and a cluster with one warning is the ordinary case (the demo one
+              splits 1 / 63). `plural` is the house answer, already worn in
+              four places. */}
+          <Eyebrow>{`${plural(filtered.length, "event")} \u00b7 ${plural(warnings, "warning")}`}</Eyebrow>
           {/* A `Button` rather than the row's `AskChip`, for the reason
               `DetailActions` gives: the chip is `opacity: 0` until its row is
               hovered, which is right for one of forty rows and invisible on a
@@ -365,6 +379,13 @@ function EventList({
               // event is a report, not something to select — and `onRowActivate`
               // is what makes the same thing reachable with Enter. `openTab`
               // dedupes by route, so a double click is not two tabs.
+              //
+              // A second divergence from §8, which draws these rows
+              // `cursor-default`: `Table` gives an interactive row
+              // `cursor-pointer`, and it keeps it. A row that navigates on a
+              // click while showing the cursor of one that does nothing is the
+              // dead-affordance defect this spec objects to elsewhere, pointed
+              // the other way round.
               onRowClick={openInvolved}
               onRowActivate={openInvolved}
               // The count is what the namespace selection left, before the

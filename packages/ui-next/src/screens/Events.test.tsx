@@ -260,7 +260,11 @@ describe("Events", () => {
 
     await user.type(search(), "probe");
     await waitFor(() => expect(reasons()).toEqual(["Unhealthy"]));
-    expect(eyebrowText()).toContain("1 events · 1 warnings");
+    // One of each, and it says so. `<n> events · <m> warnings` is placeholder
+    // notation in a design document, not copy — and this is not a hypothetical
+    // corner: the demo cluster splits 1 Warning / 63 Normal, so clicking
+    // `Warnings` (the first thing anyone does here) lands on exactly this.
+    expect(eyebrowText()).toContain("1 event · 1 warning");
   });
 
   it("segments by type, in the design's order, and back again", async () => {
@@ -332,7 +336,7 @@ describe("Events", () => {
     // A namespaced event is narrowed; a cluster-scoped one — which belongs to
     // no namespace at all — falls outside any selection that names one.
     await waitFor(() => expect(reasons()).toEqual(["Scheduled", "Unhealthy"]));
-    expect(eyebrowText()).toContain("2 events · 1 warnings");
+    expect(eyebrowText()).toContain("2 events · 1 warning");
   });
 
   it("asks the design's question from the header chip", async () => {

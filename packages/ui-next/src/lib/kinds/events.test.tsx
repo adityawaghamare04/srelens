@@ -134,6 +134,26 @@ describe("the Message cell", () => {
     expect(span?.className).toContain("truncate");
   });
 
+  it("caps what it draws, instead of pushing Count and Age off the table", () => {
+    // `Table` measures a column's natural width once and pins it, and `.tbl td`
+    // is `white-space: nowrap` — so an UNCAPPED message cell measures as the
+    // whole message (130 characters on the demo cluster) and the two columns
+    // behind it are pushed out of the container: the repeat count a whole
+    // backend task added was invisible on a 1600 px window. `truncate` alone
+    // never fires, because nothing ever makes the box narrower than its text.
+    const span = cell("message", event({ message: "the readiness probe failed ".repeat(5) })).querySelector("span");
+    const message = Number.parseInt(span?.style.maxWidth ?? "", 10);
+    expect(message).toBeGreaterThan(0);
+    // And it is the widest cap in the table: Message is the column §8 gives the
+    // slack to, and a Message narrower than the Object beside it would read as
+    // the design's own order inverted.
+    const object = Number.parseInt(
+      cell("object", event()).querySelector("span")?.style.maxWidth ?? "",
+      10,
+    );
+    expect(message).toBeGreaterThan(object);
+  });
+
   it("does not offer to sort a paragraph of prose", () => {
     expect(column("message").sortable).toBe(false);
   });
