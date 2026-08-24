@@ -18,12 +18,19 @@ const { useLogStream } = await import("./logStream");
 
 const target: LogTarget = { pod: "web-1", container: "app", label: "" };
 const otherTarget: LogTarget = { pod: "web-2", container: "app", label: "" };
+/** A labelled fan-out, the way `resolveLogSubject` builds one for a workload. */
+const fanOut = (n: number): LogTarget[] =>
+  Array.from({ length: n }, (_, i) => ({
+    pod: `web-${i + 1}`,
+    container: "app",
+    label: `web-${i + 1}`,
+  }));
 
 /** A `startLogStream` double whose caller controls when the connect promise
  *  settles and can fire lines/status at will through the captured callbacks. */
 function fakeStream() {
   let onLine!: (source: string, line: string) => void;
-  let onStatus: ((status: LogStatus) => void) | undefined;
+  let onStatus: ((status: LogStatus, source: string) => void) | undefined;
   const stop = vi.fn();
   let resolveConnect!: (v: { stop: () => void }) => void;
   let rejectConnect!: (e: unknown) => void;
@@ -37,7 +44,7 @@ function fakeStream() {
       _namespace: string,
       _targets: LogTarget[],
       line: (source: string, line: string) => void,
-      status?: (s: LogStatus) => void,
+      status?: (s: LogStatus, source: string) => void,
     ) => {
       onLine = line;
       onStatus = status;
@@ -47,7 +54,8 @@ function fakeStream() {
   return {
     stop,
     line: (source: string, text: string) => onLine(source, text),
-    status: (s: LogStatus) => onStatus?.(s),
+    /** Fire a status AS a given target — the tag the backend now sends. */
+    status: (s: LogStatus, source = "") => onStatus?.(s, source),
     connect: () => act(async () => { resolveConnect({ stop }); await Promise.resolve(); }),
     reject: (e: unknown) => act(async () => { rejectConnect(e); await Promise.resolve(); }),
   };
@@ -219,36 +227,140 @@ describe("useLogStream", () => {
     expect(result.current.restartCount).toBe(0);
   });
 
-  it("does not flap the aggregate status when only one of several targets is reconnecting", async () => {
+  it("flags the stream reconnecting the moment ONE target of many drops out", async () => {
+    // The question the indicator answers is "am I seeing everything?", and
+    // the answer while one of three pods is down is no. The counts say how
+    // much of the tail is still moving, so one blip never has to read as a
+    // total outage.
     const s = fakeStream();
-    const { result } = renderHook(() => useLogStream("kind-dev", "default", [target, otherTarget]));
+    const targets = fanOut(3);
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", targets));
     await s.connect();
 
-    act(() => s.status("live"));
+    act(() => {
+      s.status("live", "web-1");
+      s.status("live", "web-2");
+      s.status("live", "web-3");
+    });
     await waitFor(() => expect(result.current.status).toBe("live"));
+    expect(result.current.liveTargets).toBe(3);
 
-    // One target out of two blips — not enough on its own to call the whole
-    // stream down.
-    act(() => s.status("reconnecting"));
-    expect(result.current.status).toBe("live");
+    act(() => s.status("reconnecting", "web-2"));
+    await waitFor(() => expect(result.current.status).toBe("reconnecting"));
+    expect(result.current.liveTargets).toBe(2);
+    expect(result.current.reconnectingTargets).toBe(1);
+    expect(result.current.totalTargets).toBe(3);
 
-    // It recovers before a second target would also need to report trouble.
-    act(() => s.status("live"));
-    expect(result.current.status).toBe("live");
+    act(() => s.status("live", "web-2"));
+    await waitFor(() => expect(result.current.status).toBe("live"));
+    expect(result.current.liveTargets).toBe(3);
+    expect(result.current.reconnectingTargets).toBe(0);
   });
 
-  it("flags the stream reconnecting once as many drop signals arrive as it has targets", async () => {
+  it("surfaces a down target on a ten-pod workload at once, not after ten backoff cycles", async () => {
+    // What the streak counter cost: a persistently-down target needed as many
+    // consecutive drop signals as the stream had targets before it surfaced —
+    // about two seconds each. One target's own report is enough now.
+    const s = fakeStream();
+    const targets = fanOut(10);
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", targets));
+    await s.connect();
+
+    act(() => s.status("reconnecting", "web-10"));
+    await waitFor(() => expect(result.current.status).toBe("reconnecting"));
+    expect(result.current.reconnectingTargets).toBe(1);
+    expect(result.current.totalTargets).toBe(10);
+  });
+
+  it("does not let a healthy target's success clear another target's outage", async () => {
+    // The streak counter reset on any "live", so a target flapping between up
+    // and down could hide behind its neighbours forever. A drop is now the
+    // dropped target's own state, and only that target can clear it.
+    const s = fakeStream();
+    const targets = fanOut(3);
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", targets));
+    await s.connect();
+
+    act(() => s.status("reconnecting", "web-1"));
+    await waitFor(() => expect(result.current.status).toBe("reconnecting"));
+
+    act(() => {
+      s.status("live", "web-2");
+      s.status("live", "web-3");
+    });
+    await waitFor(() => expect(result.current.liveTargets).toBe(2));
+    expect(result.current.status).toBe("reconnecting");
+    expect(result.current.reconnectingTargets).toBe(1);
+  });
+
+  it("keeps a target's LATEST status, not a tally of its events", async () => {
+    // One target retrying every couple of seconds emits a drop per cycle. It
+    // is still one target down, not four.
+    const s = fakeStream();
+    const targets = fanOut(2);
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", targets));
+    await s.connect();
+
+    act(() => {
+      s.status("live", "web-1");
+      s.status("reconnecting", "web-2");
+      s.status("reconnecting", "web-2");
+      s.status("reconnecting", "web-2");
+    });
+    await waitFor(() => expect(result.current.status).toBe("reconnecting"));
+    expect(result.current.reconnectingTargets).toBe(1);
+    expect(result.current.liveTargets).toBe(1);
+    expect(result.current.totalTargets).toBe(2);
+  });
+
+  it("stays connecting until every target has reported, never calling a partial tail live", async () => {
+    const s = fakeStream();
+    const targets = fanOut(2);
+    const { result } = renderHook(() => useLogStream("kind-dev", "default", targets));
+    await s.connect();
+
+    act(() => s.status("live", "web-1"));
+    await waitFor(() => expect(result.current.liveTargets).toBe(1));
+    expect(result.current.status).toBe("connecting");
+
+    act(() => s.status("live", "web-2"));
+    await waitFor(() => expect(result.current.status).toBe("live"));
+  });
+
+  it("counts a repeated label once rather than waiting forever for a target that cannot report", async () => {
+    // A source tag is how a target identifies itself; two targets sharing one
+    // tag are one source to everything downstream, lines included. Counting
+    // them as two would leave the aggregate stuck below its own denominator.
     const s = fakeStream();
     const { result } = renderHook(() => useLogStream("kind-dev", "default", [target, otherTarget]));
     await s.connect();
 
-    act(() => s.status("live"));
+    expect(result.current.totalTargets).toBe(1);
+    act(() => s.status("live", ""));
+    await waitFor(() => expect(result.current.status).toBe("live"));
+  });
+
+  it("forgets what it knew about the old targets when the stream restarts", async () => {
+    const s = fakeStream();
+    const { result, rerender } = renderHook(
+      ({ targets }: { targets: LogTarget[] }) => useLogStream("kind-dev", "default", targets),
+      { initialProps: { targets: fanOut(2) } },
+    );
+    await s.connect();
+    act(() => {
+      s.status("live", "web-1");
+      s.status("live", "web-2");
+    });
     await waitFor(() => expect(result.current.status).toBe("live"));
 
-    act(() => s.status("reconnecting"));
-    expect(result.current.status).toBe("live");
-    act(() => s.status("reconnecting"));
-    await waitFor(() => expect(result.current.status).toBe("reconnecting"));
+    const s2 = fakeStream();
+    rerender({ targets: [target] });
+    await s2.connect();
+
+    await waitFor(() => expect(result.current.status).toBe("connecting"));
+    expect(result.current.liveTargets).toBe(0);
+    expect(result.current.reconnectingTargets).toBe(0);
+    expect(result.current.totalTargets).toBe(1);
   });
 
   it("surfaces a start failure through describeError", async () => {

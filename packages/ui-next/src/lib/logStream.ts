@@ -63,6 +63,18 @@ import {
  * nothing to lose, and never on pause/resume or a manual `clear()`, neither
  * of which reopens the stream) so the screen can say "scrollback cleared"
  * instead of quietly emptying the pane.
+ *
+ * **The indicator answers "am I seeing everything?".** A stream fans out over
+ * many pods and each one connects, drops and reconnects on its own schedule.
+ * Every status event names its target (`source`, the same tag that target's
+ * lines carry), so this hook keeps each target's latest state and derives the
+ * aggregate from all of them at once — see {@link aggregateLogStatus}. The
+ * word alone cannot say how much of a fan-out is down, so `liveTargets` /
+ * `reconnectingTargets` / `totalTargets` ride alongside it: a screen showing
+ * "2 of 3 following" tells a reader during an incident exactly which of the
+ * two questions — a blip, or the whole tail — they are looking at. Pair the
+ * word with `logConnectionStatus` from `@srelens/core` for its label and
+ * tone; this module deliberately owns no vocabulary of its own.
  */
 
 export interface UseLogStreamOptions extends LogStreamOptions {
@@ -75,12 +87,49 @@ export interface UseLogStreamOptions extends LogStreamOptions {
  *  connect promise rejected. */
 export type LogStreamStatus = "connecting" | LogStatus | "error";
 
+/** What is known about each of a stream's targets right now. `total` is the
+ *  denominator for both counts; targets that have not reported yet are
+ *  neither `live` nor `reconnecting`. */
+export interface LogTargetCounts {
+  readonly live: number;
+  readonly reconnecting: number;
+  readonly total: number;
+}
+
+/**
+ * The one word for a whole stream, from what is known about its targets.
+ *
+ * "Am I seeing everything?" is the question the indicator answers, so a
+ * single target being down is enough to say no: `reconnecting` the moment ANY
+ * target reports it, `live` only once EVERY target has reported streaming,
+ * and `connecting` while some target has yet to say either way. A screen that
+ * wants to distinguish "one of ten down" from "all ten down" reads the counts
+ * beside it — the word alone was never able to carry that, and the streak
+ * counter this replaces bought a steadier word by delaying the truth: on a
+ * fifty-pod workload a target that stayed down took fifty backoff cycles
+ * (~100s) to surface, and one that flapped never surfaced at all, because any
+ * other target's success reset the streak.
+ *
+ * Never returns `"error"`: that is the hook's own state, not any target's.
+ */
+export function aggregateLogStatus(counts: LogTargetCounts): "connecting" | LogStatus {
+  if (counts.reconnecting > 0) return "reconnecting";
+  if (counts.total > 0 && counts.live >= counts.total) return "live";
+  return "connecting";
+}
+
 export interface UseLogStreamResult {
   /** The visible lines, oldest first — frozen while `paused` is true. */
   lines: readonly LogLine[];
   /** How many lines the ring has dropped from the visible buffer. */
   dropped: number;
   status: LogStreamStatus;
+  /** How many of this stream's targets are streaming right now. */
+  liveTargets: number;
+  /** How many are down and retrying — every one of them a gap in the tail. */
+  reconnectingTargets: number;
+  /** How many targets this stream follows: the denominator for both counts. */
+  totalTargets: number;
   /** Set when `status` is `"error"` — why the stream could not be opened. */
   error?: FriendlyError;
   paused: boolean;
@@ -98,6 +147,9 @@ export interface UseLogStreamResult {
 }
 
 const DEFAULT_CAPACITY = 5000;
+
+/** Before the connection effect has run there is nothing known about anything. */
+const NO_TARGETS: LogTargetCounts = { live: 0, reconnecting: 0, total: 0 };
 
 /** A stable key for a target list, so the connection effect restarts on what
  *  a target list actually MEANS rather than on a new array identity a
@@ -127,7 +179,7 @@ export function useLogStream(
   const [view, setView] = useState(() => bufferRef.current);
   const [paused, setPaused] = useState(false);
   const [pendingWhilePaused, setPendingWhilePaused] = useState(0);
-  const [status, setStatus] = useState<LogStreamStatus>("connecting");
+  const [counts, setCounts] = useState<LogTargetCounts>(NO_TARGETS);
   const [error, setError] = useState<FriendlyError | undefined>(undefined);
   const [restartCount, setRestartCount] = useState(0);
 
@@ -186,7 +238,10 @@ export function useLogStream(
     pendingRef.current = 0;
     setPendingWhilePaused(0);
     setView(bufferRef.current);
-    setStatus("connecting");
+    // A restart knows nothing about the new targets until they report; the
+    // old targets' states are not evidence about these ones.
+    const sources = new Set(targets.map((t) => t.label ?? ""));
+    setCounts({ live: 0, reconnecting: 0, total: sources.size });
     setError(undefined);
 
     if (targets.length === 0) {
@@ -221,41 +276,36 @@ export function useLogStream(
     // F3: `status` disagreeing across targets. `onStatus` fires once per
     // underlying pod/container connection transition — core's resilient log
     // loop (crates/kube/src/logs.rs) emits one "reconnecting" per failed
-    // connect attempt and one "live" per success — but the payload never says
-    // which target it was for. Last-writer-wins therefore lets any single
-    // target's blip overwrite the whole stream's indicator, flapping
-    // "Following" on a large workload even though most of it streams fine.
+    // connect attempt and one "live" per success — and each event names the
+    // target it came from, the same `source` tag that target's lines carry.
+    // So the aggregate is not a guess: keep each source's LATEST state and
+    // count them. One target retrying every two seconds is one entry moving
+    // between two values, not a stream of events racing each other to be the
+    // last writer.
     //
-    // What a reader is actually asking when they look at that indicator is
-    // "is my tail still moving" — which it is while most targets are still
-    // delivering. Since individual events can't be attributed to a target,
-    // the only fact available is how many targets there are. A genuine
-    // stream-wide outage announces itself fast: every target fails its next
-    // attempt within moments of each other. A single wobbly target can only
-    // ever contribute one "reconnecting" per backoff cycle before either
-    // recovering (a "live" resets the count) or failing again. Requiring as
-    // many consecutive "reconnecting" signals — with no "live" in between —
-    // as there are targets before downgrading treats the aggregate as down
-    // only once that many drop signals have arrived, which is plausible for
-    // the whole stream and not for one pod out of many. A single-target
-    // stream keeps exactly today's behaviour: threshold 1, so its first
-    // "reconnecting" still flips the status immediately.
-    let reconnectStreak = 0;
+    // Keyed by source because that is the identity the backend reports under.
+    // Two targets sharing a label are one source to everything downstream,
+    // their lines included, so `total` counts distinct sources — counting the
+    // array instead would leave the aggregate permanently short of its own
+    // denominator for a target that can never report separately.
+    const total = sources.size;
+    const seen = new Map<string, LogStatus>();
 
     startLogStream(
       context,
       namespace,
       streamTargets,
       onLine,
-      (s) => {
+      (s, source) => {
         if (cancelled) return;
-        if (s === "live") {
-          reconnectStreak = 0;
-          setStatus("live");
-        } else {
-          reconnectStreak += 1;
-          if (reconnectStreak >= streamTargets.length) setStatus("reconnecting");
+        seen.set(source, s);
+        let live = 0;
+        let reconnecting = 0;
+        for (const state of seen.values()) {
+          if (state === "live") live += 1;
+          else reconnecting += 1;
         }
+        setCounts({ live, reconnecting, total });
       },
       { timestamps, sinceSeconds, tailLines },
     ).then(
@@ -273,7 +323,6 @@ export function useLogStream(
       },
       (e: unknown) => {
         if (cancelled) return;
-        setStatus("error");
         setError(describeError(e));
       },
     );
@@ -289,7 +338,12 @@ export function useLogStream(
     () => ({
       lines: view.lines,
       dropped: view.dropped,
-      status,
+      // The failure to OPEN a stream is the hook's own, not a target's, and
+      // outranks whatever the targets last said.
+      status: error !== undefined ? "error" : aggregateLogStatus(counts),
+      liveTargets: counts.live,
+      reconnectingTargets: counts.reconnecting,
+      totalTargets: counts.total,
       error,
       paused,
       pendingWhilePaused,
@@ -297,6 +351,6 @@ export function useLogStream(
       clear,
       restartCount,
     }),
-    [view, status, error, paused, pendingWhilePaused, togglePause, clear, restartCount],
+    [view, counts, error, paused, pendingWhilePaused, togglePause, clear, restartCount],
   );
 }
