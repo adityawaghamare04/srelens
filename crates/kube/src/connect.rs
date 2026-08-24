@@ -1166,15 +1166,34 @@ mod tests {
 
     #[test]
     fn the_answer_does_not_depend_on_which_node_answers_first() {
-        // A node carrying neither fact must not shadow the ones that carry
-        // both, whichever order the list arrives in.
+        // Two nodes that disagree, plus one carrying nothing. A first-wins
+        // `find` over the nodes would report europe-west4 for one ordering and
+        // us-east-1 for the other, publishing list order as the cluster's
+        // truth; the fold reports the same nothing either way. `find` reads
+        // more simply than a fold and will look like a tidy-up one day, so
+        // this is the test that has to say no.
         let bare = node_with(None, None);
-        let a = node_with(Some("gce://p/z/a"), Some("europe-west4"));
-        let b = node_with(Some("gce://p/z/b"), Some("europe-west4"));
-        let forwards = facts_from_nodes(&[bare.clone(), a.clone(), b.clone()]);
-        let backwards = facts_from_nodes(&[b, a, bare]);
-        assert_eq!(forwards, ("GKE".to_string(), "europe-west4".to_string()));
-        assert_eq!(forwards, backwards);
+        let west = node_with(Some("gce://p/z/a"), Some("europe-west4"));
+        let east = node_with(Some("aws:///us-east-1a/i-1"), Some("us-east-1"));
+        let forwards = facts_from_nodes(&[bare.clone(), west.clone(), east.clone()]);
+        let backwards = facts_from_nodes(&[east, west, bare]);
+        assert_eq!(forwards, backwards, "the answer must not follow list order");
+        assert_eq!(forwards, (String::new(), String::new()));
+    }
+
+    #[test]
+    fn a_node_carrying_nothing_abstains_rather_than_blanking_the_cluster() {
+        // A control-plane node with no `providerID` and no region label is a
+        // real shape; it must not veto the workers that carry both.
+        let nodes = [
+            node_with(None, None),
+            node_with(Some("gce://p/z/a"), Some("europe-west4")),
+            node_with(Some("gce://p/z/b"), Some("europe-west4")),
+        ];
+        assert_eq!(
+            facts_from_nodes(&nodes),
+            ("GKE".to_string(), "europe-west4".to_string())
+        );
     }
 
     #[test]
