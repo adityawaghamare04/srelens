@@ -136,6 +136,101 @@ describe("conditionKind", () => {
   });
 });
 
+/**
+ * Every condition type this rule claims to know, paired with the status that
+ * means the resource is WELL — the whole polarity table in one place, walked
+ * from both ends.
+ *
+ * Both directions are asserted for every row, and that is the point rather
+ * than thoroughness for its own sake. A polarity bug is invisible from one
+ * side: a rule that answered "danger" to everything would satisfy every
+ * `True → danger` row in the negative half, and a rule that answered
+ * "success" to everything would satisfy every `True → success` row in the
+ * positive half. Only asserting the OTHER status of the same type catches
+ * either. It is also why the positive half is here at all: the negative half
+ * is matched by SUBSTRING, so an alternative added for one type silently
+ * re-tones every type that happens to contain it, and the positive rows are
+ * the only thing standing between this rule and that mistake.
+ */
+const POLARITY: [type: string, wellWhen: "True" | "False", note: string][] = [
+  // ---- Positive types: True is the healthy answer. --------------------
+  ["Ready", "True", "core/v1 Pod + Node"],
+  ["Initialized", "True", "core/v1 Pod"],
+  ["ContainersReady", "True", "core/v1 Pod"],
+  ["PodScheduled", "True", "core/v1 Pod"],
+  ["PodReadyToStartContainers", "True", "core/v1 Pod"],
+  ["Available", "True", "apps/v1 Deployment"],
+  ["Progressing", "True", "apps/v1 Deployment"],
+  ["Complete", "True", "batch/v1 Job"],
+  ["SuccessCriteriaMet", "True", "batch/v1 Job"],
+  ["Approved", "True", "certificates/v1 CSR"],
+  ["Established", "True", "apiextensions CRD"],
+  ["NamesAccepted", "True", "apiextensions CRD"],
+  ["DisruptionAllowed", "True", "policy/v1 PodDisruptionBudget"],
+  // The collision guard, and it is not hypothetical: "Installed" CONTAINS
+  // "Stalled" (i-n-**s-t-a-l-l-e-d**), so the kstatus/Flux convention's
+  // `Stalled` cannot be added to the substring family without painting every
+  // operator's `Installed: True` red — the exact inversion this rule keeps
+  // being fixed for, in the other direction. See NEGATIVE_CONDITION.
+  ["Installed", "True", "OLM / operator convention — contains 'Stalled'"],
+  ["Uninstalled", "True", "same substring trap"],
+
+  // ---- Negative types: False is the healthy answer. -------------------
+  ["MemoryPressure", "False", "core/v1 Node"],
+  ["DiskPressure", "False", "core/v1 Node"],
+  ["PIDPressure", "False", "core/v1 Node"],
+  ["NetworkUnavailable", "False", "core/v1 Node"],
+  ["ReplicaFailure", "False", "apps/v1 Deployment + ReplicaSet"],
+  ["Failed", "False", "batch/v1 Job, certificates/v1 CSR"],
+  ["FailureTarget", "False", "batch/v1 Job"],
+  ["NamespaceDeletionContentFailure", "False", "core/v1 Namespace"],
+  ["NamespaceDeletionDiscoveryFailure", "False", "core/v1 Namespace"],
+  ["NamespaceDeletionGroupVersionParsingFailure", "False", "core/v1 Namespace"],
+  // The two the previous round left behind on the very resource it fixed:
+  // the namespace controller sets these True while deletion is blocked, and
+  // False with "All content successfully removed" once it is not.
+  ["NamespaceContentRemaining", "False", "core/v1 Namespace — deletion blocked"],
+  ["NamespaceFinalizersRemaining", "False", "core/v1 Namespace — deletion blocked"],
+  ["Dangling", "False", "flowcontrol FlowSchema"],
+  ["Degraded", "False", "KEP-1623 / operator convention"],
+  ["DisruptionTarget", "False", "core/v1 Pod — about to be evicted"],
+  ["Denied", "False", "certificates/v1 CSR"],
+  ["ControllerResizeError", "False", "core/v1 PersistentVolumeClaim"],
+  ["NodeResizeError", "False", "core/v1 PersistentVolumeClaim"],
+  ["ModifyVolumeError", "False", "core/v1 PersistentVolumeClaim"],
+];
+
+describe("conditionKind — the polarity of every type it claims to know", () => {
+  it.each(POLARITY)("reads %s (%s is well — %s) from both ends", (type, wellWhen) => {
+    const ill = wellWhen === "True" ? "False" : "True";
+    expect({ type, status: wellWhen, kind: conditionKind({ type, status: wellWhen }) }).toEqual({
+      type,
+      status: wellWhen,
+      kind: "success",
+    });
+    expect({ type, status: ill, kind: conditionKind({ type, status: ill }) }).toEqual({
+      type,
+      status: ill,
+      kind: "danger",
+    });
+  });
+
+  it("keeps Unknown amber for every one of them, whichever way the type points", () => {
+    // The status trumps the polarity: nobody knows, so nobody is condemned.
+    for (const [type] of POLARITY) {
+      expect({ type, kind: conditionKind({ type, status: "Unknown" }) }).toEqual({ type, kind: "warning" });
+    }
+  });
+
+  it("covers both polarities, so neither half can be satisfied by a constant answer", () => {
+    // The table is only a polarity test while it holds rows of both kinds —
+    // a defect on the previous plan survived its first pass because a fixture
+    // held one state and a wrong rule agreed with the right one by accident.
+    expect(POLARITY.filter(([, well]) => well === "True").length).toBeGreaterThan(0);
+    expect(POLARITY.filter(([, well]) => well === "False").length).toBeGreaterThan(0);
+  });
+});
+
 // The new design's opt-in extension of `conditionKind`: same rule, plus a
 // reason read for the types that need one. Classic must never call this.
 describe("conditionKindWithReason", () => {
