@@ -5,11 +5,11 @@
 
 Everything this server exposes over MCP, generated from the live registry so it cannot drift. Written for someone wiring an agent to srelens; the narrative reference is [MCP.md](MCP.md).
 
-## Tools (85)
+## Tools (86)
 
 Argument schemas are not reproduced here — call `tools/list` for those, which cannot go stale.
 
-### Kubernetes — read-only (47)
+### Kubernetes — read-only (48)
 
 | Tool | Summary |
 | --- | --- |
@@ -52,6 +52,7 @@ Argument schemas are not reproduced here — call `tools/list` for those, which 
 | `k8s.listStorageClasses` | list StorageClasses of a connected kube context (cluster-scoped) |
 | `k8s.nodeMetrics` | node CPU/memory usage (requires metrics-server) |
 | `k8s.openApiSchema` | fetch the OpenAPI schema for a resource kind (for field autocomplete) |
+| `k8s.podCount` | running vs total pod counts for a cluster, counted without listing pod bodies |
 | `k8s.podLogs` | fetch recent logs for a pod in a connected kube context |
 | `k8s.podMetrics` | pod CPU/memory usage (requires metrics-server) |
 | `k8s.podsForPvc` | list pods in a namespace that mount a given PersistentVolumeClaim |

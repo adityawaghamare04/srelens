@@ -310,6 +310,11 @@
     "destructive": false
   },
   {
+    "id": "k8s.podCount",
+    "readOnly": true,
+    "destructive": false
+  },
+  {
     "id": "k8s.podLogs",
     "readOnly": true,
     "destructive": false

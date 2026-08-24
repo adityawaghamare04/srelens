@@ -57,6 +57,7 @@ export * from "./lib/openTabs";
 export * from "./lib/overviewSnapshot";
 export * from "./lib/paletteActions";
 export * from "./lib/podContainers";
+export * from "./lib/podCount";
 export * from "./lib/prompts";
 export * from "./lib/rbac";
 export * from "./lib/recents";
