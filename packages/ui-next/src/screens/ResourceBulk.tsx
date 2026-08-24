@@ -8,6 +8,7 @@ import {
   type BulkOutcome,
 } from "@srelens/core";
 import { ActionBar, ConfirmDialog, type ActionBarAction } from "@srelens/ui-kit";
+import { FailureWord } from "../lib/errorCopy";
 import type { KindDescriptor, ListRow } from "../lib/kinds/types";
 
 export interface ResourceBulkProps {
@@ -191,9 +192,27 @@ export function ResourceBulk({ selected, kind, descriptor, context, rows, onDone
             <ul>
               {report.outcomes.map((outcome) => (
                 <li key={keyOf(outcome.item)}>
-                  <code>{rowLabel(outcome.item)}</code>
-                  {" — "}
-                  {outcome.status === "ok" ? PAST[report.type] : `failed: ${outcome.error}`}
+                  {outcome.status === "ok" ? (
+                    <>
+                      <code>{rowLabel(outcome.item)}</code>
+                      {" — "}
+                      {PAST[report.type]}
+                    </>
+                  ) : (
+                    // One line per row, so the headline is what fits — a
+                    // paragraph beside forty rows is a report nobody reads.
+                    // The row's own name leads it, and the cluster's words
+                    // are one click under it.
+                    <FailureWord
+                      error={outcome.error}
+                      lead={
+                        <>
+                          <code>{rowLabel(outcome.item)}</code>
+                          {" — failed: "}
+                        </>
+                      }
+                    />
+                  )}
                 </li>
               ))}
             </ul>

@@ -74,6 +74,12 @@ const CTX: ClusterContext = {
 
 const ROUTE = "/overview";
 
+/** A 401 as `String(e)` over a `CapabilityError` actually delivers it. */
+const API_401 =
+  'Error: handler error: ApiError: Unauthorized: Unauthorized (Status { status: Some("Failure"), ' +
+  "metadata: Some(ListMeta { continue_: None, remaining_item_count: None, resource_version: None, " +
+  'self_link: None }), reason: Some("Unauthorized"), code: Some(401), message: Some("Unauthorized") })';
+
 function aNode(name: string, over: Partial<NodeSummary> = {}): NodeSummary {
   return {
     name,
@@ -497,11 +503,65 @@ describe("Overview — the nodes table", () => {
     // The rows are still the ones the cluster last gave, not an error state.
     await waitFor(() => expect(rowFor("n1")).toBeTruthy());
     expect(value("Nodes")).toBe("3");
-    // And the screen says so, once, with what the cluster actually said.
+    // And the screen says so, once, in words the reader can act on — the
+    // sentence about the rows is this screen's and does not change, the
+    // reason under it is the classification, and what the cluster actually
+    // said is folded away rather than dropped.
     const notice = await waitFor(() => screen.getByText(/no longer refreshing/i));
     expect(notice).toBeTruthy();
-    expect(screen.getByText(/nodes is forbidden/)).toBeTruthy();
+    expect(screen.getByText(/Check your RBAC roles/)).toBeTruthy();
+    const folded = document.querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.textContent).toContain("nodes is forbidden");
     clock.mockRestore();
+  });
+
+  /**
+   * The rail is 286px wide, and every one of these rows used to print a
+   * whole apiserver `Status { … }` into it.
+   */
+  it("says why a count is missing in a phrase, not in the apiserver's struct", async () => {
+    // `listResource` is called with the kind LABEL, which is what the rail
+    // prints — `COUNTED_BY_LISTING` is CronJob and Job.
+    core.listResource.mockImplementation(async (_c: string, kind: string) =>
+      kind === "Job" ? { error: API_401 } : { items: [] },
+    );
+    open();
+
+    const row = await waitFor(() => screen.getByText(/Could not count Job/));
+    // The copy, with the folded-away original taken out: a closed `details`
+    // keeps its content in the DOM — that is what makes it a disclosure and
+    // not a deletion — so reading straight through `textContent` would pass
+    // whether or not the struct was being printed at the reader.
+    const copy = row.cloneNode(true) as HTMLElement;
+    copy.querySelector('[data-slot="raw"]')?.remove();
+    expect(copy.textContent).toBe("Could not count Job: Not authorized");
+    // Still reachable, still closed, still nowhere near an attribute.
+    const folded = row.querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.textContent).toContain("ListMeta");
+    for (const node of Array.from(row.querySelectorAll("*"))) {
+      for (const attribute of Array.from(node.attributes)) {
+        expect(attribute.value).not.toContain("ListMeta");
+      }
+    }
+  });
+
+  it("says one outage once when it refused every kind at the same time", async () => {
+    // Six kinds behind one expired credential is one problem. Repeating the
+    // same sentence six times says it six times and explains it nowhere.
+    core.listNodes.mockResolvedValue({ error: API_401 });
+    core.podOverview.mockResolvedValue({ error: API_401 });
+    core.listDeployments.mockResolvedValue({ error: API_401 });
+    core.listStatefulSets.mockResolvedValue({ error: API_401 });
+    core.listDaemonSets.mockResolvedValue({ error: API_401 });
+    open();
+
+    const card = await waitFor(() => screen.getByText(/Could not check every workload/));
+    const detail = card.parentElement?.querySelector('[data-slot="detail"]');
+    expect(detail?.textContent).toBe(
+      "The cluster rejected your credentials. Your token or client certificate may have expired — refresh your kubeconfig credentials and try again.",
+    );
   });
 });
 

@@ -1,5 +1,6 @@
 import { Alert, Button, EmptyState, MultiSelect, Screen, Spinner, type Column, type TableSort } from "@srelens/ui-kit";
 import { toggleColumn } from "../lib/columnPrefs";
+import { FailureAlert } from "../lib/errorCopy";
 import { setTabView, useTabs, useTabView } from "../lib/tabsStore";
 
 /**
@@ -80,10 +81,16 @@ export function NamespacePicker({
  */
 export function NamespaceErrorAlert({ error }: { error: string }) {
   if (!error) return null;
+  // The sentence stays; what sits under it is the classification rather than
+  // whatever the apiserver's Go or Rust layer happened to print. A 403 on
+  // namespaces is the ordinary case here, and "You don't have permission to
+  // list namespaces at the cluster scope" is a thing a reader can act on.
   return (
-    <Alert tone="warn" title="Namespaces could not be listed" className="mx-3 mt-3 mb-3">
-      {error}
-    </Alert>
+    <FailureAlert
+      title="Namespaces could not be listed"
+      error={error}
+      className="mx-3 mt-3 mb-3"
+    />
   );
 }
 

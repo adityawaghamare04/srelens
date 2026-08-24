@@ -18,6 +18,12 @@ function aContext(name: string): ClusterContext {
   return { name, stableId: name, cluster: name, server: `https://${name}`, isCurrent: false };
 }
 
+/** A 401 as it actually reaches this component, from a real kubeconfig context. */
+const API_401 =
+  'Error: handler error: ApiError: Unauthorized: Unauthorized (Status { status: Some("Failure"), ' +
+  "metadata: Some(ListMeta { continue_: None, remaining_item_count: None, resource_version: None, " +
+  'self_link: None }), reason: Some("Unauthorized"), code: Some(401), message: Some("Unauthorized") })';
+
 const PROD = aContext("prod-eu");
 const STAGING = aContext("staging");
 const DR = aContext("dr-us");
@@ -32,6 +38,21 @@ function row(name: string): HTMLElement {
   const found = screen.getByText(name).closest(".kv");
   if (!found) throw new Error(`no fleet row for ${name}`);
   return found as HTMLElement;
+}
+
+/**
+ * What the row actually SAYS — its copy with the folded-away original taken
+ * out. `textContent` alone cannot tell the two apart: a closed `details` keeps
+ * its content in the DOM, which is exactly what makes it a disclosure and not
+ * a deletion, and a test that reads through it would pass whether or not the
+ * struct was being printed at the reader.
+ */
+function reading(name: string): string {
+  const cell = row(name).querySelector(".kv-v");
+  if (!cell) throw new Error(`no value cell for ${name}`);
+  const copy = cell.cloneNode(true) as HTMLElement;
+  copy.querySelector('[data-slot="raw"]')?.remove();
+  return copy.textContent ?? "";
 }
 
 beforeEach(() => {
@@ -69,7 +90,9 @@ describe("Fleet", () => {
 
     // One cluster's failure is one row's failure — the whole point of the
     // section. The two that answered keep their numbers.
-    await waitFor(() => expect(row("staging").textContent).toContain("connection refused"));
+    await waitFor(() => expect(reading("staging")).toContain("Can't reach the cluster"));
+    // The transport's own words are not thrown away, only folded up.
+    expect(row("staging").textContent).toContain("connection refused");
     expect(row("prod-eu").textContent).toContain("7/9 running");
     expect(row("dr-us").textContent).toContain("7/9 running");
 
@@ -90,7 +113,7 @@ describe("Fleet", () => {
     );
     render(<Fleet clusters={[PROD, DR]} active={PROD} />);
 
-    await waitFor(() => expect(row("dr-us").textContent).toContain("timed out"));
+    await waitFor(() => expect(reading("dr-us")).toContain("Request timed out"));
     // The exact failure this section is written against: `0/0` for a cluster
     // that never answered is a lie the reader has no way to catch.
     expect(row("dr-us").textContent).not.toContain("0");
@@ -212,6 +235,44 @@ describe("Fleet's tone", () => {
     await waitFor(() =>
       expect(row("prod-eu").querySelector(".kv-v")?.textContent).toBe("1284/1310 running"),
     );
+  });
+
+  it("says why in a phrase, and never prints the apiserver's struct into the rail", async () => {
+    // The finding this whole vocabulary came from. `podCount` reports a
+    // rejection as `{ error: String(e) }`, so a 401 arrived here as
+    // `Error: handler error: ApiError: … (Status { … })` — three hundred
+    // characters wrapping down a 286px column, pushing every cluster below it
+    // off the rail. One unreachable cluster hid the nine that answered, which
+    // is the failure this section exists to prevent, arriving through the copy
+    // instead of through the fetch.
+    core.podCount.mockResolvedValue({ error: API_401 });
+    render(<Fleet clusters={[PROD]} active={PROD} />);
+
+    await waitFor(() => expect(reading("prod-eu")).toContain("Not authorized"));
+    // The state word the status bar uses is still there — this is not a second
+    // vocabulary for the same fact, it is a reason under the existing one.
+    expect(reading("prod-eu")).toContain("Unreachable");
+    // And none of the struct is in the copy.
+    expect(reading("prod-eu")).not.toContain("ListMeta");
+    expect(reading("prod-eu")).not.toContain("handler error");
+  });
+
+  it("keeps the original reachable, closed, and out of every attribute", async () => {
+    core.podCount.mockResolvedValue({ error: API_401 });
+    render(<Fleet clusters={[PROD]} active={PROD} />);
+    await waitFor(() => expect(reading("prod-eu")).toContain("Not authorized"));
+
+    const disclosure = row("prod-eu").querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(disclosure).not.toBeNull();
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.textContent).toContain("ListMeta");
+    // Not a `title` attribute, and not any other one: the rule PairList and KV
+    // settled after a Secret leaked through one. (#331)
+    for (const node of Array.from(row("prod-eu").querySelectorAll("*"))) {
+      for (const attribute of Array.from(node.attributes)) {
+        expect(attribute.value).not.toContain("ListMeta");
+      }
+    }
   });
 
   it("colours nothing at all for a cluster that did not answer", async () => {

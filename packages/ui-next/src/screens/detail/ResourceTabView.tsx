@@ -11,7 +11,6 @@ import {
 } from "@srelens/core";
 import {
   Breadcrumb,
-  ErrorState,
   KV,
   LoadingState,
   Stat,
@@ -20,6 +19,7 @@ import {
   type StatProps,
   type TabItem,
 } from "@srelens/ui-kit";
+import { FailureState } from "../../lib/errorCopy";
 import { CUSTOM_RESOURCE_ACTIONS } from "../../lib/kinds/custom";
 import { formatCpu, formatMemory } from "../../lib/kinds/columns";
 import { DetailActions } from "./DetailActions";
@@ -226,7 +226,7 @@ export function ResourceTabView({ context, kind, namespace, name }: ResourceTabV
     return <LoadingState label={`Loading ${describeTarget(kind, namespace, name)}`} />;
   }
   if (status === "error" || !object) {
-    return <ErrorState title={`Could not load ${describeTarget(kind, namespace, name)}`} detail={error} />;
+    return <FailureState title={`Could not load ${describeTarget(kind, namespace, name)}`} error={error} />;
   }
 
   const tiles = metricTiles(statusLine, object, usageTiles(usage.data?.cpu, usage.data?.memory));

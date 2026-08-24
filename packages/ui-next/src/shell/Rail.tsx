@@ -11,6 +11,7 @@ import {
   type ContextMenuItem,
   type IconComponent,
 } from "@srelens/ui-kit";
+import { friendly } from "../lib/errorCopy";
 import { Icons } from "../lib/icons";
 import { getMark, resetMark, setMark, useMark } from "../lib/marks";
 import { useInfos } from "../lib/probe";
@@ -185,9 +186,19 @@ export function Rail({ contexts, onConnect, error }: RailProps) {
       // A reason rather than a flag: the kit dims the mark and says the word,
       // so the state is never told in opacity alone. An error with no message
       // still has to say something.
+      //
+      // The CLASSIFICATION, not the cluster's own words. This string is not
+      // drawn — the rail is 46px wide — it joins the mark's accessible name,
+      // and what was reaching a screen reader was three hundred characters of
+      // `Status { metadata: Some(ListMeta { … })` read out as the name of a
+      // button. "Not authorized" is the same fact in two words. The original
+      // is not offered here because there is nowhere in a 46px strip to offer
+      // it from; the overview's Fleet row for the same cluster has it.
       unavailable:
         link?.state === "error"
-          ? (link.error ?? "Unreachable")
+          ? link.error
+            ? friendly(link.error).title
+            : "Unreachable"
           : link?.state === "disconnected"
             ? "Disconnected"
             : undefined,

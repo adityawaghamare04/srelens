@@ -16,13 +16,13 @@ import {
 import {
   Alert,
   CodeEditor,
-  ErrorState,
   LoadingState,
   StatusPill,
   Table,
   type Column,
   type TabItem,
 } from "@srelens/ui-kit";
+import { FailureState } from "../../lib/errorCopy";
 import { descriptorFor } from "../../lib/kinds/descriptors";
 import { useObject } from "../../lib/useObject";
 import { ConfigDetailsBody } from "./ConfigBody";
@@ -594,7 +594,10 @@ function YamlPane({
   }
   if (state.status === "error" || state.data === undefined) {
     return (
-      <ErrorState title={`Could not load ${describeTarget(kind, namespace, name)}'s manifest`} detail={state.error} />
+      <FailureState
+        title={`Could not load ${describeTarget(kind, namespace, name)}'s manifest`}
+        error={state.error}
+      />
     );
   }
   // The height, which the pane got wrong until #331's second round. Three
@@ -678,7 +681,10 @@ function EventsPane({
   }
   if (state.status === "error" || state.data === undefined) {
     return (
-      <ErrorState title={`Could not load events for ${describeTarget(kind, namespace, name)}`} detail={state.error} />
+      <FailureState
+        title={`Could not load events for ${describeTarget(kind, namespace, name)}`}
+        error={state.error}
+      />
     );
   }
   // `Table` renders `emptyText` itself for a genuinely empty list — an early

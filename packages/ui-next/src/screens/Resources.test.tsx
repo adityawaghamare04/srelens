@@ -661,7 +661,12 @@ describe("Resources", () => {
     open("/k/pods");
 
     expect(await screen.findByText("Namespaces could not be listed")).toBeTruthy();
-    expect(screen.getByText("namespaces: etcd timeout")).toBeTruthy();
+    // The sentence about the picker is this screen's and stays; what sits
+    // under it is the classification, not the apiserver's own words.
+    expect(screen.getByText(/didn't respond in time/)).toBeTruthy();
+    const folded = document.querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.textContent).toContain("namespaces: etcd timeout");
     // Non-fatal: the picker keeps whatever namespaces it has, and the rows load.
     expect(screen.getByRole("combobox", { name: "Namespaces" })).toBeTruthy();
     await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
@@ -886,6 +891,9 @@ describe("Resources", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Could not look up widgets.example.com");
+    // A Forbidden that names no verb or resource falls to the generic RBAC
+    // guidance rather than repeating the apiserver's phrasing at the reader.
+    expect(alert.textContent).toContain("Check your RBAC roles");
     expect(alert.textContent).toContain("customresourcedefinitions is forbidden");
 
     listCrds.mockResolvedValueOnce({ crds: [WIDGETS] });

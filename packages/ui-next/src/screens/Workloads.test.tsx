@@ -299,7 +299,10 @@ describe("Workloads", () => {
     open();
 
     expect(await screen.findByText("Namespaces could not be listed")).toBeTruthy();
-    expect(screen.getByText("namespaces: etcd timeout")).toBeTruthy();
+    expect(screen.getByText(/didn't respond in time/)).toBeTruthy();
+    expect(document.querySelector('[data-slot="raw"]')?.textContent).toContain(
+      "namespaces: etcd timeout",
+    );
     expect(screen.getByRole("combobox", { name: "Namespaces" })).toBeTruthy();
     await waitFor(() => expect(rowNames()).toHaveLength(5));
   });
@@ -333,6 +336,13 @@ describe("Workloads", () => {
     expect(within(scrollBody).queryByText(/could not list deployments/i)).toBeNull();
     // Still rendered — pinned above the scrolling body, not gone.
     expect(screen.getByText(/could not list deployments/i)).toBeTruthy();
+    // And the kind that refused says what to do about it, not what the
+    // apiserver called it. Four kinds still answered; this is a banner over
+    // real rows, so it stays a warning rather than becoming an error state.
+    expect(screen.getByText(/Check your RBAC roles/)).toBeTruthy();
+    expect(document.querySelector('[data-slot="raw"]')?.textContent).toContain(
+      "forbidden: cannot list deployments",
+    );
   });
 
   // A union row's actions differ by kind — this is the per-row correctness

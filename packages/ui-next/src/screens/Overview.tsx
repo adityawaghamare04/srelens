@@ -24,6 +24,7 @@ import {
   ConfirmDialog,
   EmptyState,
   ErrorState,
+  RawError,
   KVList,
   KubectlPreview,
   LoadingState,
@@ -44,6 +45,7 @@ import {
 import { useConsole } from "../console";
 import { useActiveContext, useContexts } from "../lib/clusters";
 import { detailRoute } from "../lib/detailRoute";
+import { FailureLine, FailureState, FailureWord, summarise } from "../lib/errorCopy";
 import { Icons } from "../lib/icons";
 import {
   daemonSetVerdict,
@@ -248,11 +250,16 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
  * metrics-server, applied to the same problem.
  */
 function Stale({ overview }: { overview: OverviewData }) {
+  const stale = summarise(overview.staleReasons);
   if (overview.staleReasons.length === 0) return null;
   return (
     <div className="p-3 pb-0">
+      {/* The sentence is the deliberate part and stays exactly as written; the
+          reasons under it are classified, and deduplicated, because one
+          expired token stops all seven loaders and is one outage. */}
       <Alert tone="warn" title="Showing the last reading — this is no longer refreshing">
-        {overview.staleReasons.join(" · ")}
+        {stale.detail}
+        <RawError text={stale.raw ?? ""} className="mt-1" />
       </Alert>
     </div>
   );
@@ -372,7 +379,13 @@ function ControlPlane({ context, facts }: { context: ClusterContext; facts: Over
       <KVList rows={rows} />
       {/* The facts call itself failing is not the same as a cluster that named
           none, and the rows above cannot tell the reader which happened. */}
-      {facts.error && <p className="text-faint">Could not read the cluster's facts: {facts.error}</p>}
+      {facts.error && (
+        <FailureWord
+          error={facts.error}
+          lead="Could not read the cluster's facts: "
+          className="text-faint"
+        />
+      )}
     </Section>
   );
 }
@@ -422,7 +435,13 @@ function ObjectsByKind({ context, objects }: { context: string; objects: ObjectC
             <span className="path text-faint">{count === null ? UNKNOWN : count}</span>
           </Button>
           {error && (
-            <p className="path px-3 pb-1 text-faint">Could not count {K8S_KIND[slug]}: {error}</p>
+            // The row is as wide as the rail, which is to say not wide enough
+            // for a paragraph — the headline, and the original a click away.
+            <FailureWord
+              error={error}
+              lead={`Could not count ${K8S_KIND[slug]}: `}
+              className="path px-3 pb-1 text-faint"
+            />
           )}
         </div>
       ))}
@@ -760,9 +779,9 @@ function Nodes({ context, nodes }: { context: string; nodes: OverviewNodes }) {
         // already on screen keeps the rows: the screen says once, at the top,
         // that they stopped refreshing, and an `ErrorState` where a cluster
         // used to be tells the reader strictly less.
-        <ErrorState
+        <FailureState
           title={`Could not list nodes on ${context}`}
-          detail={nodes.error}
+          error={nodes.error}
           onRetry={nodes.reload}
         />
       ) : (
@@ -1154,6 +1173,8 @@ function NotReady({ context, overview }: { context: string; overview: OverviewDa
     workloads.deployments === undefined ? workloads.error : undefined,
     ...Object.values(workloads.refusals),
   ].filter((reason): reason is string => reason !== undefined && reason !== "");
+  // Six kinds refused by one expired credential is one sentence, not six.
+  const refusals = summarise(failures);
 
   const reload = () => {
     workloads.reload();
@@ -1167,14 +1188,16 @@ function NotReady({ context, overview }: { context: string; overview: OverviewDa
       ) : failures.length > 0 && rows.length === 0 ? (
         <ErrorState
           title={`Could not check every workload on ${context}`}
-          detail={failures.join(" · ")}
+          detail={refusals.detail}
+          raw={refusals.raw}
           onRetry={reload}
         />
       ) : (
         <>
           {failures.length > 0 && (
             <Alert tone="warn" title="Some kinds could not be checked">
-              {failures.join(" · ")}
+              {refusals.detail}
+              <RawError text={refusals.raw ?? ""} className="mt-1" />
             </Alert>
           )}
           {/* A cap is not a failure, so it is not in `failures` — but it is
@@ -1287,7 +1310,9 @@ function NodeConfirm({
             )}
           </p>
           <KubectlPreview command={command} onCopy={() => void copyKubectlCommand(command)} />
-          {error && <p style={{ color: "var(--sev)" }}>Error: {error}</p>}
+          {/* The dialog stays open on a refusal, so this is the whole of what
+              the reader is told about why the action did not happen. */}
+          {error && <FailureLine error={error} className="text-sev" />}
         </>
       }
     />

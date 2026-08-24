@@ -8,7 +8,6 @@ import {
 } from "@srelens/core";
 import { useNamespaceOptions } from "@srelens/core/react";
 import {
-  Alert,
   ColumnPicker,
   ErrorState,
   FilterBar,
@@ -35,6 +34,7 @@ import { describe, isBuiltInKind } from "../lib/routes";
 import { openTab } from "../lib/tabsStore";
 import { useResource } from "../lib/useResource";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
+import { FailureAlert, FailureState } from "../lib/errorCopy";
 import { AboutKind } from "./crd/AboutKind";
 import { ResourceDetailView } from "./detail/ResourceDetailView";
 import { ResourceTabView } from "./detail/ResourceTabView";
@@ -275,9 +275,9 @@ function KindList({
         {!builtIn && discovery.status === "loading" ? (
           <LoadingState label={`Looking for ${slug}`} />
         ) : discovery.status === "error" ? (
-          <ErrorState
+          <FailureState
             title={`Could not look up ${slug}`}
-            detail={discovery.error}
+            error={discovery.error}
             onRetry={discovery.reload}
           />
         ) : (
@@ -338,9 +338,9 @@ function KindList({
         {list.status === "loading" ? (
           <LoadingState label={`Loading ${lower}`} />
         ) : list.status === "error" ? (
-          <ErrorState
+          <FailureState
             title={`Could not list ${lower} on ${name}`}
-            detail={list.error}
+            error={list.error}
             onRetry={list.reload}
           />
         ) : (
@@ -470,9 +470,7 @@ function KindList({
         // rows are stale" warning the reader scrolls past no longer warns
         // anyone. The table runs flush to the panel, so the alert carries
         // its own inset rather than borrowing the container's.
-        <Alert tone="warn" title={`These ${lower} are stale`} className="mx-3 mt-3 mb-3">
-          {list.error}
-        </Alert>
+        <FailureAlert title={`These ${lower} are stale`} error={list.error} className="mx-3 mt-3 mb-3" />
       )}
       {showRows && (
         // Same reason as the alert above: selection actions that scroll out

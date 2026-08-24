@@ -2,13 +2,13 @@ import type { ReactNode } from "react";
 import { ageFromTimestamp, type K8sObject, type ResourceStatusLine } from "@srelens/core";
 import {
   Button,
-  ErrorState,
   Inspector,
   KV,
   LoadingState,
   type InspectorProps,
   type TabItem,
 } from "@srelens/ui-kit";
+import { FailureState } from "../../lib/errorCopy";
 import { Icons } from "../../lib/icons";
 import { CUSTOM_RESOURCE_ACTIONS } from "../../lib/kinds/custom";
 import { DetailActions } from "./DetailActions";
@@ -217,7 +217,7 @@ export function ResourceDetailView({ context, kind, namespace, name, peek }: Res
     // open at once, and a bare failure doesn't say which one broke.
     return (
       <Inspector name={name} subtitle={subtitle} actions={actions} onClose={peek?.onClose}>
-        <ErrorState title={`Could not load ${describeTarget(kind, namespace, name)}`} detail={error} />
+        <FailureState title={`Could not load ${describeTarget(kind, namespace, name)}`} error={error} />
       </Inspector>
     );
   }
