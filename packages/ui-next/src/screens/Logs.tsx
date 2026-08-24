@@ -12,6 +12,7 @@ import {
   isTauri,
   logConnectionStatus,
   logLineHealth,
+  listResource,
   logLineLevel,
   podLogs,
   saveTextFile,
@@ -51,6 +52,16 @@ import {
   type LogSubjectResolution,
   type PreviousInstance,
 } from "../lib/logSubject";
+import {
+  forgetLogSubjects,
+  recentKey,
+  rememberLogSubject,
+  reviewRecents,
+  scanKey,
+  useRecentLogSubjects,
+  type SubjectScan,
+} from "../lib/logRecents";
+import { openTab } from "../lib/tabsStore";
 import {
   StreamRail,
   STREAM_RAIL_WIDTH,
@@ -403,12 +414,22 @@ export function Logs({ route }: { route: string }) {
     // A bare `/logs`. The doors that carry a subject are the row menu's
     // *Follow logs* and the detail screen's *Logs*; this is the one someone
     // opens by accident, and it names what it needs instead of streaming
-    // from nowhere. Task 9 adds the recently-streamed subjects as a way in.
+    // from nowhere — with whatever this reader has already followed as the
+    // way in, since "open one from Workloads" is an instruction, not a door.
     return (
       <LogsScreen eyebrow={cluster.name}>
         <EmptyState
           title="Pick a workload or a pod to follow"
           hint="srelens tails every container behind a Deployment, StatefulSet, DaemonSet or Job — or one pod on its own. Open one from Workloads and choose Follow logs."
+          action={
+            // Keyed on the cluster: the recents are that cluster's, and so is
+            // every answer already collected about them.
+            <RecentSubjects
+              key={cluster.stableId}
+              context={cluster.name}
+              clusterId={cluster.stableId}
+            />
+          }
           className="flex-1"
         />
       </LogsScreen>
@@ -422,9 +443,115 @@ export function Logs({ route }: { route: string }) {
     <LogsSubject
       key={`${cluster.stableId}:${route}`}
       context={cluster.name}
+      clusterId={cluster.stableId}
       clusterName={cluster.name}
       {...parts}
     />
+  );
+}
+
+/**
+ * The recently-followed subjects, offered as a way in — and checked before
+ * they are.
+ *
+ * **Every entry is verified against the cluster before it is offered.** A list
+ * of dead pods that error when clicked is worse than no list: the reader
+ * trusted it. One `listResource` per kind and namespace answers for every
+ * remembered subject in it, so the check costs a call per pair rather than one
+ * per name, and `reviewRecents` decides what each answer means — including the
+ * asymmetry between a pod, whose exact name never comes back, and a workload,
+ * whose name outlives its pods.
+ */
+function RecentSubjects({ context, clusterId }: { context: string; clusterId: string }) {
+  const entries = useRecentLogSubjects(clusterId);
+  const [scans, setScans] = useState<ReadonlyMap<string, SubjectScan>>(
+    () => new Map(),
+  );
+  /**
+   * Which lists have already been asked for. A ref, not state: it exists to
+   * stop the effect below asking twice, and putting it in `scans` would mean
+   * depending on `scans` in the effect that sets it — which is a fetch per
+   * answer, forever.
+   */
+  const asked = useRef(new Set<string>());
+
+  // A string, because the dependency is the SET of lists to fetch: `entries`
+  // changes identity whenever any subject is remembered or forgotten, and
+  // re-running on that would re-ask for lists already in hand.
+  const scanKeys = useMemo(
+    () => [...new Set(entries.map(scanKey))].sort().join("\n"),
+    [entries],
+  );
+
+  useEffect(() => {
+    let alive = true;
+    for (const key of scanKeys === "" ? [] : scanKeys.split("\n")) {
+      if (asked.current.has(key)) continue;
+      asked.current.add(key);
+      const [kind, namespace] = key.split("\u0000");
+      // `listResource` reports failure by returning `{ error }` rather than
+      // throwing, so this reads the field — and keeps the failure AS a
+      // failure: see `SubjectScan` for why an empty list is not the same
+      // answer as an unanswered one.
+      void listResource(context, kind, namespace).then((out) => {
+        if (!alive) return;
+        const scan: SubjectScan =
+          out.error !== undefined
+            ? { error: true }
+            : { names: (out.items ?? []).map((item) => item.name) };
+        setScans((current) => new Map(current).set(key, scan));
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [context, scanKeys]);
+
+  const { offered, forget } = useMemo(
+    () => reviewRecents(entries, scans),
+    [entries, scans],
+  );
+
+  // A pod the cluster has replaced is not coming back under that name, and
+  // leaving it in would push a live workload off the end of the cap. Settles
+  // in one pass: the forgotten entries leave `entries`, and the next review
+  // has nothing left to forget.
+  useEffect(() => {
+    forgetLogSubjects(forget.map(recentKey));
+  }, [forget]);
+
+  if (offered.length === 0) return null;
+
+  return (
+    <div
+      data-slot="recents"
+      className="flex flex-col items-stretch gap-1 text-left"
+    >
+      <Eyebrow>recently followed</Eyebrow>
+      {offered.map(({ entry, presence }) => (
+        <Button
+          key={recentKey(entry)}
+          variant="secondary"
+          size="sm"
+          // Not a way in, and not pretending to be one. Shown rather than
+          // hidden for the same reason the stale-namespace banner is shown:
+          // silence reads as "you never followed this", when the true story
+          // is "what you followed is not there just now".
+          disabled={presence === "gone"}
+          onClick={() =>
+            openTab(logsRoute(entry.kind, entry.namespace, entry.name), {
+              clusterName: context,
+            })
+          }
+          className="justify-between gap-3"
+        >
+          <span>{`${entry.kind}/${entry.name}`}</span>
+          <span className="path">
+            {presence === "gone" ? "no longer on this cluster" : entry.namespace}
+          </span>
+        </Button>
+      ))}
+    </div>
   );
 }
 
@@ -440,11 +567,12 @@ export function Logs({ route }: { route: string }) {
  */
 function LogsSubject({
   context,
+  clusterId,
   clusterName,
   kind,
   namespace,
   name,
-}: LogsRouteParts & { context: string; clusterName: string }) {
+}: LogsRouteParts & { context: string; clusterId: string; clusterName: string }) {
   const [attempt, setAttempt] = useState(0);
   const [resolution, setResolution] = useState<LogSubjectResolution | null>(
     null,
@@ -468,6 +596,20 @@ function LogsSubject({
       alive = false;
     };
   }, [subject, attempt]);
+
+  /**
+   * Remembered once it has actually streamed, not once it was asked for.
+   *
+   * `resolved` is the only state that carries targets, and a subject nobody
+   * could open is not a way in — offering back the route that just failed is
+   * the exact trap the recents exist to avoid. Keyed by the cluster's
+   * `stableId` rather than its name, so a context renamed in the kubeconfig
+   * keeps what was followed on it.
+   */
+  useEffect(() => {
+    if (resolution?.status !== "resolved") return;
+    rememberLogSubject({ cluster: clusterId, kind, namespace, name });
+  }, [resolution, clusterId, kind, namespace, name]);
 
   const head = `${clusterName} / ${namespace} / ${name}`;
 
@@ -974,6 +1116,12 @@ function LogsStream({
               value={since}
               onValueChange={setSince}
               options={SINCE_OPTIONS}
+              // The window narrows the LIVE tail, and there is no live tail on
+              // screen while the terminated instance's snapshot is: that buffer
+              // arrived whole, in one fetch, and no time window applies to it.
+              // The value is kept rather than cleared — it is the window the
+              // reader chose for the stream they will go back to.
+              disabled={previous}
               aria-label="since"
             />
           </div>

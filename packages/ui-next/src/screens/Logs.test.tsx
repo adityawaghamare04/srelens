@@ -41,6 +41,8 @@ const h = vi.hoisted(() => {
     saved: vi.fn(),
     /** Every one-shot `podLogs` fetch the previous-instance toggle has made. */
     fetched: vi.fn(),
+    /** Every `listResource` the bare route's recents have been checked with. */
+    listed: vi.fn(),
     /** Every call the screen has made into the hook, in order. */
     seen: [] as {
       context: string;
@@ -114,6 +116,9 @@ vi.mock("@srelens/core", async (orig) => ({
   isTauri: () => h.tauri,
   saveTextFile: (...a: unknown[]) => h.saved(...a),
   podLogs: (...a: unknown[]) => h.fetched(...a),
+  // The bare route's only backend call: one list per kind and namespace, to
+  // find out which remembered subjects the cluster still has.
+  listResource: (...a: unknown[]) => h.listed(...a),
 }));
 
 if (!("ResizeObserver" in globalThis)) {
@@ -131,6 +136,7 @@ import { toneColor } from "@srelens/ui-kit";
 import { Logs, logsRoute, parseLogsRoute } from "./Logs";
 import { ConsoleProvider, useConsole } from "../console";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
+import { loadRecentLogSubjects, recentLogSubjects, rememberLogSubject } from "../lib/logRecents";
 import { defaultState } from "../lib/tabs";
 import * as store from "../lib/tabsStore";
 
@@ -236,6 +242,8 @@ beforeEach(() => {
   h.tauri = true;
   h.saved.mockResolvedValue("/home/u/checkout-api.log");
   h.fetched.mockResolvedValue({ logs: PREVIOUS_BLOB });
+  // Everything the recents name is still there unless a test says otherwise.
+  h.listed.mockResolvedValue({ items: [{ name: "checkout-api", namespace: "checkout", age: "1d" }] });
   // No corpse by default: a pod on its first run is the common case, and the
   // one the previous-instance toggle has to have an answer for.
   h.resolve.mockResolvedValue({ status: "resolved", targets: TARGETS, pods: PODS, previous: [] });
@@ -244,7 +252,19 @@ beforeEach(() => {
   setContexts([CTX]);
   setKubeconfigFiles(["/home/u/.kube/config"]);
   store.setState(defaultState([CTX]));
+  // A Map and no platform, the way every store in `lib/` is tested.
+  loadRecentLogSubjects(fakeStorage());
 });
+
+/** Storage as a Map: the shape `settingsStorage` is injected as in tests. */
+function fakeStorage() {
+  const m = new Map<string, string>();
+  return {
+    getItem: (k: string) => m.get(k) ?? null,
+    setItem: (k: string, v: string) => void m.set(k, v),
+    removeItem: (k: string) => void m.delete(k),
+  };
+}
 
 let asked: string[] = [];
 
@@ -663,6 +683,107 @@ describe("Logs", () => {
     draw("/logs");
     expect(await screen.findByText(/pick a workload or a pod/i)).toBeTruthy();
     expect(h.resolve).not.toHaveBeenCalled();
+    // Nothing has ever been followed, so there is no list of ways in and no
+    // reason to have asked the cluster anything.
+    expect(document.querySelector('[data-slot="recents"]')).toBeNull();
+    expect(h.listed).not.toHaveBeenCalled();
+  });
+
+  it("remembers the subject it streamed", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    await waitFor(() =>
+      expect(recentLogSubjects("prod")).toEqual([
+        { cluster: "prod", kind: "Deployment", namespace: "checkout", name: "checkout-api" },
+      ]),
+    );
+  });
+
+  it("does not remember a subject it could not open", async () => {
+    h.resolve.mockResolvedValue({ status: "error", error: describeError("boom") });
+    draw();
+    await screen.findByText(/could not open logs/i);
+    expect(recentLogSubjects("prod")).toEqual([]);
+  });
+
+  it("offers a remembered subject the cluster still has, and opens it", async () => {
+    const s = fakeStorage();
+    loadRecentLogSubjects(s);
+    rememberLogSubject({ cluster: "prod", kind: "Deployment", namespace: "checkout", name: "checkout-api" }, s);
+    draw("/logs");
+    const row = await screen.findByRole("button", { name: /Deployment\/checkout-api/ });
+    expect(h.listed).toHaveBeenCalledWith("prod-eu", "Deployment", "checkout");
+    await userEvent.click(row);
+    expect(store.currentWorkspace().tabs.map((t) => t.route)).toContain(
+      logsRoute("Deployment", "checkout", "checkout-api"),
+    );
+  });
+
+  it("offers nothing until the cluster has answered", async () => {
+    const s = fakeStorage();
+    loadRecentLogSubjects(s);
+    rememberLogSubject({ cluster: "prod", kind: "Deployment", namespace: "checkout", name: "checkout-api" }, s);
+    // A list that never answers: the subject may or may not still be there,
+    // and a way in that errors when clicked is worse than none.
+    h.listed.mockReturnValue(new Promise(() => {}));
+    draw("/logs");
+    await screen.findByText(/pick a workload or a pod/i);
+    expect(screen.queryByRole("button", { name: /checkout-api/ })).toBeNull();
+  });
+
+  it("says a remembered workload is gone rather than offering it", async () => {
+    const s = fakeStorage();
+    loadRecentLogSubjects(s);
+    rememberLogSubject({ cluster: "prod", kind: "Deployment", namespace: "checkout", name: "payments" }, s);
+    h.listed.mockResolvedValue({ items: [{ name: "checkout-api", namespace: "checkout", age: "1d" }] });
+    draw("/logs");
+    const row = await screen.findByRole("button", { name: /Deployment\/payments/ });
+    expect((row as HTMLButtonElement).disabled).toBe(true);
+    expect(row.textContent).toMatch(/no longer on this cluster/i);
+    // Kept: a Deployment's name outlives its pods and may come back.
+    expect(recentLogSubjects("prod")).toHaveLength(1);
+  });
+
+  it("drops a pod the cluster has replaced, and forgets it", async () => {
+    const s = fakeStorage();
+    loadRecentLogSubjects(s);
+    rememberLogSubject({ cluster: "prod", kind: "Deployment", namespace: "checkout", name: "checkout-api" }, s);
+    rememberLogSubject({ cluster: "prod", kind: "Pod", namespace: "checkout", name: "checkout-api-7d7-x2mzp" }, s);
+    h.listed.mockImplementation((_ctx: string, kind: string) =>
+      Promise.resolve({
+        items:
+          kind === "Pod"
+            ? [{ name: "checkout-api-7d7-q7v4t", namespace: "checkout", age: "2m" }]
+            : [{ name: "checkout-api", namespace: "checkout", age: "1d" }],
+      }),
+    );
+    draw("/logs");
+    await screen.findByRole("button", { name: /Deployment\/checkout-api/ });
+    expect(screen.queryByRole("button", { name: /x2mzp/ })).toBeNull();
+    await waitFor(() =>
+      expect(recentLogSubjects("prod").map((e) => e.name)).toEqual(["checkout-api"]),
+    );
+  });
+
+  it("still offers what it could not check, rather than calling it gone", async () => {
+    const s = fakeStorage();
+    loadRecentLogSubjects(s);
+    rememberLogSubject({ cluster: "prod", kind: "Deployment", namespace: "checkout", name: "checkout-api" }, s);
+    h.listed.mockResolvedValue({ error: "handler error: client error (Connect)" });
+    draw("/logs");
+    const row = await screen.findByRole("button", { name: /Deployment\/checkout-api/ });
+    expect((row as HTMLButtonElement).disabled).toBe(false);
+    expect(row.textContent).not.toMatch(/no longer/i);
+  });
+
+  it("offers another cluster's subjects to that cluster alone", async () => {
+    const s = fakeStorage();
+    loadRecentLogSubjects(s);
+    rememberLogSubject({ cluster: "dev", kind: "Deployment", namespace: "checkout", name: "checkout-api" }, s);
+    draw("/logs");
+    await screen.findByText(/pick a workload or a pod/i);
+    expect(screen.queryByRole("button", { name: /checkout-api/ })).toBeNull();
+    expect(h.listed).not.toHaveBeenCalled();
   });
 
   it("says there is no cluster in focus rather than streaming from nowhere", async () => {
@@ -1315,6 +1436,21 @@ describe("the previous instance", () => {
     await waitFor(() => expect(rendered(region)).toHaveLength(4));
     const notice = await screen.findByText(/could not read the previous instance/i);
     expect(notice.textContent).toContain("api-8");
+  });
+
+  it("stops the since window pretending to narrow a snapshot", async () => {
+    // The snapshot arrived whole, in one fetch: no time window applies to it,
+    // and a control that looks live and does nothing is what this migration
+    // has been removing.
+    withCorpse();
+    draw();
+    await body();
+    const since = () => screen.getByLabelText("since") as HTMLSelectElement;
+    expect(since().disabled).toBe(false);
+    await press();
+    await waitFor(() => expect(since().disabled).toBe(true));
+    await press();
+    await waitFor(() => expect(since().disabled).toBe(false));
   });
 
   it("does not blame the live ring for a snapshot's length", async () => {
