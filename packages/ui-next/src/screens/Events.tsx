@@ -16,6 +16,7 @@ import {
   LiveSignal,
   LoadingState,
   Screen,
+  SideRail,
   Table,
   Tabs,
   filterTableData,
@@ -38,6 +39,7 @@ import { useResourceList } from "../lib/resourceList";
 import { describe } from "../lib/routes";
 import { openTab } from "../lib/tabsStore";
 import { setNamespaces, useNamespaces } from "../lib/workspace";
+import { ReasonRail } from "./events/ReasonRail";
 import {
   NamespaceErrorAlert,
   NamespacePicker,
@@ -85,6 +87,9 @@ const SEARCH_KEYS = new Set(["reason", "message", "object"]);
  * picker holds on — there is no Name column here to pin.
  */
 const PINNED_KEY = "reason";
+
+/** §8's own width for the by-reason rail. Fixed: nothing here resizes. */
+const REASON_RAIL_WIDTH = 250;
 
 /** §8's header chip, verbatim: the word on it and the question behind it. */
 const GROUP_BY_CAUSE_LABEL = "Group by cause";
@@ -274,79 +279,90 @@ function EventList({
         </>
       }
     >
-      <FilterBar
-        value={filter}
-        onValueChange={setFilter}
-        label={`Filter ${lower}`}
-        // Verbatim from §8. The label above is what NAMES the field; this only
-        // says what it matches.
-        placeholder="Filter by reason, message or object"
+      {/* §8's two panes: the table pane, and the fixed 250px rail beside it.
+          The rail is handed what the TABLE is showing — after the namespace
+          selection, the segment and the search — so it describes the screen
+          rather than the cluster, and a reader can see at a glance which few
+          reasons account for forty rows. */}
+      <SideRail
+        head="By reason"
+        width={REASON_RAIL_WIDTH}
+        rail={<ReasonRail rows={filtered} onPick={setFilter} />}
       >
-        <Tabs tabs={SEGMENTS} active={segment} onChange={setSegment} label="Type" variant="segmented" />
-        {/* Inherited, not grown here: the selection is the workspace's, shared
-            by every list looking at this cluster. */}
-        <NamespacePicker
-          namespaces={namespaces}
+        <FilterBar
+          value={filter}
+          onValueChange={setFilter}
+          label={`Filter ${lower}`}
+          // Verbatim from §8. The label above is what NAMES the field; this only
+          // says what it matches.
+          placeholder="Filter by reason, message or object"
+        >
+          <Tabs tabs={SEGMENTS} active={segment} onChange={setSegment} label="Type" variant="segmented" />
+          {/* Inherited, not grown here: the selection is the workspace's, shared
+              by every list looking at this cluster. */}
+          <NamespacePicker
+            namespaces={namespaces}
+            selection={selection}
+            onChange={(next) => setNamespaces(context.stableId, next)}
+          />
+        </FilterBar>
+
+        <NamespaceErrorAlert error={namespaceError} />
+
+        <StaleSelectionAlert
           selection={selection}
-          onChange={(next) => setNamespaces(context.stableId, next)}
+          namespaces={namespaces}
+          onReset={() => setNamespaces(context.stableId, [])}
         />
-      </FilterBar>
 
-      <NamespaceErrorAlert error={namespaceError} />
-
-      <StaleSelectionAlert
-        selection={selection}
-        namespaces={namespaces}
-        onReset={() => setNamespaces(context.stableId, [])}
-      />
-
-      {showRows && list.error && (
-        // Rows and an error together: the last good list is still on screen
-        // and is no longer being refreshed. Emptying the table would throw
-        // away the only information the reader has. Pinned ABOVE the scrolling
-        // table rather than inside it — a "these rows are stale" warning the
-        // reader scrolls past no longer warns anyone. The table runs flush to
-        // the panel, so the alert carries its own inset.
-        <Alert tone="warn" title={`These ${lower} are stale`} className="mx-3 mt-3 mb-3">
-          {list.error}
-        </Alert>
-      )}
-
-      <div className="scroll min-h-0 flex-1">
-        {list.status === "loading" ? (
-          <LoadingState label={`Loading ${lower}`} />
-        ) : list.status === "error" ? (
-          <ErrorState
-            title={`Could not list ${lower} on ${name}`}
-            detail={list.error}
-            onRetry={list.reload}
-          />
-        ) : (
-          <Table
-            columns={renderedColumns}
-            data={filtered}
-            // The event's own key, which already carries its namespace and is
-            // unique across the cluster.
-            getRowKey={(row) => row.name}
-            sort={sort}
-            onSortChange={setSort}
-            activeFilterKey={filterKey}
-            onActiveFilterKeyChange={setFilterKey}
-            // One gesture, two ways in. §8 opens the involved object on a
-            // single click — there is no peek here to take that click, and an
-            // event is a report, not something to select — and `onRowActivate`
-            // is what makes the same thing reachable with Enter. `openTab`
-            // dedupes by route, so a double click is not two tabs.
-            onRowClick={openInvolved}
-            onRowActivate={openInvolved}
-            // The count is what the namespace selection left, before the
-            // segment and the search — both of which are filters the reader
-            // set, and "clear them" is different advice from "this cluster has
-            // none".
-            {...emptyTableCopy(rows.length, lower, name, " in the namespaces you are looking at")}
-          />
+        {showRows && list.error && (
+          // Rows and an error together: the last good list is still on screen
+          // and is no longer being refreshed. Emptying the table would throw
+          // away the only information the reader has. Pinned ABOVE the scrolling
+          // table rather than inside it — a "these rows are stale" warning the
+          // reader scrolls past no longer warns anyone. The table runs flush to
+          // the panel, so the alert carries its own inset.
+          <Alert tone="warn" title={`These ${lower} are stale`} className="mx-3 mt-3 mb-3">
+            {list.error}
+          </Alert>
         )}
-      </div>
+
+        <div className="scroll min-h-0 flex-1">
+          {list.status === "loading" ? (
+            <LoadingState label={`Loading ${lower}`} />
+          ) : list.status === "error" ? (
+            <ErrorState
+              title={`Could not list ${lower} on ${name}`}
+              detail={list.error}
+              onRetry={list.reload}
+            />
+          ) : (
+            <Table
+              columns={renderedColumns}
+              data={filtered}
+              // The event's own key, which already carries its namespace and is
+              // unique across the cluster.
+              getRowKey={(row) => row.name}
+              sort={sort}
+              onSortChange={setSort}
+              activeFilterKey={filterKey}
+              onActiveFilterKeyChange={setFilterKey}
+              // One gesture, two ways in. §8 opens the involved object on a
+              // single click — there is no peek here to take that click, and an
+              // event is a report, not something to select — and `onRowActivate`
+              // is what makes the same thing reachable with Enter. `openTab`
+              // dedupes by route, so a double click is not two tabs.
+              onRowClick={openInvolved}
+              onRowActivate={openInvolved}
+              // The count is what the namespace selection left, before the
+              // segment and the search — both of which are filters the reader
+              // set, and "clear them" is different advice from "this cluster has
+              // none".
+              {...emptyTableCopy(rows.length, lower, name, " in the namespaces you are looking at")}
+            />
+          )}
+        </div>
+      </SideRail>
     </Screen>
   );
 }

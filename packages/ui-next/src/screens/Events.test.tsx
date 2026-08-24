@@ -209,6 +209,18 @@ const routes = () => store.currentWorkspace().tabs.map((t) => t.route);
 // inside it with the same string, and a label query finds both.
 const search = () => screen.getByRole("searchbox", { name: "Filter events" });
 
+/** The by-reason rail's rows, as the reason and the count each one shows. */
+const railRows = () =>
+  Array.from(
+    screen.getByRole("complementary", { name: "By reason" }).querySelectorAll("button"),
+  ).map(
+    (el) =>
+      [
+        el.querySelector(".status")?.textContent ?? "",
+        el.querySelector(".path")?.textContent ?? "",
+      ] as const,
+  );
+
 const eyebrowText = () =>
   Array.from(document.querySelectorAll("[data-slot='screen-actions'] .eyebrow")).map(
     (el) => el.textContent,
@@ -407,6 +419,79 @@ describe("Events", () => {
 
     await act(async () => stream.status("reconnecting"));
     expect(screen.getByRole("status").textContent).toContain("Stream lost");
+  });
+
+  it("ranks the reasons of what is on screen in its right rail", async () => {
+    open();
+    await waitFor(() => expect(cells().length).toBe(4));
+
+    // A second Unhealthy arrives: two events, one reason. The rail is the only
+    // thing on the screen that says so.
+    await act(async () =>
+      stream.rows([
+        ...EVENTS,
+        {
+          name: "shop/checkout.17e",
+          namespace: "shop",
+          type: "Warning",
+          reason: "Unhealthy",
+          object: "Deployment/checkout-api",
+          message: "Liveness probe failed: context deadline exceeded",
+          count: 1,
+          age: "9s",
+        },
+      ]),
+    );
+    await waitFor(() => expect(cells().length).toBe(5));
+
+    expect(railRows()).toEqual([
+      ["Unhealthy", "2"],
+      ["BackOff", "1"],
+      ["Scheduled", "1"],
+      ["NodeReady", "1"],
+    ]);
+  });
+
+  it("searches for a reason when its rail row is clicked", async () => {
+    const user = userEvent.setup();
+    open();
+    await waitFor(() => expect(cells().length).toBe(4));
+
+    await user.click(screen.getByRole("button", { name: "Unhealthy 1" }));
+
+    await waitFor(() => expect(reasons()).toEqual(["Unhealthy"]));
+    // In the search box, not in some filter of the rail's own: the reader can
+    // see what narrowed the table, and can clear it the way they clear a search.
+    expect((search() as HTMLInputElement).value).toBe("Unhealthy");
+  });
+
+  it("counts the filtered set in the rail, not the loaded one", async () => {
+    const user = userEvent.setup();
+    open();
+    await waitFor(() => expect(cells().length).toBe(4));
+
+    const segments = screen.getByRole("tablist", { name: "Type" });
+    await user.click(within(segments).getByRole("tab", { name: "Normal" }));
+
+    await waitFor(() =>
+      expect(railRows()).toEqual([
+        ["Scheduled", "1"],
+        ["NodeReady", "1"],
+      ]),
+    );
+  });
+
+  it("leaves the rail blank, not boxed, when the filter empties the table", async () => {
+    const user = userEvent.setup();
+    open();
+    await waitFor(() => expect(cells().length).toBe(4));
+
+    await user.type(search(), "nothing matches this");
+    await waitFor(() => expect(reasons()).toEqual([]));
+
+    expect(railRows()).toEqual([]);
+    // The rail's own head and nothing else — §8 gives an empty rail no copy.
+    expect(screen.getByRole("complementary", { name: "By reason" }).textContent).toBe("By reason");
   });
 
   it("stands aside when no cluster is in focus", () => {
