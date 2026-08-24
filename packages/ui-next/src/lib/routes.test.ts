@@ -2,6 +2,7 @@
 import { describe as suite, it, expect } from "vitest";
 import { describe, isBuiltInKind, screenFor } from "./routes";
 import { AppLog } from "../screens/AppLog";
+import { Events } from "../screens/Events";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
@@ -99,6 +100,13 @@ suite("describe", () => {
     expect(describe("/k/pods").title).toBe("Pods");
     expect(describe("/k/pods").sub).toBeUndefined();
   });
+
+  it("titles /k/events as Events, not its raw slug", () => {
+    // events is in K8S_KIND, so isBuiltInKind("events") is true, but the
+    // /k/ branch's RESOURCE_LABELS lookup must still resolve it — this pins
+    // that against a regression, not against screenFor's routing.
+    expect(describe("/k/events", "c")).toMatchObject({ title: "Events", kind: "workloads" });
+  });
 });
 
 suite("screenFor", () => {
@@ -111,6 +119,19 @@ suite("screenFor", () => {
     expect(screenFor("/resources")).toBe(Workloads);
   });
 
+  it("resolves /events to the Events screen", () => {
+    expect(screenFor("/events")).toBe(Events);
+  });
+
+  it("resolves /k/events to the Events screen rather than the generic resource list", () => {
+    // events is in core's K8S_KIND, so isBuiltInKind("events") is true and,
+    // absent a special case, the /k/ prefix loop would hand it to Resources —
+    // whose descriptors.ts TYPED table has no "events" entry, so it would
+    // fall to the generic three-column (Name/Namespace/Age) descriptor and
+    // silently lose Type, Reason, Object, Message and Count.
+    expect(screenFor("/k/events")).toBe(Events);
+  });
+
   it("gives a route with no screen a placeholder", () => {
     for (const route of ["/", "/settings"]) {
       expect(screenFor(route), route).toBeNull();
@@ -119,6 +140,7 @@ suite("screenFor", () => {
 
   it("resolves a built-in kind's list route", () => {
     expect(screenFor("/k/pods")).toBe(Resources);
+    expect(screenFor("/k/deployments")).toBe(Resources);
   });
 
   it("resolves a custom resource's list route", () => {
