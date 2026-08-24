@@ -87,7 +87,13 @@ describe("StatusRow", () => {
     const { container } = render(<StatusRow status="Degraded" kind="danger" flagged name="checkout-api" />);
     const pill = container.querySelector(".status-row .status");
     expect(pill).not.toBeNull();
-    expect(pill?.querySelectorAll(".dot").length).toBe(1);
+    // Counted across the WHOLE row. Scoped to the inside of the pill
+    // (`pill.querySelectorAll(".dot")`) this asserts only that StatusPill
+    // draws one dot, which is StatusPill's own test's job, and the defect
+    // this test is named for -- a dot drawn by THIS row as a sibling of the
+    // pill -- is invisible to it. Mutation-checked: adding a second
+    // `<span className="dot" />` to `.status-row-verdict` reddens this line.
+    expect(container.querySelectorAll(".status-row .dot").length).toBe(1);
     // The kind reaches the pill, so the pill's own tone table is the only one.
     expect(pill?.getAttribute("data-kind")).toBe("danger");
   });
