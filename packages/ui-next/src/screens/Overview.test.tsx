@@ -113,14 +113,26 @@ function aPod(name: string, node: string, over: Partial<PodSummary> = {}): PodSu
  * that are not simply running. A fixture that starts from pods and derives all
  * three keeps the numbers in a test consistent with each other the way the
  * backend keeps them consistent on a real cluster.
+ *
+ * `unsettled` mirrors `crates/kube/src/pod_overview.rs`: the union of the
+ * `status.phase!=Running` field selector and every pod the printed pod table's
+ * READY column shows short of ready. It used to read `phase !== "Running" ||
+ * p.waitingReason`, which is a NARROWER list than the backend actually sends —
+ * a crash-looping pod between restarts has phase `Running` and no waiting
+ * reason, and the real `short_of_ready` still fetches it by name. Modelling
+ * the backend as narrower than it is hid the very pod this screen was losing.
  */
 function anOverview(pods: PodSummary[], over: Partial<PodOverview> = {}): PodOverview {
   const byNode = new Map<string, number>();
   for (const pod of pods) if (pod.node) byNode.set(pod.node, (byNode.get(pod.node) ?? 0) + 1);
+  const shortOfReady = (ready: string) => {
+    const [have, want] = ready.split("/").map(Number);
+    return !(have >= want);
+  };
   return {
     total: pods.length,
     byNode: [...byNode].map(([node, count]) => ({ node, pods: count })),
-    unsettled: pods.filter((p) => p.phase !== "Running" || p.waitingReason),
+    unsettled: pods.filter((p) => p.phase !== "Running" || shortOfReady(p.ready)),
     truncated: false,
     ...over,
   };
@@ -713,6 +725,62 @@ describe("Overview — the not-ready list", () => {
         expect(pill?.getAttribute("data-bad"), name).toBe("true");
       }
     }
+  });
+
+  it("holds a crash-looping pod in the list through the instant it is not backing off", async () => {
+    // The flicker, at the screen it was observed on. `aa-worker-0` is the same
+    // pod as in the fixture above with one field changed — the waiting reason
+    // the kubelet stops reporting while the container is briefly up. Nothing
+    // else about the pod moves: still 0/1 ready, still 41 restarts, still
+    // phase "Running". Two of four consecutive screenshots of this list caught
+    // it and two did not.
+    const between = SICK_PODS.map((p) =>
+      p.name === "aa-worker-0" ? { ...p, waitingReason: "", restarts: 41 } : p,
+    );
+    core.listDeployments.mockResolvedValue({ deployments: SICK_DEPLOYMENTS });
+    core.listStatefulSets.mockResolvedValue({ statefulsets: SICK_STATEFULSETS });
+    core.listDaemonSets.mockResolvedValue({ daemonsets: SICK_DAEMONSETS });
+    core.podOverview.mockResolvedValue({ pods: anOverview(between) });
+    open();
+
+    // Same six rows, same order: the pod holds its place at the top of the
+    // danger band rather than vanishing and re-appearing under the reader.
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+    expect(notReadyNames()).toEqual([
+      "aa-worker-0",
+      "cc-log-agent",
+      "mm-payments-db",
+      "zz-checkout-api",
+      "bb-queue-0",
+      "dd-mystery-0",
+    ]);
+    const row = notReadyRow("aa-worker-0")!;
+    expect(row.querySelector(".status")?.getAttribute("data-kind")).toBe("danger");
+    expect(row.querySelector(".status")?.textContent).toBe("NotReady");
+
+    // And the two pods that must NOT be dragged in with it, both of which are
+    // also short of ready: one finished, one never started.
+    expect(notReadyRow("done-backup-0")).toBeUndefined();
+    expect(notReadyRow("ok-web-0")).toBeUndefined();
+  });
+
+  it("counts that pod in the pods tile too, at the same severity", async () => {
+    // The tile reads `podFlagged` over the same list, so a pod that fell out
+    // of the rows fell out of the count and its colour with it — "4 not ready"
+    // one second and "3 not ready" the next, on an unchanged cluster.
+    const between = SICK_PODS.map((p) =>
+      p.name === "aa-worker-0" ? { ...p, waitingReason: "", restarts: 41 } : p,
+    );
+    core.podOverview.mockResolvedValue({ pods: anOverview(between) });
+    core.listDeployments.mockResolvedValue({ deployments: SICK_DEPLOYMENTS });
+    core.listStatefulSets.mockResolvedValue({ statefulsets: SICK_STATEFULSETS });
+    core.listDaemonSets.mockResolvedValue({ daemonsets: SICK_DAEMONSETS });
+    open();
+
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+    // Three pods flagged — the crash-looper, the Pending one and the one in a
+    // phase core cannot read — and NOT the Succeeded or the healthy one.
+    expect(screen.getByText("3 not ready")).toBeTruthy();
   });
 
   it("names every trailing fact, so a reader hears more than 'checkout 9/12'", async () => {

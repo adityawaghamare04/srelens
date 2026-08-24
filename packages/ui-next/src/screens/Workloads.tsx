@@ -162,7 +162,7 @@ function fromPod(row: ListRow): WorkloadRow {
   // its own unhealthy dot — which comes from `podFlagged`, which asks this
   // same function. One reading, so the dot and the word cannot disagree.
   return {
-    ...fromVerdict(p, "Pod", p.ready, podStatus(p.phase, p.waitingReason)),
+    ...fromVerdict(p, "Pod", p.ready, podStatus(p)),
     restarts: p.restarts,
     cpu: p.cpu,
     memory: p.memory,

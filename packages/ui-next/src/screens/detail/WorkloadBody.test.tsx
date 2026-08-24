@@ -474,6 +474,24 @@ describe("WorkloadDetailsBody", () => {
       expect(screen.queryByText("Running")).toBeNull();
     });
 
+    it("keeps that same pod condemned in the table between its restarts", async () => {
+      // Same pod, one moment later: the container is up, so there is no
+      // waiting reason to print, and the table used to fall back to a green
+      // "Running" — in a table the reader opened BECAUSE the Deployment above
+      // it was degraded, which is the worst place to lose the fact.
+      podsForSelector.mockResolvedValue({
+        pods: [{ ...POD_A, ready: "0/1", restarts: 7, waitingReason: "" }],
+      });
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", { replicas: 1, selector: { matchLabels: { app: "web" } } })}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("NotReady")).toBeDefined());
+      expect(screen.queryByText("Running")).toBeNull();
+    });
+
     it("formats CPU and memory the way the list and the Workloads table do, not a second way", async () => {
       // One pod read "2 410m" / "3.1 Gi" in the list and "2.410" / "3174 Mi"
       // in this very table, two panes apart, because this column set did its

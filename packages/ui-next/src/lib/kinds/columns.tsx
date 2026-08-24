@@ -82,7 +82,7 @@ const metricSort = (value: number | undefined) => value ?? -1;
  * disagree — they once did, on a crash-looping pod, because this read
  * `row.phase` alone and a pod in `CrashLoopBackOff` still reports "Running".
  */
-export const podFlagged = (row: PodRow): boolean => podStatus(row.phase, row.waitingReason).flagged;
+export const podFlagged = (row: PodRow): boolean => podStatus(row).flagged;
 
 export const podColumns: Column<PodRow>[] = [
   { key: "name", header: "Name", sortable: true },
@@ -91,13 +91,13 @@ export const podColumns: Column<PodRow>[] = [
   {
     key: "phase", header: "Status", sortable: true,
     render: (p) => {
-      const { status, health } = podStatus(p.phase, p.waitingReason);
+      const { status, health } = podStatus(p);
       return <StatusPill status={status} kind={health} />;
     },
     // Sorts on what the pill shows, not on the raw phase underneath it:
     // otherwise every waiting pod scatters under "Pending" and "Running"
     // instead of grouping with the other pods in the same trouble.
-    getSortValue: (p) => podStatus(p.phase, p.waitingReason).status,
+    getSortValue: (p) => podStatus(p).status,
   },
   { key: "restarts", header: "Restarts", sortable: true, align: "end" },
   { key: "cpu", header: "CPU", sortable: true, align: "end", render: (p) => metric(p.cpu, formatCpu), getSortValue: (p) => metricSort(p.cpu) },

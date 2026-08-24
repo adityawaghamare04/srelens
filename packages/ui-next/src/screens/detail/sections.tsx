@@ -335,7 +335,7 @@ const RELATED_POD_COLUMNS: Column<RelatedPod>[] = [
     key: "status",
     header: "Status",
     render: (p) => {
-      const status = podStatus(p.phase, p.waitingReason);
+      const status = podStatus(p);
       return <StatusPill status={status.status} kind={status.health} tinted />;
     },
   },

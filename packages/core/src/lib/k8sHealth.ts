@@ -18,8 +18,14 @@ export type HealthKind = "neutral" | "success" | "warning" | "danger" | "info";
  * either design passes the result straight into its own pill.
  *
  * `Ready`/`NotReady` are here because a Node reports readiness where a Pod
- * reports a phase, and both go through this one table; a Pod never reports
- * either, and a Node never reports `Running`.
+ * reports a phase, and both go through this one table; a Node never reports
+ * `Running`.
+ *
+ * `NotReady` is no longer a Node's word alone. `podStatus` reaches for it for
+ * a pod that is up and short of ready — a crash-looper caught between
+ * restarts, which the API gives no phase and no waiting reason for — because
+ * the fact is the same fact, and a second word for it would be a second
+ * entry in this table to keep in step with the first.
  */
 export function phaseKind(phase: string): HealthKind {
   switch (phase) {

@@ -580,7 +580,7 @@ function podsTile(pods: OverviewPods): Tile {
  * the two rather than a colour this file chose.
  */
 function worst(flagged: PodSummary[]): HealthKind {
-  return flagged.some((pod) => podStatus(pod.phase, pod.waitingReason).health === "danger")
+  return flagged.some((pod) => podStatus(pod).health === "danger")
     ? "danger"
     : "warning";
 }
@@ -1111,7 +1111,7 @@ function notReadyRows(workloads: OverviewWorkloads, unsettled: PodSummary[] | un
       kind: "Pod",
       name: row.name,
       namespace: row.namespace,
-      verdict: podStatus(row.phase, row.waitingReason),
+      verdict: podStatus(row),
       ratio: row.ready,
     });
   }
