@@ -71,4 +71,4 @@ export { Tooltip, type TooltipProps } from "./Tooltip";
 export { WorkspaceSwitcher, type WorkspaceSummary, type WorkspaceSwitcherProps } from "./WorkspaceSwitcher";
 export { type ClusterLink, type WorkspaceCluster, WorkspaceTree, type WorkspaceTreeProps } from "./WorkspaceTree";
 export { cx } from "./cx";
-export { toneColor, toneWash, type Tone } from "./tone";
+export { loadTone, toneColor, toneWash, type Tone } from "./tone";

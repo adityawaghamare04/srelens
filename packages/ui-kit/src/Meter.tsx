@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { toneColor, type Tone } from "./tone";
+import { loadTone, toneColor, type Tone } from "./tone";
 import { filled } from "./slot";
 
 /**
@@ -42,7 +42,7 @@ type MeterProps = {
  * shows it above, a bare one beside, never both. (#318)
  */
 export function Meter({ value, tone, label, detail, ...naming }: MeterProps) {
-  const resolved: Tone = tone ?? (value > 80 ? "sev" : value > 65 ? "warn" : "ok");
+  const resolved: Tone = tone ?? loadTone(value);
   const width = Math.min(Math.max(value, 0), 100);
   // These figures are ratios — a third of three pods is 33.33333333333333 —
   // and fourteen decimal places crowd the bar on screen and are worse read
