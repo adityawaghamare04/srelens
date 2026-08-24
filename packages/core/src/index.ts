@@ -44,6 +44,7 @@ export * from "./lib/kinds";
 export * from "./lib/kubectlMapper";
 export * from "./lib/llm";
 export * from "./lib/logBuffer";
+export * from "./lib/logConnectionStatus";
 export * from "./lib/logsStream";
 export * from "./lib/logTerms";
 export * from "./lib/manifest";

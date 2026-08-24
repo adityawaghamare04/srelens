@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { tallyLogTerms, logLineHealth } from "./logTerms";
+import { tallyLogTerms, logLineHealth, logLineLevel } from "./logTerms";
 import type { LogLine } from "./logBuffer";
 
 const line = (text: string, source = ""): LogLine => ({ source, text });
@@ -193,5 +193,74 @@ describe("logLineHealth", () => {
     // should trip the level scan; the classic-derived word-boundary regexes
     // guard exactly this.
     expect(logLineHealth("the informant forewarned the team")).toBe("neutral");
+  });
+});
+
+describe("logLineLevel", () => {
+  // The ONE scan that decides what level word a raw log line carries — spelt
+  // as the line itself spells it, for the level column. `logLineHealth`
+  // above is now a consumer of this, not a second regex over the same text.
+
+  it("returns the level word exactly as the line spelled it, not a tone name", () => {
+    expect(logLineLevel("connection error: pool exhausted")).toBe("error");
+    expect(logLineLevel("14:07:41.902 ERROR pool timeout waited=30.0s")).toBe("ERROR");
+    expect(logLineLevel("WARNING: certificate expires in 6 days")).toBe("WARNING");
+    expect(logLineLevel("warn pool saturated, queueing request")).toBe("warn");
+    expect(logLineLevel("info starting checkout-api build=4f2a1c")).toBe("info");
+  });
+
+  it("recognises debug and trace, which carry no tone of their own", () => {
+    expect(logLineLevel("debug cache miss for key=42")).toBe("debug");
+    expect(logLineLevel("trace entering handler")).toBe("trace");
+  });
+
+  it("returns undefined when the line carries no recognised level word", () => {
+    expect(logLineLevel("GET /healthz 200 1ms")).toBeUndefined();
+    expect(logLineLevel("")).toBeUndefined();
+  });
+
+  it("does not match a level word as a substring of an unrelated word", () => {
+    expect(logLineLevel("the informant forewarned the team")).toBeUndefined();
+  });
+
+  it("prefers the worst word when a line carries more than one, same as logLineHealth", () => {
+    // 'error' (danger family) beats 'warn' (warning family) beats 'info',
+    // exactly the precedence logLineHealth checks — because logLineHealth is
+    // now derived from this scan, not a second one.
+    expect(logLineLevel("warn: escalated to error after 3 retries")).toBe("error");
+  });
+
+  it("logLineHealth is derived from this scan, not a second regex over the same text", () => {
+    // Every level word this function can return either maps to the same
+    // HealthKind logLineHealth already returned for it, or — for a word this
+    // function recognises but logLineHealth never toned (debug, trace) —
+    // logLineHealth still reads neutral, unchanged from before the refactor.
+    const samples = [
+      "connection error: pool exhausted",
+      "fatal: liveness deadline exceeded, terminating",
+      "panic: runtime error: index out of range",
+      "warn pool saturated, queueing request",
+      "WARNING: certificate expires in 6 days",
+      "info starting checkout-api build=4f2a1c",
+      "debug cache miss for key=42",
+      "trace entering handler",
+      "GET /healthz 200 1ms",
+    ];
+    for (const text of samples) {
+      const level = logLineLevel(text);
+      const health = logLineHealth(text);
+      if (level === undefined) {
+        expect(health).toBe("neutral");
+      } else if (/^(?:error|fatal|panic)$/i.test(level)) {
+        expect(health).toBe("danger");
+      } else if (/^warn(?:ing)?$/i.test(level)) {
+        expect(health).toBe("warning");
+      } else if (/^info$/i.test(level)) {
+        expect(health).toBe("info");
+      } else {
+        // debug / trace: recognised as a level, but not a tone.
+        expect(health).toBe("neutral");
+      }
+    }
   });
 });

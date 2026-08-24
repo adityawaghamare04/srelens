@@ -102,6 +102,12 @@ const DANGER_WORD = /\b(?:error|fatal|panic)\b/i;
 const WARNING_WORD = /\bwarn(?:ing)?\b/i;
 /** ditto, the info tone. */
 const INFO_WORD = /\binfo\b/i;
+/**
+ * Recognised but untoned: `logLineHealth` has never coloured these, and this
+ * scan does not start now — see {@link logLineLevel}'s doc for why they are
+ * still worth returning to a caller that wants the level column's word.
+ */
+const DEBUG_TRACE_WORD = /\b(?:debug|trace)\b/i;
 
 function isBareNumeric(token: string): boolean {
   return OPENS_WITH_DIGIT.test(token);
@@ -144,35 +150,79 @@ function lineTerm(tokens: readonly string[], kvFrequency: ReadonlyMap<string, nu
 }
 
 /**
- * A raw log line's severity — the ONE place in srelens that decides this,
- * on core's canonical `HealthKind` vocabulary (`./k8sHealth`).
+ * A raw log line's level word, exactly as the line spelled it — `"error"`,
+ * `"WARNING"`, `"warn"`, `"info"`, `"debug"`, `"trace"` — or `undefined` when
+ * the line carries none. The ONE place in srelens that scans a line for this;
+ * `logLineHealth` below and the Logs screen's level column both read it
+ * through here rather than running their own regex over the same text.
  *
  * This is a **text-scan heuristic, not a parsed field** — say so plainly,
- * because the stream gives us nothing structured to read instead.
- * `LogLine` (`./logBuffer`) carries only `{ source, text }`; there is no
- * level column anywhere between the backend and here. So this scans the
- * whole raw line, case-insensitively, for a recognised severity word —
- * `error` / `fatal` / `panic` → danger, `warn(ing)` → warning, `info` →
- * info, anything else → neutral — the same shape of check classic already
- * runs (`lineLevel`, `apps/desktop/src/components/LogsView.tsx:61`), just
- * projected onto `HealthKind` instead of classic's own local union so this
- * is a second consumer of one rule, not a second rule. If `LogLine` ever
- * grows a real parsed level, THIS is the one place to repoint at it — every
- * other caller (the term tally below, and the Logs screen's `LogLine`
- * level prop and level filter) goes through here rather than re-deriving
- * severity on its own, which is exactly what the plan's "every status word
- * and tone comes from core" constraint is guarding against: a second
- * hand-paired label/tone table, invented at the call site.
+ * because the stream gives us nothing structured to read instead. `LogLine`
+ * (`./logBuffer`) carries only `{ source, text }`; there is no level column
+ * anywhere between the backend and here. So this scans the whole raw line,
+ * case-insensitively, for a recognised level word — the same vocabulary
+ * classic's `lineLevel` already keys off
+ * (`apps/desktop/src/components/LogsView.tsx:61`), plus `debug`/`trace`,
+ * which classic never needed a colour for but a level column still has room
+ * to print. If `LogLine` ever grows a real parsed level, THIS is the one
+ * function to repoint at it.
  *
- * Checked worst-first (danger, then warning, then info) so a line that
- * somehow carries more than one recognised word — "escalated to error
- * after a warn" — is not toned by whichever regex happened to match first.
+ * Checked worst-first (danger family, then warning, then info, then
+ * debug/trace) so a line that somehow carries more than one recognised word
+ * — "escalated to error after a warn" — returns the word that matters more,
+ * not whichever regex happened to match first. This is the same precedence
+ * `logLineHealth` checked before this function existed; it is preserved here
+ * so factoring the scan out changes nothing about which word wins.
+ *
+ * **Returns the literal word, not `logLineHealth`'s tone name** — the level
+ * column wants "error", and printing `logLineHealth`'s "danger" there was
+ * the bug this function exists to fix. One caveat: `panic` is danger-family
+ * here (as it always has been) but is not a key the kit's `LEVEL_TONE`
+ * (`packages/ui-kit/src/LogLine.tsx`) recognises, so a line whose only level
+ * word is `panic` will still print "panic" in the column but the kit tones
+ * it `muted` rather than `sev` — narrowing this function to drop `panic`
+ * would silently change what a real panic line reports, so the mismatch is
+ * left for the kit to close instead.
+ */
+export function logLineLevel(text: string): string | undefined {
+  return (
+    DANGER_WORD.exec(text)?.[0] ??
+    WARNING_WORD.exec(text)?.[0] ??
+    INFO_WORD.exec(text)?.[0] ??
+    DEBUG_TRACE_WORD.exec(text)?.[0] ??
+    undefined
+  );
+}
+
+/** {@link logLineLevel}'s recognised words, worst-first, mapped to their tone. */
+const LEVEL_HEALTH: Record<string, HealthKind> = {
+  error: "danger",
+  fatal: "danger",
+  panic: "danger",
+  warn: "warning",
+  warning: "warning",
+  info: "info",
+};
+
+/**
+ * A raw log line's severity — the ONE place in srelens that decides this, on
+ * core's canonical `HealthKind` vocabulary (`./k8sHealth`).
+ *
+ * Derived from {@link logLineLevel} rather than scanning the text itself:
+ * there is exactly one rule for "what level word does this line carry", and
+ * this is a second consumer of it, not a second copy of the regexes. A level
+ * `logLineLevel` recognises but does not tone — `debug`, `trace` — reads
+ * `neutral` here, same as no level word at all; every other caller (the term
+ * tally below, and the Logs screen's `LogLine` level prop and level filter)
+ * goes through here rather than re-deriving severity on its own, which is
+ * exactly what the plan's "every status word and tone comes from core"
+ * constraint is guarding against: a second hand-paired label/tone table,
+ * invented at the call site.
  */
 export function logLineHealth(text: string): HealthKind {
-  if (DANGER_WORD.test(text)) return "danger";
-  if (WARNING_WORD.test(text)) return "warning";
-  if (INFO_WORD.test(text)) return "info";
-  return "neutral";
+  const level = logLineLevel(text);
+  if (level === undefined) return "neutral";
+  return LEVEL_HEALTH[level.toLowerCase()] ?? "neutral";
 }
 
 const HEALTH_RANK: Record<HealthKind, number> = {
