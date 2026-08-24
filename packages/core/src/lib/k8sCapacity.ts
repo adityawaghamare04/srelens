@@ -61,10 +61,25 @@ export function nodeUsage(
  * Cluster-wide totals for the capacity strip: `312 / 460 cores`, `1.4 / 1.9
  * TiB`. `null` when nothing can be said — an empty cluster, or one with no
  * metrics-server anywhere.
+ *
+ * `nodesReporting` / `nodesTotal` travel with the sums because the sums are
+ * partial whenever they differ: `cpu`/`memory` are computed only from nodes
+ * that returned a metric (see `clusterCapacity`'s comment for why), so a
+ * cluster where two of three nodes report gives a percentage over those two
+ * — and a consumer that shows the resulting number without also showing
+ * `nodesReporting` of `nodesTotal` is presenting a partial answer as if it
+ * were a whole one. This was originally left for call sites to reassemble
+ * from a separate count; that convention is exactly what let one screen
+ * qualify a percentage while another didn't, so the qualifier now travels
+ * with the number instead of being left to each call site's discipline.
  */
 export interface ClusterCapacity {
   cpu: { usedMillicores: number; allocatableMillicores: number } | null;
   memory: { usedMiB: number; allocatableMiB: number } | null;
+  /** How many nodes contributed a metric to the sums above. */
+  nodesReporting: number;
+  /** How many nodes there are in total, reporting or not. */
+  nodesTotal: number;
 }
 
 /**
@@ -81,14 +96,15 @@ export interface ClusterCapacity {
  * level to the sum.
  *
  * The consequence: the total this returns describes only the nodes that
- * reported, not the whole cluster's capacity. Nothing in the return type
- * flags that as partial — callers showing this number alongside a node count
- * or a "metrics unavailable" fact (the rail, per the overview spec) are what
- * keeps a partial answer from silently reading as a whole one; this function
- * cannot do that on its own with the shape it returns.
+ * reported, not the whole cluster's capacity. `nodesReporting` and
+ * `nodesTotal` carry that fact on the return value itself, so a caller
+ * cannot show the percentage without the shortfall being right there to
+ * show alongside it.
  *
  * When no node reports a metric, the sum would be over an empty set — that
  * is `null`, the same "no answer" rule as a single node, not a `0` total.
+ * The counts are still reported in that case (`nodesReporting: 0`), since
+ * they are not part of the "no answer" the sums represent.
  */
 export function clusterCapacity(nodes: NodeSummary[], metrics: NodeMetric[]): ClusterCapacity {
   const byName = new Map(metrics.map((m) => [m.name, m]));
@@ -109,10 +125,16 @@ export function clusterCapacity(nodes: NodeSummary[], metrics: NodeMetric[]): Cl
     allocatableMiB += node.allocatableMemoryMiB;
   }
 
-  if (reporting === 0) return { cpu: null, memory: null };
+  const nodesTotal = nodes.length;
+
+  if (reporting === 0) {
+    return { cpu: null, memory: null, nodesReporting: 0, nodesTotal };
+  }
 
   return {
     cpu: { usedMillicores, allocatableMillicores },
     memory: { usedMiB, allocatableMiB },
+    nodesReporting: reporting,
+    nodesTotal,
   };
 }

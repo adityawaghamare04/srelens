@@ -90,7 +90,7 @@ describe("nodeUsage — pods", () => {
 });
 
 describe("clusterCapacity — the ordinary case", () => {
-  it("sums usage and allocatable across every node reporting a metric", () => {
+  it("sums usage and allocatable across every node reporting a metric, and says all of them reported", () => {
     const nodes = [
       node({ name: "a", allocatableCpuMillicores: 4000, allocatableMemoryMiB: 16000 }),
       node({ name: "b", allocatableCpuMillicores: 4000, allocatableMemoryMiB: 16000 }),
@@ -102,39 +102,53 @@ describe("clusterCapacity — the ordinary case", () => {
     const capacity = clusterCapacity(nodes, metrics);
     expect(capacity.cpu).toEqual({ usedMillicores: 4000, allocatableMillicores: 8000 });
     expect(capacity.memory).toEqual({ usedMiB: 16000, allocatableMiB: 32000 });
+    expect(capacity.nodesReporting).toBe(2);
+    expect(capacity.nodesTotal).toBe(2);
   });
 });
 
 describe("clusterCapacity — no node has a metric", () => {
-  it("is null — the same absence rule as a single node, not a zero total", () => {
+  it("is null — the same absence rule as a single node, not a zero total — but still says how many nodes there are", () => {
     const nodes = [node({ name: "a" }), node({ name: "b" })];
     const capacity = clusterCapacity(nodes, []);
     expect(capacity.cpu).toBeNull();
     expect(capacity.memory).toBeNull();
+    expect(capacity.nodesReporting).toBe(0);
+    expect(capacity.nodesTotal).toBe(2);
   });
 });
 
 describe("clusterCapacity — an empty cluster", () => {
-  it("is null", () => {
+  it("is null, with zero of zero nodes reporting", () => {
     const capacity = clusterCapacity([], []);
     expect(capacity.cpu).toBeNull();
     expect(capacity.memory).toBeNull();
+    expect(capacity.nodesReporting).toBe(0);
+    expect(capacity.nodesTotal).toBe(0);
   });
 });
 
 describe("clusterCapacity — some nodes have metrics, others do not", () => {
-  it("sums only the nodes that reported, on both sides of the ratio, so the total stays internally consistent", () => {
+  it("pins the qualified partial: two of three nodes report, the sum covers only those two, and the counts say '2 of 3' right on the return value", () => {
     const nodes = [
       node({ name: "a", allocatableCpuMillicores: 4000, allocatableMemoryMiB: 16000 }),
-      // "b" has no metric — joined since the last scrape, say.
-      node({ name: "b", allocatableCpuMillicores: 6000, allocatableMemoryMiB: 24000 }),
+      node({ name: "b", allocatableCpuMillicores: 2000, allocatableMemoryMiB: 8000 }),
+      // "c" has no metric — joined since the last scrape, say.
+      node({ name: "c", allocatableCpuMillicores: 6000, allocatableMemoryMiB: 24000 }),
     ];
-    const metrics = [metric({ name: "a", cpuMillicores: 1000, memoryMiB: 4000 })];
+    const metrics = [
+      metric({ name: "a", cpuMillicores: 1000, memoryMiB: 4000 }),
+      metric({ name: "b", cpuMillicores: 500, memoryMiB: 2000 }),
+    ];
     const capacity = clusterCapacity(nodes, metrics);
-    // Node "b"'s 6000m/24000MiB of capacity is excluded entirely, not folded
+    // Node "c"'s 6000m/24000MiB of capacity is excluded entirely, not folded
     // in as an allocatable with zero usage — that would understate the
     // percentage by inventing a reading nobody took.
-    expect(capacity.cpu).toEqual({ usedMillicores: 1000, allocatableMillicores: 4000 });
-    expect(capacity.memory).toEqual({ usedMiB: 4000, allocatableMiB: 16000 });
+    expect(capacity.cpu).toEqual({ usedMillicores: 1500, allocatableMillicores: 6000 });
+    expect(capacity.memory).toEqual({ usedMiB: 6000, allocatableMiB: 24000 });
+    // The qualifier travels with the number: a consumer cannot show the 25%
+    // CPU figure above without "2 of 3" being right there to show beside it.
+    expect(capacity.nodesReporting).toBe(2);
+    expect(capacity.nodesTotal).toBe(3);
   });
 });
