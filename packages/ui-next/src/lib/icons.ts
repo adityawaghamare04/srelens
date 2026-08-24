@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  Ban,
   BellRing,
   Bot,
   Box,
@@ -56,6 +57,7 @@ import {
   TriangleAlert,
   UserRoundCheck,
   UserRoundCog,
+  Waves,
   Waypoints,
   Webhook,
   Wrench,
@@ -192,6 +194,10 @@ export const Icons = {
   scale: Scaling,
   restart: RotateCw,
   evict: LogOut,
+  /** Stop new pods being scheduled to a node — the design's crossed circle. */
+  cordon: Ban,
+  /** Move every pod off a node — the design's wave. */
+  drain: Waves,
   trash: Trash2,
   pause: Pause,
   play: Play,

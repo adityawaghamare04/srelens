@@ -1,11 +1,23 @@
 import { useId, type ReactNode } from "react";
 import { cx } from "./cx";
+import { filled } from "./slot";
 
 export interface SideRailProps {
   /** The main region. Gets `min-w-0` so a wide table scrolls inside itself. */
   children: ReactNode;
   /** The rail's own heading, small caps. */
   head: ReactNode;
+  /**
+   * The MAIN region's heading, in the same small-caps strip — the cluster
+   * overview's `prod-eu · v1.31.4`, which the design draws level with the
+   * rail's own head.
+   *
+   * Optional because most screens put a filter bar or a table straight under
+   * the toolbar and have nothing to say twice. Not a landmark label the way
+   * {@link SideRailProps.head} is: the main region is where the reader already
+   * is, and a second `complementary` around it would be noise.
+   */
+  mainHead?: ReactNode;
   /** What the rail holds — a run of `Section`s. */
   rail: ReactNode;
   /** Per screen. Events 250, custom resources 264, overview 286, logs 272. */
@@ -59,12 +71,17 @@ export interface SideRailProps {
  * scrolls inside it (a table, a log) is the caller's and usually wants a
  * `.scroll` box of its own beneath a header that stays put.
  */
-export function SideRail({ children, head, rail, width, className }: SideRailProps) {
+export function SideRail({ children, head, mainHead, rail, width, className }: SideRailProps) {
   const headId = useId();
 
   return (
     <div className={cx("flex min-h-0 flex-1", className)}>
       <div data-slot="rail-main" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {filled(mainHead) && (
+          <div data-slot="main-head" className="pane-head">
+            {mainHead}
+          </div>
+        )}
         {children}
       </div>
       {/* Named by the head rather than by an `aria-label` prop: the head is a

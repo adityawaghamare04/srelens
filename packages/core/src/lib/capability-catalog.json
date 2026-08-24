@@ -15,6 +15,11 @@
     "destructive": false
   },
   {
+    "id": "k8s.clusterFacts",
+    "readOnly": true,
+    "destructive": false
+  },
+  {
     "id": "k8s.clusterInfo",
     "readOnly": true,
     "destructive": false
@@ -305,12 +310,22 @@
     "destructive": false
   },
   {
+    "id": "k8s.podCount",
+    "readOnly": true,
+    "destructive": false
+  },
+  {
     "id": "k8s.podLogs",
     "readOnly": true,
     "destructive": false
   },
   {
     "id": "k8s.podMetrics",
+    "readOnly": true,
+    "destructive": false
+  },
+  {
+    "id": "k8s.podOverview",
     "readOnly": true,
     "destructive": false
   },

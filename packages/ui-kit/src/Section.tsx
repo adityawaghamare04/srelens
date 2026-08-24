@@ -31,6 +31,27 @@ export interface SectionProps {
    * said otherwise, and there would be two answers to one question.
    */
   onToggle?: (next: boolean) => void;
+  /**
+   * Whether the CONTENT keeps the block's horizontal inset. `false` runs it to
+   * both edges of the surface — the design's own `padded: false`, which it
+   * names for "tables and list rows" (§D): a table inside an inset draws its
+   * hairlines short of the rules dividing the sections around it, and a run of
+   * list rows loses the full-width hover fill.
+   *
+   * The HEADING keeps the inset either way. It is a label sitting over the
+   * band rather than part of it, and a heading flush to the window edge lines
+   * up with nothing.
+   */
+  padded?: boolean;
+  /**
+   * Head the block in the design's small-caps section voice rather than the
+   * detail body's small bold line — `SubHead`'s two variants.
+   *
+   * Off by default because the detail pane, which is every call site this
+   * component was built for, draws the bold one. The cluster overview's bands
+   * are the frame that asks for the other.
+   */
+  smallCaps?: boolean;
 }
 
 /** Inline rather than an icon-set import: the kit takes no dependency on lucide. */
@@ -102,15 +123,27 @@ function Caret({ open }: { open: boolean }) {
  * `aria-controls` is its optional half, and it is the half almost no screen
  * reader acts on.
  */
-export function Section({ title, children, className, open = true, onToggle }: SectionProps) {
+export function Section({
+  title,
+  children,
+  className,
+  open = true,
+  onToggle,
+  padded = true,
+  smallCaps = false,
+}: SectionProps) {
   const headed = filled(title);
   const folds = headed && onToggle !== undefined;
   const showing = folds ? open : true;
 
   return (
-    <section className={cx("section", className)} data-open={folds ? showing : undefined}>
+    <section
+      className={cx("section", className)}
+      data-open={folds ? showing : undefined}
+      data-padded={padded ? undefined : "false"}
+    >
       {headed && (
-        <SubHead className="section-title">
+        <SubHead className="section-title" variant={smallCaps ? "caps" : "bold"}>
           {folds ? (
             <button
               // A bare button inside a form is a submit button (bd24d1a).

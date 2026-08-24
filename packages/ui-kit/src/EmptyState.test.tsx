@@ -65,3 +65,35 @@ describe("EmptyState", () => {
     expect(container.querySelector('[data-slot="action"]')).toBeNull();
   });
 });
+
+/**
+ * The rail-sized form. `py-10` around three wrapped lines in a 286px rail
+ * spends more height stating an absence than the section below it gets to
+ * exist in — the cluster overview's `Fleet` went below the fold behind one.
+ */
+describe("a compact empty state", () => {
+  it("spends a quarter of the padding, and a step less type", () => {
+    const { container } = render(<EmptyState title="No incident feed yet" hint="Not yet." compact />);
+    const root = container.firstElementChild;
+    expect(root?.getAttribute("data-compact")).toBe("true");
+    expect(root?.className).toContain("py-3");
+    expect(root?.className).not.toContain("py-10");
+  });
+
+  it("emits one padding, never two competing ones", () => {
+    // Both forms are utilities, and two utilities setting the same property
+    // are resolved by the generated stylesheet's order rather than by the
+    // order the JSX writes them. Exactly one set is emitted, so a caller
+    // cannot be surprised by which one wins.
+    const compact = render(<EmptyState title="t" compact />).container.firstElementChild;
+    expect(compact?.className).not.toContain("px-6");
+    expect(compact?.className).not.toContain("gap-1.5");
+  });
+
+  it("is the page-sized form unless asked", () => {
+    const { container } = render(<EmptyState title="No pods" />);
+    const root = container.firstElementChild;
+    expect(root?.getAttribute("data-compact")).toBeNull();
+    expect(root?.className).toContain("py-10");
+  });
+});

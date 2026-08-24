@@ -22,6 +22,31 @@ export function askQuestion(name: string, flagged: boolean): string {
 }
 
 /**
+ * The design's unhealthy dot, and the word that has to go with it.
+ *
+ * Extracted from {@link withRowAffordances} because a second table draws the
+ * dot without the chip: the cluster overview's nodes table
+ * (`screens/Overview.tsx`) has a per-row action group where the ask chip
+ * would sit, so it takes half the pair. Two copies of six lines of markup is
+ * how one of them ends up tinted and silent.
+ *
+ * Never colour alone: the reason rides along as `sr-only` text, the same
+ * contract the cluster rail's `unavailable` follows (`ClusterRail.tsx`).
+ */
+export function UnhealthyDot() {
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ background: toneColor("sev") }}
+      />
+      <span className="sr-only">Needs attention</span>
+    </>
+  );
+}
+
+/**
  * The two row affordances the design mock has that the classic port lacked —
  * shared by every screen that lists rows, rather than duplicated per one.
  * `Resources.tsx` and `Workloads.tsx` each built this independently because
@@ -54,16 +79,7 @@ export function withRowAffordances<Row extends ListRow>(
       ...column,
       render: (row: Row) => (
         <span className="flex items-center gap-1.5">
-          {isFlagged(row) && (
-            <>
-              <span
-                aria-hidden="true"
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ background: toneColor("sev") }}
-              />
-              <span className="sr-only">Needs attention</span>
-            </>
-          )}
+          {isFlagged(row) && <UnhealthyDot />}
           <span className="truncate">{render ? render(row) : row.name}</span>
         </span>
       ),

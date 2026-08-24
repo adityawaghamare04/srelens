@@ -1,32 +1,12 @@
 import { useSyncExternalStore } from "react";
 import { getForwards, subscribeForwards, type ClusterContext } from "@srelens/core";
-import { StatusBar, type StatusSegment, type Tone } from "@srelens/ui-kit";
+import { StatusBar, type StatusSegment } from "@srelens/ui-kit";
 import { useConsole } from "../console";
 import { useInfo } from "../lib/probe";
 import { openTab, useActiveCluster } from "../lib/tabsStore";
-import { useWorkspaceView, type LinkState } from "../lib/workspace";
-
-/**
- * What the link says, in words. The mock said it in colour alone — a green dot
- * for connected, a red one for unreachable — which is no readout at all for
- * anyone who cannot separate the two. The kit's segment requires a string, so
- * the words are the readout and the tone is the second channel. "Unreachable"
- * rather than "Error" for `error`: the failure being reported is the cluster's,
- * not the app's, and the person reading it wants to know which. (#320)
- */
-const LINK_WORD: Record<LinkState, string> = {
-  connected: "Connected",
-  connecting: "Connecting",
-  disconnected: "Disconnected",
-  error: "Unreachable",
-};
-
-const LINK_TONE: Record<LinkState, Tone> = {
-  connected: "ok",
-  connecting: "info",
-  disconnected: "muted",
-  error: "sev",
-};
+// The words and their tones live beside `LinkState` rather than here: the
+// overview rail reads the same link and must say the same thing about it.
+import { LINK_TONE, LINK_WORD, useWorkspaceView } from "../lib/workspace";
 
 /**
  * The strip along the bottom of the window: which cluster this window is

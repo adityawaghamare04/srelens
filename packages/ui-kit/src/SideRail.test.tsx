@@ -89,3 +89,45 @@ describe("the rail's stylesheet", () => {
     expect(body).not.toMatch(/[^-]width:/);
   });
 });
+
+/**
+ * The design heads the MAIN region too on the cluster overview —
+ * `prod-eu · v1.31.4`, level with the rail's own `At a glance`.
+ */
+describe("SideRail's main head", () => {
+  it("draws the main region's head in the same strip the rail's wears", () => {
+    const { container } = render(
+      <SideRail head="At a glance" mainHead="prod-eu · v1.31.4" rail="r" width={286}>
+        main
+      </SideRail>,
+    );
+    const main = container.querySelector("[data-slot='rail-main']");
+    const head = main?.querySelector("[data-slot='main-head']");
+    expect(head?.textContent).toBe("prod-eu · v1.31.4");
+    // `.pane-head`, not a class of its own: it is the same small-caps bar, and
+    // a second copy of the recipe is a second thing to keep in step.
+    expect(head?.className).toContain("pane-head");
+  });
+
+  it("draws nothing at all when the screen has no head for its main region", () => {
+    // Most screens put a filter bar or a table straight under the toolbar. An
+    // empty strip is still a strip: it holds height and draws a rule.
+    const { container } = render(
+      <SideRail head="By reason" rail="r" width={250}>
+        main
+      </SideRail>,
+    );
+    expect(container.querySelector("[data-slot='main-head']")).toBeNull();
+  });
+
+  it("is not a second landmark", () => {
+    // The rail is `complementary` because it is material a reader may want to
+    // skip. The main region is where the reader already is.
+    render(
+      <SideRail head="At a glance" mainHead="prod-eu" rail="r" width={286}>
+        main
+      </SideRail>,
+    );
+    expect(screen.getAllByRole("complementary")).toHaveLength(1);
+  });
+});

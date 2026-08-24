@@ -195,3 +195,88 @@ describe("a run of sections", () => {
     expect(components).toContain(".section-caret[data-open=\"true\"]");
   });
 });
+
+/**
+ * The two shapes the design gives a run of sections. The detail body keeps
+ * what it had; the cluster overview's bands are headed in small caps and run
+ * their content to both edges of the surface (§7, §D's `padded: false`).
+ */
+describe("a section that heads a page", () => {
+  it("stays inset and bold unless asked otherwise", () => {
+    // Every call site that exists today is the detail pane's, and none of them
+    // passes either prop: the defaults have to be what they already had.
+    const { container } = render(<Section title="Conditions">rows</Section>);
+    const root = container.querySelector("section");
+    expect(root?.getAttribute("data-padded")).toBeNull();
+    expect(container.querySelector("h3")?.className).toContain("font-semibold");
+  });
+
+  it("heads the band in small caps when the frame asks for it", () => {
+    const { container } = render(
+      <Section title="Capacity" smallCaps>
+        rows
+      </Section>,
+    );
+    expect(container.querySelector("h3")?.className).toContain("subhead-caps");
+    // Still the block's name in the outline, and still the word itself in the
+    // DOM — the uppercase is CSS, so a screen reader hears "Capacity".
+    expect(screen.getByRole("heading", { level: 3, name: "Capacity" })).toBeDefined();
+  });
+
+  it("marks an unpadded band on the section, so the rule can drop the sides", () => {
+    const { container } = render(
+      <Section title="Nodes" padded={false}>
+        rows
+      </Section>,
+    );
+    expect(container.querySelector("section")?.getAttribute("data-padded")).toBe("false");
+  });
+
+  it("keeps the content its own direct children whether padded or not", () => {
+    // Unpadding must not be a wrapper. A caller lays a section's content out,
+    // and a box between that layout and the rows changes what it is placing.
+    const { container } = render(
+      <Section title="Nodes" padded={false}>
+        <KV k="Status" v="Running" />
+      </Section>,
+    );
+    expect(container.querySelector("section.section > .kv")).not.toBeNull();
+  });
+});
+
+describe("a sticky section head over a sticky table head", () => {
+  const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+  const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+
+  it("offsets the table's own sticky header below the section head, not under it", () => {
+    // Both `.subhead-caps` and `.tbl thead th` stick to `top: 0` of the same
+    // scrolling pane — the overview's Nodes band wraps a `Table` directly
+    // (`<Section title="Nodes" smallCaps padded={false}><Table .../></Section>`).
+    // Left alone, the table's own column names would stick to the identical
+    // coordinates the section head already occupies and lose to its higher
+    // z-index, painted over and hidden the moment the list scrolls. Offsetting
+    // the table head by the section head's own height (25px) stacks the two
+    // instead of collapsing them onto each other. Asserted on the stylesheet:
+    // jsdom does no layout, so nothing here can be observed by rendering.
+    expect(components).toContain(".subhead-caps ~ .tbl thead th { top: 25px; }");
+  });
+});
+
+describe("an unpadded band's rule", () => {
+  const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+  const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+
+  it("drops the sides only, and keeps the heading's inset", () => {
+    // The band runs edge to edge; the heading is a label sitting over it and
+    // lines up with nothing when it is flush to the window. The vertical
+    // padding is the rhythm between one band and the next and must survive.
+    expect(components).toContain(
+      '.section[data-padded="false"] { padding-left: 0; padding-right: 0; }',
+    );
+    expect(components).toContain(
+      '.section[data-padded="false"] > .section-title { padding-left: 0.75rem; padding-right: 0.75rem; }',
+    );
+    const rule = components.slice(components.indexOf('.section[data-padded="false"] {'));
+    expect(rule.slice(0, rule.indexOf("}"))).not.toContain("padding-top");
+  });
+});

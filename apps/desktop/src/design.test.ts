@@ -60,6 +60,7 @@ describe("the list of ported screens", () => {
       "/resources",
       "/k",
       "/events",
+      "/overview",
     ]);
   });
 
@@ -70,6 +71,7 @@ describe("the list of ported screens", () => {
       "Workloads",
       "Resource lists and details",
       "Events",
+      "Cluster overview",
     ]);
   });
 });

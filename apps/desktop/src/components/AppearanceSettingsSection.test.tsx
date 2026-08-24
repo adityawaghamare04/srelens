@@ -56,6 +56,15 @@ describe("AppearanceSettingsSection", () => {
     expect(items).toContain("Events");
   });
 
+  it("lists the cluster overview, the first thing the new design's sidebar opens", () => {
+    // `/overview` is the sidebar's first cluster node, so a reader trying the
+    // new design lands on it before anything else. Leaving it off this list
+    // would tell them the screen they are looking at does not exist.
+    render(<AppearanceSettingsSection />);
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toContain("Cluster overview");
+  });
+
   it("introduces the list, so the names are not a bare list under the hint", () => {
     render(<AppearanceSettingsSection />);
     expect(screen.getByText(/in the new design so far/i)).toBeDefined();

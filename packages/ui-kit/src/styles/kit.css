@@ -404,6 +404,51 @@
      see it, and the extra weight is the second channel. */
   .status[data-bad="true"] { font-weight: 500; }
 
+  /* status-row: a verdict, the subject it is about, and its trailing facts —
+     one row of a list that is not a table. */
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    border-radius: 6px;
+    text-align: left;
+    font-size: 0.75rem;
+    color: var(--ink);
+  }
+  /* Only the pressable form reacts to a pointer. A plain row that lit up on
+     hover would promise something it does not do. */
+  button.status-row:hover { background: var(--field); }
+  /* A minimum, never a fixed width: it lines the names up down the list the
+     way LogLine's gutters keep a stream's messages in line, while a word
+     longer than the column (`CrashLoopBackOff`) pushes rather than clipping. */
+  .status-row-verdict {
+    flex-shrink: 0;
+    min-width: 9rem;
+  }
+  /* Takes the slack. `min-width: 0` because a flex item will not shrink below
+     its content without it, so one long pod name would shove the trailing
+     facts off the end of the row. */
+  .status-row-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .status-row-facts {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 0.75rem;
+    color: var(--ink-muted);
+  }
+  .status-row-fact {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
   .row-ask {
     opacity: 0;
     display: inline-flex;
@@ -632,6 +677,57 @@
   .section + .section { border-top: 1px solid var(--rule); }
   .section-title { margin-bottom: 0.3rem; }
 
+  /* `padded: false` — the content runs to both edges of the surface while the
+     heading keeps the inset it labels the band from. Only the sides go: the
+     vertical padding is the rhythm between one band and the next, and dropping
+     it would butt a table's header rule straight against the rule above it. */
+  .section[data-padded="false"] { padding-left: 0; padding-right: 0; }
+  .section[data-padded="false"] > .section-title { padding-left: 0.75rem; padding-right: 0.75rem; }
+
+  /* The design's section-head voice (§C.3), recipe verbatim: the same 10px /
+     600 / 0.07em / uppercase / --ink-faint `.pane-head` wears, ON
+     --surface-sunk, WITH A BOTTOM RULE — and, unlike a pane head, 25px and
+     sticky within its pane rather than fixed. A band with no tint behind it
+     reads flatter than the design; this is what makes it read as a band.
+
+     Sticky matters past the cosmetics: the cluster overview's Nodes band can
+     hold over a hundred rows, and a heading that scrolls away with the rows
+     above it stops saying what the ones still on screen are. See
+     `.subhead-caps ~ .tbl thead th` below for the one place this collides
+     with another sticky head.
+
+     A components-layer class rather than utilities on the heading: the other
+     variant IS utilities, and two utilities that set the same property are
+     resolved by the generated stylesheet's order rather than by the order the
+     JSX writes them. See `SubHead`. */
+  .subhead-caps {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    height: 25px;
+    background: var(--surface-sunk);
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* `.tbl thead th` is also sticky at `top: 0` (see `.tbl thead th` above) —
+     right for a table sitting alone in a pane, but the Nodes band wraps one
+     directly inside a `.subhead-caps` head (`<Section smallCaps padded={false}>`
+     around a `<Table>`). Left alone the two would stick to the identical
+     coordinates: same top, same scrolling ancestor, and the section head's
+     higher z-index would paint over the table's own column names the moment
+     the list scrolls, rather than sitting above them. Offsetting the table
+     head by the section head's fixed 25px height stacks the two instead of
+     collapsing them onto each other. Scoped to a `.subhead-caps` sibling only
+     — a table alone in a pane, under `.pane-head` instead, is unaffected. */
+  .subhead-caps ~ .tbl thead th { top: 25px; }
+
   /* A section that folds: the heading itself is the control, so the whole
      line is clickable rather than a caret the size of a full stop beside it.
      Inherits the heading's own type — this is the same line it was, wearing a
@@ -652,23 +748,6 @@
      kept for content it no longer has goes with it. */
   .section[data-open="false"] .section-title { margin-bottom: 0; }
 
-  .section-head {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    height: 25px;
-    padding: 0 0.6rem;
-    background: var(--surface-sunk);
-    border-bottom: 1px solid var(--rule);
-    font-size: 0.625rem;
-    font-weight: 600;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-  }
   .section-body { padding: 0.6rem; }
 
   /* key/value rows: fixed label column, values left-aligned beside it */
@@ -679,10 +758,25 @@
     gap: 0 0.75rem;
     padding: 0.22rem 0;
   }
+  /* The key column is a `minmax(88px, 34%)` track, so its max is fixed and the
+     track never grows to fit an outsized key. Without `min-width: 0` the grid
+     item's automatic minimum is its min-content size — for a `nowrap` key,
+     the entire string — and a long one painted straight through the value
+     column and out past the right edge of its surface. Seen on the overview
+     rail, whose Fleet rows are keyed on kube CONTEXT names: a real kubeconfig
+     carries `kdev-…-kubernetes-admin@cluster-…`, and the 286px rail rendered
+     "kind-srelens-dem30/30 running" with the tail hanging off the window.
+
+     Clipped rather than wrapped: a key that wraps to three lines drags its own
+     value off the row's baseline, and every other outsized name in this design
+     — the tab strip's titles, the sidebar's cluster name — is clipped too. */
   .kv-k {
     font-size: 0.75rem;
     color: var(--ink-muted);
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .kv-v {
     font-size: 0.75rem;

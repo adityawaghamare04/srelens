@@ -4,6 +4,7 @@ import { describe, isBuiltInKind, screenFor } from "./routes";
 import { AppLog } from "../screens/AppLog";
 import { Events } from "../screens/Events";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
+import { Overview } from "../screens/Overview";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
 
@@ -121,6 +122,14 @@ suite("screenFor", () => {
 
   it("resolves /events to the Events screen", () => {
     expect(screenFor("/events")).toBe(Events);
+  });
+
+  it("resolves /overview to the cluster overview the sidebar already points at", () => {
+    // `lib/tree.ts`'s CLUSTER_ROUTES has mapped `overview` to `/overview`
+    // since the sidebar was built, so without an entry here the first node in
+    // the tree — the one a reader clicks before anything else — lands on the
+    // Placeholder while the screen sits there finished.
+    expect(screenFor("/overview")).toBe(Overview);
   });
 
   it("resolves /k/events to the Events screen rather than the generic resource list", () => {
