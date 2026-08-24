@@ -684,22 +684,49 @@
   .section[data-padded="false"] { padding-left: 0; padding-right: 0; }
   .section[data-padded="false"] > .section-title { padding-left: 0.75rem; padding-right: 0.75rem; }
 
-  /* The design's section-head voice (§C.3) — the same 10px / 600 / 0.07em /
-     uppercase / --ink-faint recipe `.pane-head` wears, without the sunk
-     background and bottom rule, because these bands are divided by the rule
-     between them rather than framed by one of their own.
+  /* The design's section-head voice (§C.3), recipe verbatim: the same 10px /
+     600 / 0.07em / uppercase / --ink-faint `.pane-head` wears, ON
+     --surface-sunk, WITH A BOTTOM RULE — and, unlike a pane head, 25px and
+     sticky within its pane rather than fixed. A band with no tint behind it
+     reads flatter than the design; this is what makes it read as a band.
+
+     Sticky matters past the cosmetics: the cluster overview's Nodes band can
+     hold over a hundred rows, and a heading that scrolls away with the rows
+     above it stops saying what the ones still on screen are. See
+     `.subhead-caps ~ .tbl thead th` below for the one place this collides
+     with another sticky head.
 
      A components-layer class rather than utilities on the heading: the other
      variant IS utilities, and two utilities that set the same property are
      resolved by the generated stylesheet's order rather than by the order the
      JSX writes them. See `SubHead`. */
   .subhead-caps {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    height: 25px;
+    background: var(--surface-sunk);
+    border-bottom: 1px solid var(--rule);
     font-size: 0.625rem;
     font-weight: 600;
     letter-spacing: 0.07em;
     text-transform: uppercase;
     color: var(--ink-faint);
   }
+
+  /* `.tbl thead th` is also sticky at `top: 0` (see `.tbl thead th` above) —
+     right for a table sitting alone in a pane, but the Nodes band wraps one
+     directly inside a `.subhead-caps` head (`<Section smallCaps padded={false}>`
+     around a `<Table>`). Left alone the two would stick to the identical
+     coordinates: same top, same scrolling ancestor, and the section head's
+     higher z-index would paint over the table's own column names the moment
+     the list scrolls, rather than sitting above them. Offsetting the table
+     head by the section head's fixed 25px height stacks the two instead of
+     collapsing them onto each other. Scoped to a `.subhead-caps` sibling only
+     — a table alone in a pane, under `.pane-head` instead, is unaffected. */
+  .subhead-caps ~ .tbl thead th { top: 25px; }
 
   /* A section that folds: the heading itself is the control, so the whole
      line is clickable rather than a caret the size of a full stop beside it.
@@ -721,23 +748,6 @@
      kept for content it no longer has goes with it. */
   .section[data-open="false"] .section-title { margin-bottom: 0; }
 
-  .section-head {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    height: 25px;
-    padding: 0 0.6rem;
-    background: var(--surface-sunk);
-    border-bottom: 1px solid var(--rule);
-    font-size: 0.625rem;
-    font-weight: 600;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--ink-faint);
-  }
   .section-body { padding: 0.6rem; }
 
   /* key/value rows: fixed label column, values left-aligned beside it */

@@ -244,6 +244,24 @@ describe("a section that heads a page", () => {
   });
 });
 
+describe("a sticky section head over a sticky table head", () => {
+  const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+  const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+
+  it("offsets the table's own sticky header below the section head, not under it", () => {
+    // Both `.subhead-caps` and `.tbl thead th` stick to `top: 0` of the same
+    // scrolling pane — the overview's Nodes band wraps a `Table` directly
+    // (`<Section title="Nodes" smallCaps padded={false}><Table .../></Section>`).
+    // Left alone, the table's own column names would stick to the identical
+    // coordinates the section head already occupies and lose to its higher
+    // z-index, painted over and hidden the moment the list scrolls. Offsetting
+    // the table head by the section head's own height (25px) stacks the two
+    // instead of collapsing them onto each other. Asserted on the stylesheet:
+    // jsdom does no layout, so nothing here can be observed by rendering.
+    expect(components).toContain(".subhead-caps ~ .tbl thead th { top: 25px; }");
+  });
+});
+
 describe("an unpadded band's rule", () => {
   const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
   const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));

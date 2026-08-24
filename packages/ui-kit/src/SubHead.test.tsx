@@ -86,4 +86,39 @@ describe("the small-caps voice's recipe", () => {
     // Tokens, never a literal colour.
     expect(body).not.toMatch(/#[0-9a-f]{3,8}/i);
   });
+
+  it("sits on --surface-sunk with a bottom rule, not bare canvas", () => {
+    // §C.3, verbatim: ".pane-head and .section-head use the same ... recipe
+    // ON --surface-sunk, WITH A BOTTOM RULE". A band with no tint behind it
+    // reads as flatter than the design — this is the finding that sent the
+    // heads back to the recipe.
+    const rule = components.slice(components.indexOf("\n  .subhead-caps {"));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("background: var(--surface-sunk)");
+    expect(body).toContain("border-bottom: 1px solid var(--rule)");
+  });
+
+  it("is 25px and sticky within its pane", () => {
+    // §C.3: "section heads are 25 px and sticky within their pane". A heading
+    // that scrolls away with the rows above it stops saying what the rows
+    // below it are — seen on a 113-row node table.
+    const rule = components.slice(components.indexOf("\n  .subhead-caps {"));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("height: 25px");
+    expect(body).toContain("position: sticky");
+    expect(body).toContain("top: 0");
+  });
+
+  it("does not leave prose arguing for the background and rule it now wears", () => {
+    // Caught four times on this project: a comment defending behaviour the
+    // code no longer has. The old text argued the bands are "divided by the
+    // rule between them rather than framed by one of their own" — exactly
+    // the framing this recipe now draws.
+    const comment = components.slice(
+      components.indexOf("/* The design's section-head voice"),
+      components.indexOf("\n  .subhead-caps {"),
+    );
+    expect(comment).not.toContain("without the sunk");
+    expect(comment).not.toContain("divided by the rule between them rather than framed");
+  });
 });
