@@ -677,6 +677,30 @@
   .section + .section { border-top: 1px solid var(--rule); }
   .section-title { margin-bottom: 0.3rem; }
 
+  /* `padded: false` — the content runs to both edges of the surface while the
+     heading keeps the inset it labels the band from. Only the sides go: the
+     vertical padding is the rhythm between one band and the next, and dropping
+     it would butt a table's header rule straight against the rule above it. */
+  .section[data-padded="false"] { padding-left: 0; padding-right: 0; }
+  .section[data-padded="false"] > .section-title { padding-left: 0.75rem; padding-right: 0.75rem; }
+
+  /* The design's section-head voice (§C.3) — the same 10px / 600 / 0.07em /
+     uppercase / --ink-faint recipe `.pane-head` wears, without the sunk
+     background and bottom rule, because these bands are divided by the rule
+     between them rather than framed by one of their own.
+
+     A components-layer class rather than utilities on the heading: the other
+     variant IS utilities, and two utilities that set the same property are
+     resolved by the generated stylesheet's order rather than by the order the
+     JSX writes them. See `SubHead`. */
+  .subhead-caps {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
   /* A section that folds: the heading itself is the control, so the whole
      line is clickable rather than a caret the size of a full stop beside it.
      Inherits the heading's own type — this is the same line it was, wearing a

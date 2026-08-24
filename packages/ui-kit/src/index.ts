@@ -57,7 +57,7 @@ export { Stat, type StatProps } from "./Stat";
 export { StatusBar, type StatusBarProps, type StatusSegment } from "./StatusBar";
 export { StatusPill, statusTone, type StatusKind, type StatusPillProps } from "./StatusPill";
 export { StatusRow, type StatusRowProps } from "./StatusRow";
-export { SubHead, type SubHeadProps } from "./SubHead";
+export { SubHead, type SubHeadProps, type SubHeadVariant } from "./SubHead";
 export { SurfaceToast, type SurfaceToastProps } from "./SurfaceToast";
 export { Switch, type SwitchProps } from "./Switch";
 export { Table, computeVisibleRange, filterTableData, nextSort, type Column, type TableProps, type TableSelection, type TableSort } from "./Table";

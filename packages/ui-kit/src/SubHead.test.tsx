@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { SubHead } from "./SubHead";
 
 /** New: the mock shipped this component with no tests at all. (#320) */
@@ -30,5 +32,58 @@ describe("SubHead", () => {
   it("forwards className", () => {
     const { container } = render(<SubHead className="mb-1">Labels</SubHead>);
     expect(container.querySelector("h3.mb-1")).not.toBeNull();
+  });
+});
+
+/**
+ * The design carries two voices for a block's name (§C.3): the detail body's
+ * small bold line, and the small-caps signpost the pane heads wear. The
+ * cluster overview's bands want the second.
+ */
+describe("SubHead's two voices", () => {
+  it("heads a block in small caps when asked, and only then", () => {
+    const { container, rerender } = render(<SubHead variant="caps">Capacity</SubHead>);
+    const caps = container.querySelector("h3");
+    expect(caps?.className).toContain("subhead-caps");
+
+    rerender(<SubHead>Capacity</SubHead>);
+    expect(container.querySelector("h3")?.className).not.toContain("subhead-caps");
+  });
+
+  it("emits one size and weight, never two competing ones", () => {
+    // The variants are not an override of each other. `text-[0.75rem]` and a
+    // caps size would both be utilities, and two utilities setting the same
+    // property are resolved by the generated stylesheet's order rather than by
+    // the order the JSX writes them — so the loser is a coin flip. Exactly one
+    // set is emitted, and the caps one is a components-layer class.
+    const { container } = render(<SubHead variant="caps">Nodes</SubHead>);
+    const head = container.querySelector("h3");
+    expect(head?.className).not.toContain("text-[0.75rem]");
+    expect(head?.className).not.toContain("font-semibold");
+  });
+
+  it("is still a level-3 heading in either voice", () => {
+    render(<SubHead variant="caps">Not ready</SubHead>);
+    expect(screen.getByRole("heading", { level: 3, name: "Not ready" })).toBeDefined();
+  });
+});
+
+describe("the small-caps voice's recipe", () => {
+  const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+  const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+
+  it("is the design's pane-head recipe, in the components layer", () => {
+    // §C.3: 10px / 600 / 0.07em / uppercase / --ink-faint — the same recipe
+    // `.pane-head` wears, so a section heading and the strip above it read as
+    // one system. Asserted on the stylesheet because jsdom does no layout.
+    const rule = components.slice(components.indexOf("\n  .subhead-caps {"));
+    const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).toContain("font-size: 0.625rem");
+    expect(body).toContain("font-weight: 600");
+    expect(body).toContain("letter-spacing: 0.07em");
+    expect(body).toContain("text-transform: uppercase");
+    expect(body).toContain("color: var(--ink-faint)");
+    // Tokens, never a literal colour.
+    expect(body).not.toMatch(/#[0-9a-f]{3,8}/i);
   });
 });
