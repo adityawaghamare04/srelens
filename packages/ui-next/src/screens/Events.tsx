@@ -280,14 +280,27 @@ function EventList({
       }
     >
       {/* §8's two panes: the table pane, and the fixed 250px rail beside it.
-          The rail is handed what the TABLE is showing — after the namespace
-          selection, the segment and the search — so it describes the screen
-          rather than the cluster, and a reader can see at a glance which few
-          reasons account for forty rows. */}
+          The rail is handed the segmented set — after the namespace selection
+          and the type control, but BEFORE the search — so it describes the
+          screen rather than the cluster while staying navigable.
+
+          §8 says "the currently filtered set", and the mock's rail does narrow
+          to the row just clicked. WE DO NOT FOLLOW IT, because the rail is
+          both the way in and the way back out: clicking `Unhealthy` sets the
+          search to it, and a rail rebuilt from the search would then contain
+          only `Unhealthy` — the reader has lost the list of the OTHER things
+          going wrong, which is the entire question the rail answers, with
+          nothing on screen to say that clearing the search box is what brings
+          it back. A control that destroys itself when used is a dead end. The
+          mock runs on fixture data where nobody clicked twice.
+
+          The type control still reshapes it, which is right: All, Warnings and
+          Normal are genuinely different questions, and each has its own answer
+          to "what is going wrong". */}
       <SideRail
         head="By reason"
         width={REASON_RAIL_WIDTH}
-        rail={<ReasonRail rows={filtered} onPick={setFilter} />}
+        rail={<ReasonRail rows={segmented} onPick={setFilter} />}
       >
         <FilterBar
           value={filter}

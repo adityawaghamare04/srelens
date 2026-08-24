@@ -4,10 +4,11 @@ import type { EventRow } from "../../lib/kinds/events";
 
 export interface ReasonRailProps {
   /**
-   * The events the table is showing — after the namespace selection, the type
-   * segment and the search, not before. The rail describes what is on screen;
-   * a rail counting the loaded set would disagree with the rows beside it the
-   * moment anyone typed.
+   * The events to rank: the screen's rows after the namespace selection and
+   * the type control, but not after its search — see `Events.tsx`, which owns
+   * that choice and the reasoning for it. Not the loaded set either; a rail
+   * counting events from namespaces the reader is not looking at would
+   * disagree with the table beside it.
    */
   rows: readonly EventRow[];
   /** What to do with a reason the reader clicked. The screen decides. */

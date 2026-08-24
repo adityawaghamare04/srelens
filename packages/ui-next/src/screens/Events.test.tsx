@@ -465,7 +465,32 @@ describe("Events", () => {
     expect((search() as HTMLInputElement).value).toBe("Unhealthy");
   });
 
-  it("counts the filtered set in the rail, not the loaded one", async () => {
+  it("still lists the other reasons after one has been clicked", async () => {
+    const user = userEvent.setup();
+    open();
+    await waitFor(() => expect(cells().length).toBe(4));
+
+    await user.click(screen.getByRole("button", { name: "Unhealthy 1" }));
+    await waitFor(() => expect(reasons()).toEqual(["Unhealthy"]));
+
+    // The rail is the way IN and the way BACK OUT. A rail that narrowed itself
+    // to the row just clicked would take away the list of other things going
+    // wrong — the very question it exists to answer — and leave the reader with
+    // nothing on screen saying that the search box is what to clear.
+    expect(railRows()).toEqual([
+      ["BackOff", "1"],
+      ["Scheduled", "1"],
+      ["Unhealthy", "1"],
+      ["NodeReady", "1"],
+    ]);
+
+    // And a second click changes the reader's mind, rather than dead-ending.
+    await user.click(screen.getByRole("button", { name: "BackOff 1" }));
+    await waitFor(() => expect(reasons()).toEqual(["BackOff"]));
+    expect((search() as HTMLInputElement).value).toBe("BackOff");
+  });
+
+  it("reshapes the rail with the type control, which is a different question", async () => {
     const user = userEvent.setup();
     open();
     await waitFor(() => expect(cells().length).toBe(4));
@@ -481,12 +506,34 @@ describe("Events", () => {
     );
   });
 
-  it("leaves the rail blank, not boxed, when the filter empties the table", async () => {
+  it("keeps the rail whole while the search narrows the table beneath it", async () => {
     const user = userEvent.setup();
     open();
     await waitFor(() => expect(cells().length).toBe(4));
 
-    await user.type(search(), "nothing matches this");
+    await user.type(search(), "probe");
+    await waitFor(() => expect(reasons()).toEqual(["Unhealthy"]));
+
+    // The search is the reader's own narrowing and they can see it in the box.
+    // The rail is what they narrow FROM, so it does not follow the box down.
+    expect(railRows()).toEqual([
+      ["BackOff", "1"],
+      ["Scheduled", "1"],
+      ["Unhealthy", "1"],
+      ["NodeReady", "1"],
+    ]);
+  });
+
+  it("leaves the rail blank, not boxed, when nothing is in scope at all", async () => {
+    const user = userEvent.setup();
+    // billing holds one event and it is a Warning, so asking for the Normal
+    // ones leaves the screen — table and rail alike — with nothing to show.
+    setNamespaces("prod", ["billing"]);
+    open();
+    await waitFor(() => expect(reasons()).toEqual(["BackOff"]));
+
+    const segments = screen.getByRole("tablist", { name: "Type" });
+    await user.click(within(segments).getByRole("tab", { name: "Normal" }));
     await waitFor(() => expect(reasons()).toEqual([]));
 
     expect(railRows()).toEqual([]);
