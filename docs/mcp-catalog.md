@@ -5,16 +5,17 @@
 
 Everything this server exposes over MCP, generated from the live registry so it cannot drift. Written for someone wiring an agent to srelens; the narrative reference is [MCP.md](MCP.md).
 
-## Tools (84)
+## Tools (85)
 
 Argument schemas are not reproduced here — call `tools/list` for those, which cannot go stale.
 
-### Kubernetes — read-only (46)
+### Kubernetes — read-only (47)
 
 | Tool | Summary |
 | --- | --- |
 | `k8s.bindingsForServiceAccount` | list the RoleBindings and ClusterRoleBindings that reference a ServiceAccount |
 | `k8s.canI` | check whether the current user can perform actions (SelfSubjectAccessReview, batched) |
+| `k8s.clusterFacts` | report a cluster's provider, region and metrics-server availability |
 | `k8s.clusterInfo` | connect to a kube context and report server version and reachability |
 | `k8s.diffManifest` | diff a manifest against the cluster via server dry-run apply (per document) |
 | `k8s.getManifest` | fetch a resource's manifest as YAML (any supported kind) |

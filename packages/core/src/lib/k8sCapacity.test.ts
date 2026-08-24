@@ -152,3 +152,30 @@ describe("clusterCapacity — some nodes have metrics, others do not", () => {
     expect(capacity.nodesTotal).toBe(3);
   });
 });
+
+describe("clusterCapacity — a metric names a node that is not in the list", () => {
+  it("drops the ghost metric entirely, and nodesReporting never exceeds nodesTotal", () => {
+    const nodes = [
+      node({ name: "a", allocatableCpuMillicores: 4000, allocatableMemoryMiB: 16000 }),
+      node({ name: "b", allocatableCpuMillicores: 4000, allocatableMemoryMiB: 16000 }),
+    ];
+    const metrics = [
+      metric({ name: "a", cpuMillicores: 1000, memoryMiB: 4000 }),
+      metric({ name: "b", cpuMillicores: 1000, memoryMiB: 4000 }),
+      // "ghost" names no node in the list — metrics-server racing the node
+      // list, or holding a stale entry for a node that was just drained and
+      // removed. It must contribute to neither sum nor either count.
+      metric({ name: "ghost", cpuMillicores: 9999, memoryMiB: 9999 }),
+    ];
+    const capacity = clusterCapacity(nodes, metrics);
+    expect(capacity.cpu).toEqual({ usedMillicores: 2000, allocatableMillicores: 8000 });
+    expect(capacity.memory).toEqual({ usedMiB: 8000, allocatableMiB: 32000 });
+    // The invariant worth stating outright: however this is computed, the
+    // reporting count can never exceed the node count. A loop that iterates
+    // metrics instead of nodes can violate this silently — more nodes
+    // "reporting" than exist, and a percentage nobody can explain.
+    expect(capacity.nodesReporting).toBeLessThanOrEqual(capacity.nodesTotal);
+    expect(capacity.nodesReporting).toBe(2);
+    expect(capacity.nodesTotal).toBe(2);
+  });
+});

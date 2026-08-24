@@ -240,6 +240,11 @@ pub fn build_registry_with_paths_and_settings(
     reg.register(srelens_kube::connect::cluster_info_capability(
         cache.clone(),
     ));
+    // The overview rail's control-plane facts. Deliberately separate from the
+    // reachability probe above, which runs for every cluster on every launch.
+    reg.register(srelens_kube::connect::cluster_facts_capability(
+        cache.clone(),
+    ));
     // Add-cluster form support (desktop + web): synthesize a kubeconfig from
     // form fields, and probe a kubeconfig's reachability before saving it.
     reg.register(srelens_kube::cluster_synth::synthesize_cluster_capability());
