@@ -33,6 +33,7 @@ export { KV, KVList, type KVListProps, type KVProps } from "./KV";
 export { LiveSignal, type LiveSignalProps } from "./LiveSignal";
 export { LoadingState, type LoadingStateProps } from "./LoadingState";
 export { LogLine, type LogLineProps } from "./LogLine";
+export { computeLogWindow, type LogWindow } from "./logWindow";
 export { Mark, type MarkProps, type MarkSize } from "./Mark";
 export { Meter } from "./Meter";
 export { MetricTile, type MetricTileProps } from "./MetricTile";
