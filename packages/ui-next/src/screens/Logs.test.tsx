@@ -39,6 +39,8 @@ const h = vi.hoisted(() => {
     tauri: true,
     /** Every `saveTextFile` the screen has asked for. */
     saved: vi.fn(),
+    /** Every one-shot `podLogs` fetch the previous-instance toggle has made. */
+    fetched: vi.fn(),
     /** Every call the screen has made into the hook, in order. */
     seen: [] as {
       context: string;
@@ -111,6 +113,7 @@ vi.mock("@srelens/core", async (orig) => ({
   ...(await orig<typeof import("@srelens/core")>()),
   isTauri: () => h.tauri,
   saveTextFile: (...a: unknown[]) => h.saved(...a),
+  podLogs: (...a: unknown[]) => h.fetched(...a),
 }));
 
 if (!("ResizeObserver" in globalThis)) {
@@ -122,8 +125,8 @@ if (!("ResizeObserver" in globalThis)) {
 }
 
 import type { ClusterContext, LogTarget } from "@srelens/core";
-import type { LogSubjectPod } from "../lib/logSubject";
-import { describeError } from "@srelens/core";
+import type { LogSubjectPod, PreviousInstance } from "../lib/logSubject";
+import { absoluteTimestamp, describeError } from "@srelens/core";
 import { toneColor } from "@srelens/ui-kit";
 import { Logs, logsRoute, parseLogsRoute } from "./Logs";
 import { ConsoleProvider, useConsole } from "../console";
@@ -184,6 +187,35 @@ const LINES = [
   line("api-9/api", "14:07:44.010000000", "GET /healthz 200 1ms"),
 ];
 
+/**
+ * The corpse: one container of one pod has died and been restarted, and
+ * `resolveLogSubject` reports it off the pod object it already fetched.
+ */
+const TERMINATED: PreviousInstance[] = [
+  {
+    pod: "api-7",
+    container: "api",
+    exitCode: 137,
+    reason: "OOMKilled",
+    finishedAt: "2026-08-24T14:07:42Z",
+  },
+];
+
+/**
+ * What `podLogs(..., { previous: true })` hands back: ONE BLOB, stamped,
+ * with the trailing newline a text file ends on.
+ *
+ * The design's previous-instance buffer, verbatim in its levels: the instance
+ * starts, saturates, times out, and is killed.
+ */
+const PREVIOUS_BLOB = [
+  "2026-08-24T14:07:11.004000000Z info starting checkout-api build=4f2a1c pool_size=5",
+  "2026-08-24T14:07:12.880000000Z warn pool saturated within 1.8s of accepting traffic",
+  "2026-08-24T14:07:41.902000000Z error pool timeout waited=30.0s pool_size=5 in_use=5",
+  "2026-08-24T14:07:42.410000000Z fatal liveness deadline exceeded, terminating",
+  "",
+].join("\n");
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.listeners.clear();
@@ -203,7 +235,10 @@ beforeEach(() => {
   };
   h.tauri = true;
   h.saved.mockResolvedValue("/home/u/checkout-api.log");
-  h.resolve.mockResolvedValue({ status: "resolved", targets: TARGETS, pods: PODS });
+  h.fetched.mockResolvedValue({ logs: PREVIOUS_BLOB });
+  // No corpse by default: a pod on its first run is the common case, and the
+  // one the previous-instance toggle has to have an answer for.
+  h.resolve.mockResolvedValue({ status: "resolved", targets: TARGETS, pods: PODS, previous: [] });
 
   resetContexts();
   setContexts([CTX]);
@@ -308,6 +343,7 @@ describe("Logs", () => {
       status: "resolved",
       targets: [{ pod: "api-7", container: "api", label: "" }],
       pods: [{ name: "api-7", health: "success" }],
+      previous: [],
     });
     draw(logsRoute("Pod", "checkout", "api-7"));
     expect(await screen.findByText("prod-eu / checkout / api-7 · 1 pod")).toBeTruthy();
@@ -358,6 +394,7 @@ describe("Logs", () => {
       status: "resolved",
       targets: [{ pod: "api-7", container: "api", label: "" }],
       pods: [{ name: "api-7", health: "success" }],
+      previous: [],
     });
     const region = await (draw(logsRoute("Pod", "checkout", "api-7")), body());
     push({ source: "", text: "a line with no timestamp on it" });
@@ -1027,5 +1064,334 @@ describe("what a restart costs the reader", () => {
       notify();
     });
     expect(screen.getByText(/scrollback/i)).toBeTruthy();
+  });
+});
+
+/**
+ * The logs of the instance that just died.
+ *
+ * Everything here turns on one structural fact: a terminated container cannot
+ * be streamed. `podLogs(..., { previous: true })` is a ONE-SHOT fetch that
+ * returns a whole blob — the streaming path passes `previous: false` as a
+ * literal — so following is not disabled by convention here, it is disabled
+ * because there is nothing to follow.
+ */
+describe("the previous instance", () => {
+  /** `resolveLogSubject` found a corpse: api-7's `api` container has died. */
+  function withCorpse(previous: PreviousInstance[] = TERMINATED) {
+    h.resolve.mockResolvedValue({ status: "resolved", targets: TARGETS, pods: PODS, previous });
+  }
+
+  const toggle = () => screen.getByRole("button", { name: /previous instance/i });
+  /** The play/pause control, under whichever name it currently answers to. */
+  const followControl = () => screen.getByRole("button", { name: /^(pause|follow)/i });
+
+  /** Turn the toggle on (or off) and let the one-shot fetch settle. */
+  async function press() {
+    await userEvent.click(toggle());
+  }
+
+  it("swaps the whole buffer for the terminated container's", async () => {
+    withCorpse();
+    const region = await (draw(), body());
+    push(...LINES);
+    await press();
+
+    // The stamp is off, the source is split, and the level column says the
+    // word the LINE used — every one of those through the same `toRow` the
+    // live buffer goes through. A previous line that toned differently from a
+    // live one would be a second severity rule in the same pane.
+    await waitFor(() =>
+      expect(rendered(region)).toEqual([
+        "14:07:11.004|api-7 · api|info|info starting checkout-api build=4f2a1c pool_size=5",
+        "14:07:12.880|api-7 · api|warn|warn pool saturated within 1.8s of accepting traffic",
+        "14:07:41.902|api-7 · api|error|error pool timeout waited=30.0s pool_size=5 in_use=5",
+        "14:07:42.410|api-7 · api|fatal|fatal liveness deadline exceeded, terminating",
+      ]),
+    );
+    // And the live lines are gone from the pane, not merged into it: the two
+    // buffers are different instances of the same container, and interleaving
+    // them would invent a history that never happened.
+    expect(rendered(region).join("\n")).not.toContain("exporter queue is full");
+  });
+
+  it("tones the previous buffer through the kit, exactly as a live line is", async () => {
+    withCorpse();
+    const region = await (draw(), body());
+    await press();
+    await waitFor(() => expect(rendered(region)).toHaveLength(4));
+    const levels = Array.from(region.querySelectorAll<HTMLElement>("[data-slot=level]"));
+    expect(levels.map((el) => el.style.color)).toEqual([
+      toneColor("info"),
+      toneColor("warn"),
+      toneColor("sev"),
+      // `fatal` is the kit's own word for the worst tone. The screen passes
+      // the level and no colour, here as everywhere.
+      toneColor("sev"),
+    ]);
+  });
+
+  it("fetches the terminated container's buffer once, and asks no window of it", async () => {
+    withCorpse();
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    // A window the reader chose for the LIVE tail. The instance that died
+    // twenty minutes ago wrote nothing in the last five, so passing it on
+    // would hand back an empty file and call it the corpse's logs.
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /since/i }), "5m");
+    await press();
+
+    await waitFor(() => expect(h.fetched).toHaveBeenCalledTimes(1));
+    const [context, namespace, pod, , options] = h.fetched.mock.calls[0];
+    expect([context, namespace, pod]).toEqual(["prod-eu", "checkout", "api-7"]);
+    expect(options).toEqual({
+      container: "api",
+      previous: true,
+      // The time column is drawn from the stamp, in the previous buffer as in
+      // the live one.
+      timestamps: true,
+      tailLines: 1000,
+    });
+  });
+
+  it("asks only for the containers that have actually died", async () => {
+    withCorpse();
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    await press();
+    await waitFor(() => expect(h.fetched).toHaveBeenCalledTimes(1));
+    // api-7's otel-sidecar, api-8 and api-9 are all in scope and none of them
+    // has a previous instance — asking for one gets an error, not a buffer.
+    expect(h.fetched.mock.calls.map((c: unknown[]) => c[2])).toEqual(["api-7"]);
+  });
+
+  it("names the pod, when it terminated and its exit code", async () => {
+    withCorpse();
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    await press();
+
+    const banner = await screen.findByText(/reading the previous instance/i);
+    const strip = banner.closest("[role=status]") as HTMLElement;
+    expect(strip.textContent).toContain("api-7");
+    // Core's own formatter, not a second clock in this screen — and the whole
+    // date, because a container that died yesterday is not "14:07:42".
+    expect(strip.textContent).toContain(absoluteTimestamp("2026-08-24T14:07:42Z"));
+    expect(strip.textContent).toContain("exit 137");
+    // The exit code alone does not separate an OOM kill from a SIGKILL.
+    expect(strip.textContent).toContain("OOMKilled");
+  });
+
+  it("names only what the cluster actually sent about the termination", async () => {
+    // Found by the mutation pass: with a fixture that always carried an exit
+    // code AND a reason, the branches for a termination missing one of them
+    // were never drawn, and a mutant that emptied the exit-code-only branch
+    // lived. Each fact is dropped rather than faked when it is absent.
+    const cases: [PreviousInstance, RegExp, RegExp][] = [
+      // An exit code with no reason: the code alone, and no empty bracket
+      // where the reason would have gone.
+      [{ pod: "api-7", container: "api", exitCode: 137 }, /exit 137/, /[()]/],
+      // A reason with no code — the word, and no bare `exit`.
+      [{ pod: "api-7", container: "api", reason: "OOMKilled" }, /OOMKilled/, /exit/],
+      // Neither, and no finish time: the container is still named, with no
+      // dangling separator after it.
+      [{ pod: "api-7", container: "api" }, /api-7 · api/, /—/],
+    ];
+    for (const [instance, says, silent] of cases) {
+      withCorpse([instance]);
+      const view = draw();
+      await screen.findByRole("log", { name: /logs/i });
+      await press();
+      const headline = await screen.findByText(/reading the previous instance/i);
+      expect(headline.textContent).toMatch(says);
+      expect(headline.textContent).not.toMatch(silent);
+      view.unmount();
+    }
+  });
+
+  it("clears follow, and the disabled control SAYS WHY rather than going inert", async () => {
+    withCorpse();
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    expect(signal()).toContain("Following");
+
+    await press();
+
+    const control = followControl();
+    expect(control).toHaveProperty("disabled", true);
+    // A control that stops working without explanation reads as a bug. The
+    // reason is in its accessible name and in the banner's own words.
+    expect(control.getAttribute("aria-label")).toMatch(/terminated instance cannot be streamed/i);
+    expect(screen.getByText(/a terminated instance cannot be streamed/i)).toBeTruthy();
+    // And nothing claims to be following a snapshot. Asserted on the live
+    // readout's own shape rather than through `signal()`, whose regex the
+    // banner's own sentence ("srelens is not following it") matches.
+    const readouts = screen.queryAllByRole("status").map((el) => el.textContent ?? "");
+    expect(readouts.some((t) => /of \d+ streaming/.test(t))).toBe(false);
+  });
+
+  it("restores the live stream when it is turned off", async () => {
+    withCorpse();
+    const region = await (draw(), body());
+    push(...LINES);
+    await press();
+    await waitFor(() => expect(rendered(region).join("\n")).toContain("pool saturated within 1.8s"));
+
+    // The live stream never stopped: a line that arrived while the corpse was
+    // on screen is waiting when the reader comes back.
+    push(line("api-9/api", "14:07:50.000000000", "info back up"));
+    expect(rendered(region).join("\n")).not.toContain("back up");
+
+    await press();
+    expect(rendered(region).map((r) => r.split("|")[3])).toEqual([
+      "info starting checkout-api build=4f2a1c",
+      "warn exporter queue is full",
+      "error pool timeout waited=30.0s in_use=5",
+      "GET /healthz 200 1ms",
+      "info back up",
+    ]);
+    expect(followControl()).toHaveProperty("disabled", false);
+    expect(signal()).toContain("Following");
+    expect(screen.queryByText(/reading the previous instance/i)).toBeNull();
+  });
+
+  it("says a container on its first run has no previous instance, rather than drawing nothing", async () => {
+    // The DEFAULT resolution: no corpse. A pod that has never restarted is the
+    // common case, and an empty body would read as "the crashed instance said
+    // nothing", which is a different and much more alarming fact.
+    const region = await (draw(), body());
+    push(...LINES);
+    await press();
+
+    expect(within(region).getByText(/no previous instance/i)).toBeTruthy();
+    expect(rendered(region)).toHaveLength(0);
+    // Nothing was asked of the cluster: there is no terminated container to
+    // ask about, and `podLogs` would only refuse.
+    expect(h.fetched).not.toHaveBeenCalled();
+  });
+
+  it("says the previous instance logged nothing, which is not the same as having none", async () => {
+    withCorpse();
+    h.fetched.mockResolvedValue({ logs: "" });
+    const region = await (draw(), body());
+    await press();
+    expect(await within(region).findByText(/logged nothing/i)).toBeTruthy();
+    // The banner still names it — the instance existed, and when it died is
+    // the fact the reader came for even when its buffer is empty.
+    expect(screen.getByText(/reading the previous instance/i)).toBeTruthy();
+  });
+
+  it("reads a refused fetch through describeError, never as the backend's string", async () => {
+    withCorpse();
+    h.fetched.mockResolvedValue({ error: "k8s.podLogs failed: request timeout" });
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    await press();
+
+    const notice = await screen.findByText(/could not read the previous instance/i);
+    const card = notice.closest("[role=alert], [role=status]") as HTMLElement;
+    expect(within(card).getByText(/didn't respond in time/i)).toBeTruthy();
+    expect(card.querySelector("details")?.textContent).toContain("k8s.podLogs failed");
+  });
+
+  it("says which corpse it could not read rather than silently dropping it", async () => {
+    // Two dead containers, one of which refuses. `resolveLogSubject` is
+    // all-or-nothing about targets for exactly this reason: a missing
+    // container's lines look exactly like a quiet container's.
+    withCorpse([
+      TERMINATED[0],
+      { pod: "api-8", container: "api", exitCode: 1, reason: "Error", finishedAt: "2026-08-24T14:06:00Z" },
+    ]);
+    h.fetched.mockImplementation((...a: unknown[]) =>
+      a[2] === "api-8"
+        ? Promise.resolve({ error: "k8s.podLogs failed: request timeout" })
+        : Promise.resolve({ logs: PREVIOUS_BLOB }),
+    );
+    const region = await (draw(), body());
+    await press();
+
+    // api-7's four lines are drawn — throwing them away because api-8 refused
+    // would lose the evidence the reader came for.
+    await waitFor(() => expect(rendered(region)).toHaveLength(4));
+    const notice = await screen.findByText(/could not read the previous instance/i);
+    expect(notice.textContent).toContain("api-8");
+  });
+
+  it("does not blame the live ring for a snapshot's length", async () => {
+    // "Showing the newest N lines · 1 200 earlier lines dropped" is a fact
+    // about the bounded live buffer. The previous instance's arrived whole, in
+    // one fetch, and saying lines were dropped from it would send a reader
+    // looking for logs that were never missing.
+    withCorpse();
+    const region = await (draw(), body());
+    act(() => {
+      h.state.lines = LINES;
+      h.state.dropped = 1200;
+      notify();
+    });
+    expect(within(region).getByText(/1 200 earlier lines/i)).toBeTruthy();
+
+    await press();
+    await waitFor(() => expect(rendered(region)).toHaveLength(4));
+    expect(within(region).queryByText(/earlier lines dropped/i)).toBeNull();
+  });
+
+  it("hands the rail the STRIPPED previous lines, so the tally is not silently empty", async () => {
+    withCorpse();
+    h.fetched.mockResolvedValue({
+      logs: [
+        "2026-08-24T14:07:41.902000000Z error pool timeout waited=30.0s pool_size=5 in_use=5",
+        "2026-08-24T14:07:42.100000000Z error pool timeout waited=30.1s pool_size=5 in_use=5",
+        "",
+      ].join("\n"),
+    });
+    const { container } = draw();
+    await screen.findByRole("log", { name: /logs/i });
+    await press();
+
+    await waitFor(() => expect(railTerms(container).length).toBeGreaterThan(0));
+    expect(railTerms(container).map(([term]) => term)).toContain("pool timeout");
+    // Two error lines in view, counted by the same badge the live buffer uses.
+    expect(screen.getByText("2 errors")).toBeTruthy();
+  });
+
+  it("exports the previous buffer under its own name, filters applied", async () => {
+    // The window vs the buffer: jsdom measures no row height, so without
+    // `measurableRows` the drawn slice and the filtered buffer are the same
+    // array and an export of either passes.
+    const restore = measurableRows();
+    try {
+      withCorpse();
+      h.fetched.mockResolvedValue({
+        logs:
+          Array.from(
+            { length: 300 },
+            (_, i) =>
+              `2026-08-24T14:07:41.208000000Z ${i % 2 === 0 ? "alpha" : "beta"} line ${i}`,
+          ).join("\n") + "\n",
+      });
+      const region = await (draw(), body());
+      Object.defineProperty(region, "clientHeight", { configurable: true, get: () => 100 });
+      await press();
+      await waitFor(() => expect(region.querySelectorAll(".logline").length).toBeGreaterThan(0));
+      await userEvent.type(filterField(), "alpha");
+
+      const drawn = region.querySelectorAll(".logline").length;
+      expect(drawn).toBeLessThan(150);
+
+      await userEvent.click(screen.getByRole("button", { name: /export/i }));
+      await waitFor(() => expect(h.saved).toHaveBeenCalledTimes(1));
+      // Its own filename: a file of a dead instance's logs that is named like
+      // the live one is a file nobody can tell apart afterwards.
+      expect(h.saved.mock.calls[0][0]).toBe("checkout-api-previous.log");
+      const written = String(h.saved.mock.calls[0][1]).split("\n");
+      expect(written).toHaveLength(150);
+      expect(written[0]).toBe(
+        "api-7/api | 2026-08-24T14:07:41.208000000Z alpha line 0",
+      );
+      expect(written[written.length - 1]).toContain("alpha line 298");
+    } finally {
+      restore();
+    }
   });
 });

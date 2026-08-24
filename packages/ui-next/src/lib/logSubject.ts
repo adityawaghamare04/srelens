@@ -1,4 +1,5 @@
 import {
+  asArray,
   asRecord,
   describeError,
   getObject,
@@ -73,7 +74,12 @@ export type LogSubject = PodSubject | WorkloadSubject;
  * second error path.
  */
 export type LogSubjectResolution =
-  | { status: "resolved"; targets: LogTarget[]; pods: LogSubjectPod[] }
+  | {
+      status: "resolved";
+      targets: LogTarget[];
+      pods: LogSubjectPod[];
+      previous: PreviousInstance[];
+    }
   | { status: "empty"; detail: string }
   | { status: "error"; error: FriendlyError };
 
@@ -121,11 +127,72 @@ export interface LogSubjectPod {
   revision?: string;
 }
 
+/**
+ * A container that has died and been restarted — the instance whose logs a
+ * post-crash read is after.
+ *
+ * **These ride back on the resolution too**, for the same reason the pods'
+ * health does: `status.containerStatuses[].lastState.terminated` is on the pod
+ * object this module already fetches for its containers, so the facts a
+ * previous-instance banner names — when it died, and with what exit code —
+ * cost no second round trip.
+ *
+ * One entry per TARGET, not per pod. A pod running two containers can have one
+ * corpse and one healthy process, and `podLogs` fetches a previous buffer per
+ * container; an entry per pod would offer the live container's buffer under
+ * the dead one's name. Only followed containers appear: an init container's
+ * status carries a `lastState` like any other and is not something this stream
+ * has a target for.
+ *
+ * Presence is what makes a buffer readable — a container that has terminated
+ * once has a previous instance, whatever else its status did or did not carry.
+ * `exitCode`, `reason` and `finishedAt` are each optional because a gap in
+ * what can be SAID about the termination is not a reason to withhold its logs.
+ */
+export interface PreviousInstance {
+  pod: string;
+  container: string;
+  /** The status the instance exited with — `137` for an OOM kill, `0` for a
+   *  container that simply completed. */
+  exitCode?: number;
+  /** Kubernetes' own word for why it ended: `OOMKilled`, `Error`, `Completed`. */
+  reason?: string;
+  /** When it ended, RFC3339, exactly as the cluster sent it. Formatting is the
+   *  screen's business, not this module's. */
+  finishedAt?: string;
+}
+
 /** A pod's `pod-template-hash`, or undefined — an empty label is an absence,
  *  not a revision, and must never reach the rail as a blank figure. */
 function revisionOf(object: K8sObject | undefined): string | undefined {
   const hash = asRecord(asRecord(asRecord(object).metadata).labels)["pod-template-hash"];
   return typeof hash === "string" && hash !== "" ? hash : undefined;
+}
+
+/**
+ * The termination on a container status's `lastState`, or undefined when the
+ * container has never ended.
+ *
+ * `lastState` is `{}` on a container's first run and `{ running: … }` on a
+ * container that was replaced without terminating, so the `terminated` key is
+ * the test — not the presence of `lastState`, and not `restartCount`, which
+ * counts restarts of the pod's containers and is 0 on a pod whose container
+ * was killed by the kubelet before the count moved.
+ */
+function terminationOf(
+  status: unknown,
+): Pick<PreviousInstance, "exitCode" | "reason" | "finishedAt"> | undefined {
+  const last = asRecord(asRecord(status).lastState);
+  if (last.terminated === undefined || last.terminated === null) return undefined;
+  const terminated = asRecord(last.terminated);
+  const exitCode = terminated.exitCode;
+  const reason = terminated.reason;
+  const finishedAt = terminated.finishedAt;
+  return {
+    ...(typeof exitCode === "number" ? { exitCode } : {}),
+    ...(typeof reason === "string" && reason !== "" ? { reason } : {}),
+    ...(typeof finishedAt === "string" && finishedAt !== "" ? { finishedAt } : {}),
+  };
 }
 
 /** The label a matchLabels selector would carry on a workload's spec, read
@@ -202,7 +269,10 @@ export async function resolveLogSubject(
   const raw = scope.pods.flatMap((pod, i) =>
     podContainerChoices(objects[i].object)
       .filter((c) => c.kind === "app")
-      .map((c) => ({ pod, container: c.name })),
+      // The object's index rides along: the previous-instance facts below are
+      // read off the very same object, and looking the pod up again by name
+      // would be a second index over a list already in hand.
+      .map((c) => ({ pod, container: c.name, object: i })),
   );
 
   // Every in-scope pod answered, but none of them had an app container to
@@ -238,5 +308,15 @@ export async function resolveLogSubject(
     return [{ name: pod, health: health ?? "neutral", ...(revision === undefined ? {} : { revision }) }];
   });
 
-  return { status: "resolved", targets, pods };
+  // Read off the objects already fetched — see {@link PreviousInstance}. In
+  // target order, and only for followed containers: a corpse the screen has no
+  // target to draw is a buffer it could never show.
+  const previous: PreviousInstance[] = raw.flatMap(({ pod, container, object }) => {
+    const statuses = asArray(asRecord(asRecord(objects[object].object).status).containerStatuses);
+    const status = statuses.find((s) => asRecord(s).name === container);
+    const termination = terminationOf(status);
+    return termination === undefined ? [] : [{ pod, container, ...termination }];
+  });
+
+  return { status: "resolved", targets, pods, previous };
 }

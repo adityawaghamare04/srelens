@@ -326,3 +326,121 @@ describe("resolveLogSubject's pods", () => {
     expect(result.pods.map((p) => p.name)).toEqual(["web-abc"]);
   });
 });
+
+/**
+ * The corpse facts. A pod's `status.containerStatuses[].lastState.terminated`
+ * is on the very object this module already fetches for its containers, so
+ * post-crash triage costs no second round trip — the same argument the pods'
+ * health and revision ride back on.
+ */
+describe("resolveLogSubject's previous instances", () => {
+  const died = (name: string, extra: Record<string, unknown> = {}) => ({
+    name,
+    ready: false,
+    restartCount: 3,
+    state: { waiting: { reason: "CrashLoopBackOff" } },
+    lastState: {
+      terminated: { exitCode: 137, reason: "OOMKilled", finishedAt: "2026-08-24T14:07:42Z", ...extra },
+    },
+  });
+  const alive = (name: string) => ({ name, ready: true, restartCount: 0, state: { running: {} } });
+
+  it("reports the terminated last state of each container that has one", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        "Pod/web-abc": podObject(["app", "sidecar"], {
+          status: { phase: "Running", containerStatuses: [died("app"), alive("sidecar")] },
+        }),
+      },
+      pods: { pods: [{ name: "web-abc" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    // Named per CONTAINER, not per pod: a pod running two containers can have
+    // one corpse and one healthy process, and a reader asking for the dead
+    // one's buffer must not be handed the live one's.
+    expect(result.previous).toEqual([
+      {
+        pod: "web-abc",
+        container: "app",
+        exitCode: 137,
+        reason: "OOMKilled",
+        finishedAt: "2026-08-24T14:07:42Z",
+      },
+    ]);
+  });
+
+  it("reports nothing for a pod on its first run, which is the common case", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        "Pod/web-abc": podObject(["app"], {
+          status: { phase: "Running", containerStatuses: [alive("app")] },
+        }),
+      },
+      pods: { pods: [{ name: "web-abc" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.previous).toEqual([]);
+  });
+
+  it("keeps an instance whose termination is missing a field, which is still readable", async () => {
+    // The buffer is fetchable the moment a container has terminated once. A
+    // termination that came back without a reason or a finish time is a gap in
+    // what can be SAID about it, not a reason to hide the logs.
+    const invoke = fakeInvoke({
+      objects: {
+        "Pod/web-1": podObject(["app"], {
+          status: {
+            phase: "Running",
+            containerStatuses: [{ name: "app", lastState: { terminated: { exitCode: 0 } } }],
+          },
+        }),
+      },
+    });
+    const result = await resolveLogSubject(podSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    // exit 0 survives: a container that completed is still a previous instance.
+    expect(result.previous).toEqual([{ pod: "web-1", container: "app", exitCode: 0 }]);
+  });
+
+  it("leaves out a container whose last state is a running one, not a termination", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Pod/web-1": podObject(["app"], {
+          status: {
+            phase: "Running",
+            containerStatuses: [{ name: "app", lastState: { running: { startedAt: "2026-08-24T14:00:00Z" } } }],
+          },
+        }),
+      },
+    });
+    const result = await resolveLogSubject(podSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.previous).toEqual([]);
+  });
+
+  it("leaves out a container that is not followed, whose logs no toggle can reach", async () => {
+    // An init container's status carries a `lastState` like any other, and it
+    // is not one of this stream's targets — offering its corpse would be
+    // offering a buffer the screen has no target to draw it against.
+    const invoke = fakeInvoke({
+      objects: {
+        "Pod/web-1": {
+          metadata: {},
+          spec: { containers: [{ name: "app" }], initContainers: [{ name: "migrate" }] },
+          status: {
+            phase: "Running",
+            containerStatuses: [alive("app")],
+            initContainerStatuses: [died("migrate")],
+          },
+        },
+      },
+    });
+    const result = await resolveLogSubject(podSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.previous).toEqual([]);
+  });
+});

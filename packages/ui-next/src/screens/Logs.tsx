@@ -8,10 +8,12 @@ import {
   type ReactNode,
 } from "react";
 import {
+  absoluteTimestamp,
   isTauri,
   logConnectionStatus,
   logLineHealth,
   logLineLevel,
+  podLogs,
   saveTextFile,
   type HealthKind,
   type LogConnectionVerdict,
@@ -33,6 +35,8 @@ import {
   SideRail,
   computeLogWindow,
   statusTone,
+  toneColor,
+  toneWash,
 } from "@srelens/ui-kit";
 import { useConsole } from "../console";
 import { useActiveContext } from "../lib/clusters";
@@ -45,6 +49,7 @@ import {
   type LogSubject,
   type LogSubjectPod,
   type LogSubjectResolution,
+  type PreviousInstance,
 } from "../lib/logSubject";
 import {
   StreamRail,
@@ -304,6 +309,73 @@ function podCount(targets: readonly LogTarget[]): string {
   return `${pods} ${pods === 1 ? "pod" : "pods"}`;
 }
 
+/**
+ * Why the follow control is off while a previous instance is on screen.
+ *
+ * Not a UI convention with an exception carved out for it: `podLogs` is a
+ * one-shot fetch and the streaming path passes `previous: false` as a literal,
+ * so there is genuinely nothing to follow. A control that stops working
+ * without saying so reads as a bug, and the sentence is one string because it
+ * is said twice on purpose — in the disabled control's own name, for a reader
+ * who lands on it, and in the banner, for a reader looking at the pane.
+ */
+const NO_FOLLOWING = "A terminated instance cannot be streamed";
+
+/**
+ * The previous instance's buffer, and how the fetch that produced it went.
+ *
+ * `idle` and `loading` are distinct from `ready` with no lines, because "still
+ * fetching" and "the crashed instance said nothing" are different facts about
+ * a pane that looks identical.
+ */
+type Snapshot =
+  | { status: "idle" }
+  | { status: "loading" }
+  | {
+      status: "ready";
+      lines: StreamLine[];
+      /** The first target whose buffer could not be read, if any: a partial
+       *  read must say what is missing — an absent container's lines look
+       *  exactly like a quiet container's. */
+      failure?: { where: string; error: string };
+    };
+
+/** `api-7 · api` — a target as this screen names one. */
+function whereOf(instance: PreviousInstance): string {
+  return `${instance.pod} · ${instance.container}`;
+}
+
+/**
+ * One terminated instance in a sentence: where it ran, when it ended and how.
+ *
+ * The whole date rather than the design's bare `14:07:42`, through core's own
+ * `absoluteTimestamp`: a container that died yesterday afternoon is not
+ * "14:07:42", and a second clock in this screen is how two surfaces start
+ * disagreeing about the same instant. Each fact is dropped rather than faked
+ * when the cluster did not send it.
+ */
+function terminationLine(instance: PreviousInstance): string {
+  const when = absoluteTimestamp(instance.finishedAt);
+  const exit =
+    instance.exitCode === undefined
+      ? instance.reason
+      : instance.reason === undefined
+        ? `exit ${instance.exitCode}`
+        : // The code alone does not separate an OOM kill from a SIGKILL, and
+          // the reason alone does not survive a `grep` for the code.
+          `exit ${instance.exitCode} (${instance.reason})`;
+  const facts = [...(when === "" ? [] : [`terminated ${when}`]), ...(exit === undefined ? [] : [exit])];
+  return facts.length === 0 ? whereOf(instance) : `${whereOf(instance)} — ${facts.join(", ")}`;
+}
+
+/** The banner's headline. One corpse is named in full; several are counted,
+ *  because six of these sentences in a strip is not a headline. */
+function previousHeadline(instances: readonly PreviousInstance[]): string {
+  return instances.length === 1
+    ? `Reading the previous instance of ${terminationLine(instances[0])}`
+    : `Reading the previous instance of ${instances.length} containers`;
+}
+
 /** The screen's frame, shared by every state it can be in. */
 function LogsScreen({
   eyebrow,
@@ -455,6 +527,10 @@ function LogsSubject({
       // already on the wire here for their containers, and their status and
       // labels came back on the same round trip.
       pods={resolution.pods}
+      // Same round trip again: `lastState.terminated` is on those objects, so
+      // the screen knows which containers have a corpse to read before the
+      // reader asks for one.
+      terminated={resolution.previous}
     />
   );
 }
@@ -466,6 +542,7 @@ function LogsStream({
   name,
   targets,
   pods,
+  terminated,
 }: {
   context: string;
   clusterName: string;
@@ -473,6 +550,7 @@ function LogsStream({
   name: string;
   targets: LogTarget[];
   pods: LogSubjectPod[];
+  terminated: PreviousInstance[];
 }) {
   const { ask } = useConsole();
   const [text, setText] = useState("");
@@ -489,6 +567,10 @@ function LogsStream({
   const [hidden, setHidden] = useState<readonly string[]>([]);
   /** Which restart the reader has already been told about. */
   const [seenRestart, setSeenRestart] = useState(0);
+  /** Whether the pane is showing the instance that died instead of the live one. */
+  const [previous, setPrevious] = useState(false);
+  /** That instance's buffer. A one-shot fetch, not a subscription. */
+  const [snapshot, setSnapshot] = useState<Snapshot>({ status: "idle" });
   /** Why the last export did not land, if it did not. */
   const [saveError, setSaveError] = useState<unknown>(undefined);
 
@@ -512,10 +594,89 @@ function LogsStream({
   });
 
   const only = targets.length === 1 ? targets[0] : undefined;
-  const rows = useMemo(
+  const liveRows = useMemo(
     () => stream.lines.map((l) => toRow(l, only)),
     [stream.lines, only],
   );
+
+  /**
+   * Fetch the terminated containers' buffers.
+   *
+   * One `podLogs` per corpse, in parallel, and nothing at all when there is no
+   * corpse — asking for the previous instance of a container that has never
+   * died gets a refusal from the API, and a refusal is not what "this pod has
+   * not restarted" should look like.
+   *
+   * **`sinceSeconds` is deliberately not passed.** It is the window the reader
+   * chose for the LIVE tail, and the instance being read died before it
+   * started: a five-minute window over a container that was killed twenty
+   * minutes ago hands back an empty file and calls it the crash logs.
+   * `timestamps` IS passed, because the time column is drawn from the stamp
+   * here exactly as it is for a live line.
+   *
+   * `podLogs` reports failure by returning `{ error }` rather than throwing,
+   * so this reads the field; the `Promise.all` always settles.
+   */
+  useEffect(() => {
+    if (!previous || terminated.length === 0) return;
+    let alive = true;
+    setSnapshot({ status: "loading" });
+    void Promise.all(
+      terminated.map(async (instance) => ({
+        instance,
+        out: await podLogs(context, namespace, instance.pod, undefined, {
+          container: instance.container,
+          previous: true,
+          timestamps: true,
+          tailLines: TAIL_LINES,
+        }),
+      })),
+    ).then((results) => {
+      if (!alive) return;
+      const lines: StreamLine[] = [];
+      let failure: { where: string; error: string } | undefined;
+      for (const { instance, out } of results) {
+        if (out.error !== undefined) {
+          // Kept, not swallowed. One container of a crash-looping pod whose
+          // buffer silently never appears is indistinguishable from one that
+          // died without saying anything.
+          failure ??= { where: whereOf(instance), error: out.error };
+          continue;
+        }
+        // The SAME `label` the live stream tags this target's lines with, so
+        // `toRow` splits the source identically and a previous line is drawn,
+        // filtered, tallied and exported by exactly one set of rules.
+        const source =
+          targets.find(
+            (t) => t.pod === instance.pod && t.container === instance.container,
+          )?.label ?? "";
+        for (const text of (out.logs ?? "").split("\n")) {
+          // A blob ends on a newline; a trailing empty row is not a log line.
+          if (text !== "") lines.push({ source, text });
+        }
+      }
+      setSnapshot({
+        status: "ready",
+        lines,
+        ...(failure === undefined ? {} : { failure }),
+      });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [previous, terminated, context, namespace, targets]);
+
+  const previousRows = useMemo(
+    () => (snapshot.status === "ready" ? snapshot.lines.map((l) => toRow(l, only)) : []),
+    [snapshot, only],
+  );
+
+  /**
+   * What the pane is drawing. The two buffers are never merged: they are
+   * different instances of the same container, and interleaving them would
+   * invent a history that never happened.
+   */
+  const rows = previous ? previousRows : liveRows;
 
   const containers = useMemo(
     () =>
@@ -617,9 +778,14 @@ function LogsStream({
     const content = filtered
       .map((row) => `${sourceOf(row, "/")} | ${row.raw}`)
       .join("\n");
-    void saveOrDownload(`${name}.log`, content).catch((e: unknown) =>
-      setSaveError(e),
-    );
+    // The previous instance's buffer goes out under its own name. Two files of
+    // the same workload's logs, one of them from an instance that no longer
+    // exists, are not tellable apart afterwards if they are called the same
+    // thing.
+    void saveOrDownload(
+      `${name}${previous ? "-previous" : ""}.log`,
+      content,
+    ).catch((e: unknown) => setSaveError(e));
   }
 
   // Sample the viewport and one row so the render can window the list. Both
@@ -677,6 +843,9 @@ function LogsStream({
   }
 
   const signal = connectionSignal(stream.status, stream.paused);
+  /** Whether new lines are arriving in THIS pane. A snapshot is not followed,
+   *  however healthy the connection underneath it is. */
+  const following = !previous && !stream.paused;
   const restarted = stream.restartCount > seenRestart;
   const window_ = computeLogWindow({
     total: filtered.length,
@@ -690,6 +859,54 @@ function LogsStream({
     : filtered;
   const windowLabel = since === "all" ? "" : ` in the last ${since}`;
 
+  /** A corpse that refused, while others answered — a banner over lines that
+   *  are still there, rather than a card in place of them. */
+  const snapshotFailure =
+    previous && snapshot.status === "ready" ? snapshot.failure : undefined;
+  const partialFailure = rows.length > 0 ? snapshotFailure : undefined;
+
+  /**
+   * What the body says INSTEAD of lines while a previous instance is asked
+   * for. `null` means the ordinary body draws.
+   *
+   * A pod on its first run has no corpse, and that is the common case rather
+   * than an edge: an empty body there would read as "the crashed instance said
+   * nothing", which is a different and far more alarming fact than "nothing
+   * has crashed". Each state below is a fact the pane cannot tell apart on its
+   * own — still fetching, nothing to fetch, fetched and empty, refused.
+   */
+  function previousBody(): ReactNode {
+    if (!previous) return null;
+    if (terminated.length === 0) {
+      return (
+        <EmptyState
+          title="No previous instance"
+          hint={`srelens is following ${targets.length} container${targets.length === 1 ? "" : "s"} across ${podCount(targets)}, and none of them has terminated and been restarted. There is a previous instance to read only once a container has died at least once.`}
+        />
+      );
+    }
+    if (snapshot.status !== "ready") {
+      return <LoadingState label="Reading the previous instance" />;
+    }
+    if (rows.length > 0) return null;
+    if (snapshotFailure !== undefined) {
+      return (
+        <FailureState
+          title={`Could not read the previous instance of ${snapshotFailure.where}`}
+          error={snapshotFailure.error}
+          className="m-3"
+        />
+      );
+    }
+    return (
+      <EmptyState
+        title="The previous instance logged nothing"
+        hint="srelens read the terminated container's buffer and it was empty: the instance died before writing a line, or the kubelet has already rotated it away."
+      />
+    );
+  }
+  const previousNotice = previousBody();
+
   return (
     <LogsScreen
       eyebrow={`${clusterName} / ${namespace} / ${name} · ${podCount(targets)}`}
@@ -700,13 +917,24 @@ function LogsStream({
             question="Summarise the last 500 log lines and group errors by cause"
             onAsk={ask}
           />
-          <Button variant="secondary" size="sm" onClick={stream.togglePause}>
-            {stream.paused ? (
-              <Icons.play size={13} aria-hidden="true" />
-            ) : (
+          {/* Disabled while a previous instance is on screen, and it says why
+              in its own accessible name: `previous` forbids following because
+              the API cannot follow a terminated container, not because this
+              screen would rather not. The visible word stays inside the name,
+              so the two never disagree. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={stream.togglePause}
+            disabled={previous}
+            aria-label={previous ? `Follow — ${NO_FOLLOWING.toLowerCase()}` : undefined}
+          >
+            {following ? (
               <Icons.pause size={13} aria-hidden="true" />
+            ) : (
+              <Icons.play size={13} aria-hidden="true" />
             )}
-            {stream.paused ? "Follow" : "Pause"}
+            {following ? "Pause" : "Follow"}
           </Button>
           {/* Disabled on an empty view rather than hidden: a control that
               vanishes leaves the reader wondering whether this screen exports
@@ -763,6 +991,27 @@ function LogsStream({
               />
             </div>
           )}
+          {/* The design's rotate-ccw toggle. Warn-tinted while on, from the
+              same tokens the banner under it uses — a pane showing something
+              other than the live stream must not look like one that is. */}
+          <Button
+            variant="secondary"
+            size="xs"
+            aria-pressed={previous}
+            onClick={() => setPrevious((p) => !p)}
+            style={
+              previous
+                ? {
+                    borderColor: toneColor("warn"),
+                    color: toneColor("warn"),
+                    background: toneWash("warn"),
+                  }
+                : undefined
+            }
+          >
+            <Icons.revert size={12} aria-hidden="true" />
+            Previous instance
+          </Button>
           <Button
             variant="secondary"
             size="xs"
@@ -778,20 +1027,56 @@ function LogsStream({
             Wrap
           </Button>
           <span className="flex-1" />
-          {stream.paused && stream.pendingWhilePaused > 0 && (
+          {/* Both of these speak for the live stream, and neither is true of a
+              snapshot: a readout saying `Following — 4 of 4 streaming` over a
+              buffer from an instance that no longer exists is the one thing
+              this banner is here to prevent. */}
+          {!previous && stream.paused && stream.pendingWhilePaused > 0 && (
             <Eyebrow>
               {groupNumber(stream.pendingWhilePaused)} new lines
             </Eyebrow>
           )}
-          <LiveSignal
-            label={connectionLabel(
-              signal,
-              stream.liveTargets,
-              stream.totalTargets,
-            )}
-            tone={statusTone(signal.health)}
-          />
+          {!previous && (
+            <LiveSignal
+              label={connectionLabel(
+                signal,
+                stream.liveTargets,
+                stream.totalTargets,
+              )}
+              tone={statusTone(signal.health)}
+            />
+          )}
         </FilterBar>
+
+        {previous && terminated.length > 0 && (
+          // Directly under the filter bar, as the design places it: what is
+          // being read, and why nothing is arriving.
+          <Alert
+            tone="warn"
+            title={previousHeadline(terminated)}
+            className="mx-3 mt-3"
+          >
+            {terminated.length > 1 &&
+              terminated.map((instance) => (
+                <div key={`${instance.pod}/${instance.container}`}>
+                  {terminationLine(instance)}
+                </div>
+              ))}
+            {NO_FOLLOWING}: the cluster hands a terminated container's buffer
+            back once, so this is a snapshot and srelens is not following it.
+          </Alert>
+        )}
+
+        {previous && partialFailure !== undefined && (
+          // Some of the corpses answered and one did not. The lines that did
+          // arrive stay on screen — throwing them away because a second
+          // container refused would lose the evidence the reader came for.
+          <FailureAlert
+            title={`Could not read the previous instance of ${partialFailure.where}`}
+            error={partialFailure.error}
+            className="mx-3 mt-3"
+          />
+        )}
 
         {restarted && (
           // A `since` change reopens the stream, and the reader loses every line
@@ -827,7 +1112,9 @@ function LogsStream({
             wrap ? "" : "whitespace-nowrap"
           }`}
         >
-          {stream.status === "error" && stream.error ? (
+          {previousNotice !== null ? (
+            previousNotice
+          ) : !previous && stream.status === "error" && stream.error ? (
             <FailureState
               title={`Could not follow ${name}'s logs`}
               error={stream.error.raw}
@@ -854,10 +1141,12 @@ function LogsStream({
             />
           ) : (
             <div ref={rowsRef}>
-              {stream.dropped > 0 && (
+              {!previous && stream.dropped > 0 && (
                 // The ring bit. A reader who scrolls to the top of a capped
                 // buffer is not at the beginning of the log, and silence here
-                // would let them believe they are.
+                // would let them believe they are. It is a fact about the LIVE
+                // ring, though: the previous instance's buffer arrived whole,
+                // in one fetch, and nothing has pushed anything out of it.
                 <div className="px-2.5 py-1 text-muted">
                   Showing the newest {groupNumber(filtered.length)} lines ·{" "}
                   {groupNumber(stream.dropped)} earlier lines dropped
