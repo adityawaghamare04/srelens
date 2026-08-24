@@ -12,6 +12,9 @@ const core = vi.hoisted(() => ({
   listPods: vi.fn(),
   listNamespaces: vi.fn(),
   listResource: vi.fn(),
+  listDeployments: vi.fn(),
+  listStatefulSets: vi.fn(),
+  listDaemonSets: vi.fn(),
   clusterFacts: vi.fn(),
   cordonNode: vi.fn(),
   drainNode: vi.fn(),
@@ -39,9 +42,12 @@ import {
   resourceStatusLine,
   type ClusterContext,
   type ClusterFacts,
+  type DaemonSetSummary,
+  type DeploymentSummary,
   type K8sObject,
   type NodeSummary,
   type PodSummary,
+  type StatefulSetSummary,
 } from "@srelens/core";
 import { Overview } from "./Overview";
 import { ConsoleProvider } from "../console";
@@ -71,6 +77,7 @@ function aNode(name: string, over: Partial<NodeSummary> = {}): NodeSummary {
     allocatableCpuMillicores: 4000,
     allocatableMemoryMiB: 16000,
     allocatablePods: 50,
+    instanceType: "",
     ...over,
   };
 }
@@ -101,6 +108,27 @@ const PODS = [
   aPod("worker-1", "n3", { phase: "Running", ready: "0/1", waitingReason: "CrashLoopBackOff" }),
 ];
 
+function aDeployment(name: string, ready: string, namespace = "checkout"): DeploymentSummary {
+  return { name, namespace, ready, upToDate: 1, available: 1, age: "8d" };
+}
+
+function aStatefulSet(name: string, ready: string, namespace = "payments"): StatefulSetSummary {
+  return { name, namespace, ready, updated: 1, service: "svc", age: "8d" };
+}
+
+function aDaemonSet(name: string, ready: number, desired: number, namespace = "kube-system"): DaemonSetSummary {
+  return {
+    name,
+    namespace,
+    desired,
+    current: ready,
+    ready,
+    upToDate: ready,
+    available: ready,
+    age: "40d",
+  };
+}
+
 const NO_FACTS: ClusterFacts = {
   context: "prod-eu",
   provider: "",
@@ -114,6 +142,9 @@ function quiet() {
   core.listPods.mockResolvedValue({ pods: PODS });
   core.listNamespaces.mockResolvedValue({ namespaces: ["default", "kube-system", "prod", "obs"] });
   core.listResource.mockResolvedValue({ items: [] });
+  core.listDeployments.mockResolvedValue({ deployments: [] });
+  core.listStatefulSets.mockResolvedValue({ statefulsets: [] });
+  core.listDaemonSets.mockResolvedValue({ daemonsets: [] });
   core.clusterFacts.mockResolvedValue(NO_FACTS);
   core.cordonNode.mockResolvedValue({ ok: true });
   core.drainNode.mockResolvedValue({ evicted: 3, skipped: 0 });
@@ -355,8 +386,22 @@ describe("Overview — the nodes table", () => {
     expect(meter.getAttribute("aria-valuenow")).toBe("100");
   });
 
+  it("reads Pool from the node's own machine type", async () => {
+    core.listNodes.mockResolvedValue({
+      nodes: [aNode("eu-w4-c3-standard-a1", { instanceType: "c3-standard-8" })],
+    });
+    open();
+    await waitFor(() => expect(rowFor("eu-w4-c3-standard-a1")).toBeTruthy());
+
+    expect(cells(rowFor("eu-w4-c3-standard-a1"))[1]).toBe("c3-standard-8");
+  });
+
   it("shows nothing in Pool rather than guessing one", async () => {
-    core.listNodes.mockResolvedValue({ nodes: [aNode("eu-w4-c3-standard-a1", { roles: "worker" })] });
+    // The node carries neither instance-type label — kind's nodes are
+    // containers, not cloud machines — so it named no pool at all.
+    core.listNodes.mockResolvedValue({
+      nodes: [aNode("eu-w4-c3-standard-a1", { roles: "worker", instanceType: "" })],
+    });
     open();
     await waitFor(() => expect(rowFor("eu-w4-c3-standard-a1")).toBeTruthy());
 
@@ -434,5 +479,245 @@ describe("Overview — the node actions", () => {
     await waitFor(() => expect(within(dialog()!).getByText(/nodes\/eviction is forbidden/)).toBeTruthy());
     // Still open, so nothing reads as having succeeded.
     expect(dialog()).toBeTruthy();
+  });
+});
+
+/* --------------------------------------------------------------- not ready */
+
+/**
+ * A cluster in several kinds of trouble at once.
+ *
+ * Deliberately not one shape of failure repeated: a fixture where every
+ * unhealthy row is a Degraded workload cannot tell a right table of status
+ * words from a wrong one, because both agree on the only case in it. This one
+ * spans all three severities core can flag (danger, warning and the neutral
+ * "we do not recognise this state"), four kinds, and — for each kind — one
+ * subject core calls healthy or at rest, which must NOT appear.
+ */
+const SICK_DEPLOYMENTS: DeploymentSummary[] = [
+  // 9 of 12 ready: core says Degraded, danger, flagged.
+  aDeployment("zz-checkout-api", "9/12"),
+  // Scaled to zero: neutral and NOT flagged. Amber-adjacent states like this
+  // are why `flagged` is data rather than a reading of the tone.
+  aDeployment("idle-batch", "0/0"),
+];
+const SICK_STATEFULSETS: StatefulSetSummary[] = [
+  aStatefulSet("mm-payments-db", "1/3"),
+  aStatefulSet("ok-cache", "3/3"),
+];
+const SICK_DAEMONSETS: DaemonSetSummary[] = [
+  aDaemonSet("cc-log-agent", 2, 4),
+  // Matches no node: "Not scheduled", and doing exactly what it was asked.
+  aDaemonSet("nn-gpu-agent", 0, 0),
+];
+const SICK_PODS: PodSummary[] = [
+  aPod("aa-worker-0", "n1", { namespace: "checkout", ready: "0/1", waitingReason: "CrashLoopBackOff" }),
+  aPod("bb-queue-0", "n2", { namespace: "payments", phase: "Pending", ready: "0/1" }),
+  // A phase core's table does not know: neutral, and still flagged — not
+  // recognising a state is not the same as knowing it is fine.
+  aPod("dd-mystery-0", "n3", { namespace: "search", phase: "Terminating", ready: "0/1" }),
+  aPod("ok-web-0", "n1", { namespace: "checkout" }),
+  aPod("done-backup-0", "n2", { namespace: "ops", phase: "Succeeded", ready: "0/1" }),
+];
+
+function sick() {
+  core.listDeployments.mockResolvedValue({ deployments: SICK_DEPLOYMENTS });
+  core.listStatefulSets.mockResolvedValue({ statefulsets: SICK_STATEFULSETS });
+  core.listDaemonSets.mockResolvedValue({ daemonsets: SICK_DAEMONSETS });
+  core.listPods.mockResolvedValue({ pods: SICK_PODS });
+}
+
+function notReady(): HTMLElement {
+  const heading = screen.getByRole("heading", { name: "Not ready" });
+  const card = heading.closest("section");
+  if (!card) throw new Error("no Not ready section on screen");
+  return card as HTMLElement;
+}
+
+const notReadyNames = () =>
+  Array.from(notReady().querySelectorAll(".status-row-name")).map((el) => el.textContent ?? "");
+
+const notReadyRow = (name: string) =>
+  Array.from(notReady().querySelectorAll<HTMLElement>(".status-row")).find(
+    (row) => row.querySelector(".status-row-name")?.textContent === name,
+  );
+
+const factsOf = (row: HTMLElement) =>
+  Array.from(row.querySelectorAll(".status-row-fact")).map((el) => el.textContent ?? "");
+
+/** The same subject as a fetched object, read by the function a detail pane reads. */
+const asObject = (kind: string, spec: unknown, status: unknown): K8sObject =>
+  ({ apiVersion: "v1", kind, metadata: { name: "x" }, spec, status }) as unknown as K8sObject;
+
+describe("Overview — the not-ready list", () => {
+  it("puts the worst thing first, whatever kind it happens to be", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+
+    // Danger first (alphabetically within the band, so the order is stable
+    // across three lists that settle in whatever order they settle), then the
+    // warning, then the state core could not read.
+    expect(notReadyNames()).toEqual([
+      "aa-worker-0",
+      "cc-log-agent",
+      "mm-payments-db",
+      "zz-checkout-api",
+      "bb-queue-0",
+      "dd-mystery-0",
+    ]);
+
+    // And the point of the section: this is NOT the order a list grouped by
+    // kind would produce. A Pod leads three workloads, and two more Pods
+    // follow them.
+    expect(notReadyNames()).not.toEqual([
+      "zz-checkout-api",
+      "mm-payments-db",
+      "cc-log-agent",
+      "aa-worker-0",
+      "bb-queue-0",
+      "dd-mystery-0",
+    ]);
+  });
+
+  it("lists what core calls unhealthy, and nothing else", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+
+    // Healthy, finished, scaled to zero, and matching no node: four subjects
+    // core does not flag, in four different tones. A section that read
+    // badness off the tone would pick up at least one of them.
+    for (const quiet of ["idle-batch", "ok-cache", "nn-gpu-agent", "ok-web-0", "done-backup-0"]) {
+      expect(notReadyRow(quiet)).toBeUndefined();
+    }
+
+    // The sharpest form of it: two subjects core gives the SAME tone, one
+    // flagged and one not. `idle-batch` (scaled to zero) and `dd-mystery-0`
+    // (a phase core does not recognise) are both neutral; only the second is
+    // in the list, which no reading of the colour could have produced.
+    expect(notReadyRow("dd-mystery-0")?.querySelector(".status")?.getAttribute("data-kind")).toBe(
+      "neutral",
+    );
+  });
+
+  it("takes every word and every tone from core, across all three severities", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+
+    const expected: [name: string, line: ReturnType<typeof resourceStatusLine>][] = [
+      ["zz-checkout-api", resourceStatusLine("Deployment", asObject("Deployment", { replicas: 12 }, { readyReplicas: 9 }))],
+      ["mm-payments-db", resourceStatusLine("StatefulSet", asObject("StatefulSet", { replicas: 3 }, { readyReplicas: 1 }))],
+      ["cc-log-agent", resourceStatusLine("DaemonSet", asObject("DaemonSet", {}, { numberReady: 2, desiredNumberScheduled: 4 }))],
+      [
+        "aa-worker-0",
+        resourceStatusLine(
+          "Pod",
+          asObject("Pod", {}, {
+            phase: "Running",
+            containerStatuses: [{ ready: false, state: { waiting: { reason: "CrashLoopBackOff" } } }],
+          }),
+        ),
+      ],
+      ["bb-queue-0", resourceStatusLine("Pod", asObject("Pod", {}, { phase: "Pending" }))],
+      ["dd-mystery-0", resourceStatusLine("Pod", asObject("Pod", {}, { phase: "Terminating" }))],
+    ];
+
+    // Three distinct tones among them, so a single wrong tone cannot pass by
+    // agreeing with the one case the fixture happens to contain.
+    expect(new Set(expected.map(([, line]) => line!.health))).toEqual(
+      new Set(["danger", "warning", "neutral"]),
+    );
+
+    for (const [name, line] of expected) {
+      const row = notReadyRow(name);
+      expect(row, `${name} should be in the not-ready list`).toBeTruthy();
+      const pill = row!.querySelector(".status");
+      expect(pill?.textContent, name).toBe(line!.status);
+      expect(pill?.getAttribute("data-kind"), name).toBe(line!.health);
+      // `flagged` is passed as data, not derived from the tone: every row
+      // here is one core flagged, including the amber and the grey ones.
+      expect(line!.flagged, name).toBe(true);
+      // It reaches the pill as `tinted`. The kit colours the two tones the
+      // design colours and leaves neutral plain — its own asymmetry, tested
+      // in `StatusPill`; what matters here is that a flagged warning row is
+      // coloured, which a caller passing `kind === "danger"` would have lost.
+      if (line!.health !== "neutral") {
+        expect(pill?.getAttribute("data-bad"), name).toBe("true");
+      }
+    }
+  });
+
+  it("names every trailing fact, so a reader hears more than 'checkout 9/12'", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+
+    // `StatusRow` takes `ReactNode`s and cannot know what a fact means; the
+    // noun is the caller's job, and this is the assertion that keeps it done.
+    for (const row of Array.from(notReady().querySelectorAll<HTMLElement>(".status-row"))) {
+      const facts = factsOf(row);
+      expect(facts).toHaveLength(2);
+      for (const fact of facts) {
+        expect(fact, `"${fact}" says nothing about what it is`).toMatch(/\b(namespace|ready)\b/);
+      }
+    }
+
+    // And in the accessible name of the row itself, not merely somewhere in
+    // the markup: the whole row is one button, and its name is its text.
+    const row = within(notReady()).getByRole("button", { name: /zz-checkout-api/ });
+    expect(row.textContent).toContain("Degraded");
+    expect(row.textContent).toContain("namespace checkout");
+    expect(row.textContent).toContain("9/12 ready");
+    expect(within(notReady()).getByRole("button", { name: /bb-queue-0 namespace payments/ })).toBeTruthy();
+
+    // The namespace comes before the ratio — the design's own column order.
+    expect(factsOf(notReadyRow("cc-log-agent")!)).toEqual(["namespace kube-system", "2/4 ready"]);
+  });
+
+  it("opens the object's own detail when a row is activated", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+
+    await userEvent.click(within(notReady()).getByRole("button", { name: /zz-checkout-api/ }));
+    expect(store.activeRoute()).toBe("/k/Deployment/checkout/zz-checkout-api");
+
+    await userEvent.click(within(notReady()).getByRole("button", { name: /aa-worker-0/ }));
+    expect(store.activeRoute()).toBe("/k/Pod/checkout/aa-worker-0");
+  });
+
+  it("says that nothing is unhealthy rather than leaving a blank", async () => {
+    // The default fixture's one crash-looping pod, taken away.
+    core.listPods.mockResolvedValue({ pods: PODS.filter((p) => !p.waitingReason) });
+    open();
+    await waitFor(() => expect(within(notReady()).getByText("Nothing is unhealthy")).toBeTruthy());
+
+    expect(notReadyNames()).toEqual([]);
+    expect(within(notReady()).getByText(/prod-eu/)).toBeTruthy();
+  });
+
+  it("does not read a refused list as a healthy cluster", async () => {
+    core.listPods.mockResolvedValue({ pods: [] });
+    core.listDeployments.mockResolvedValue({ error: 'deployments is forbidden: User "dev" cannot list' });
+    open();
+
+    await waitFor(() => expect(within(notReady()).getByText(/forbidden/)).toBeTruthy());
+    // "Nothing is unhealthy" would be a claim nobody checked.
+    expect(within(notReady()).queryByText("Nothing is unhealthy")).toBeNull();
+  });
+
+  it("keeps the rows it does have when one kind is refused, and says which", async () => {
+    core.listPods.mockResolvedValue({ pods: SICK_PODS });
+    core.listStatefulSets.mockResolvedValue({ error: 'statefulsets is forbidden: User "dev" cannot list' });
+    open();
+
+    await waitFor(() => expect(notReadyRow("aa-worker-0")).toBeTruthy());
+    expect(notReadyNames()).toEqual(["aa-worker-0", "bb-queue-0", "dd-mystery-0"]);
+    // The refusal is stated, not swallowed: the list is short for a reason.
+    expect(within(notReady()).getByText(/statefulsets is forbidden/)).toBeTruthy();
+    // And it stays one section's failure — the nodes table is untouched.
+    expect(rowFor("n1")).toBeTruthy();
   });
 });

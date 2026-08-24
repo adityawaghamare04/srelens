@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ClusterFacts, NodeSummary, PodSummary } from "@srelens/core";
+import type {
+  ClusterFacts,
+  DaemonSetSummary,
+  DeploymentSummary,
+  NodeSummary,
+  PodSummary,
+  StatefulSetSummary,
+} from "@srelens/core";
 
 // `vi.hoisted` because `vi.mock` is hoisted above every declaration in this
 // file — the same pattern resourceList.test.tsx uses. Only the six capability
@@ -12,6 +19,9 @@ const core = vi.hoisted(() => ({
   listPods: vi.fn(),
   listNamespaces: vi.fn(),
   listResource: vi.fn(),
+  listDeployments: vi.fn(),
+  listStatefulSets: vi.fn(),
+  listDaemonSets: vi.fn(),
   clusterFacts: vi.fn(),
 }));
 vi.mock("@srelens/core", async (orig) => ({
@@ -27,6 +37,7 @@ import {
   useOverview,
   useOverviewNodes,
   useOverviewPods,
+  useOverviewWorkloads,
 } from "./overview";
 
 function aNode(name: string, over: Partial<NodeSummary> = {}): NodeSummary {
@@ -41,6 +52,7 @@ function aNode(name: string, over: Partial<NodeSummary> = {}): NodeSummary {
     allocatableCpuMillicores: 4000,
     allocatableMemoryMiB: 16000,
     allocatablePods: 50,
+    instanceType: "",
     ...over,
   };
 }
@@ -59,6 +71,27 @@ function aPod(name: string, node: string, over: Partial<PodSummary> = {}): PodSu
   };
 }
 
+function aDeployment(name: string, ready: string): DeploymentSummary {
+  return { name, namespace: "checkout", ready, upToDate: 1, available: 1, age: "8d" };
+}
+
+function aStatefulSet(name: string, ready: string): StatefulSetSummary {
+  return { name, namespace: "payments", ready, updated: 1, service: "svc", age: "8d" };
+}
+
+function aDaemonSet(name: string, ready: number, desired: number): DaemonSetSummary {
+  return {
+    name,
+    namespace: "kube-system",
+    desired,
+    current: ready,
+    ready,
+    upToDate: ready,
+    available: ready,
+    age: "40d",
+  };
+}
+
 const NO_FACTS: ClusterFacts = {
   context: "prod",
   provider: "",
@@ -73,6 +106,9 @@ function allQuiet() {
   core.listPods.mockResolvedValue({ pods: [] });
   core.listNamespaces.mockResolvedValue({ namespaces: [] });
   core.listResource.mockResolvedValue({ items: [] });
+  core.listDeployments.mockResolvedValue({ deployments: [] });
+  core.listStatefulSets.mockResolvedValue({ statefulsets: [] });
+  core.listDaemonSets.mockResolvedValue({ daemonsets: [] });
   core.clusterFacts.mockResolvedValue(NO_FACTS);
 }
 
@@ -320,6 +356,53 @@ describe("useClusterFacts", () => {
   });
 });
 
+describe("useOverviewWorkloads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    allQuiet();
+  });
+
+  it("lists the three scaling kinds across every namespace", async () => {
+    core.listDeployments.mockResolvedValue({ deployments: [aDeployment("checkout-api", "9/12")] });
+    core.listStatefulSets.mockResolvedValue({ statefulsets: [aStatefulSet("payments-db", "1/3")] });
+    core.listDaemonSets.mockResolvedValue({ daemonsets: [aDaemonSet("log-agent", 2, 4)] });
+
+    const { result } = renderHook(() => useOverviewWorkloads("prod"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    expect(result.current.deployments?.map((d) => d.name)).toEqual(["checkout-api"]);
+    expect(result.current.statefulSets?.map((s) => s.name)).toEqual(["payments-db"]);
+    expect(result.current.daemonSets?.map((d) => d.name)).toEqual(["log-agent"]);
+    // The empty namespace is "every namespace"; the overview is cluster-wide.
+    expect(core.listDeployments).toHaveBeenCalledWith("prod", "");
+    expect(core.listStatefulSets).toHaveBeenCalledWith("prod", "");
+    expect(core.listDaemonSets).toHaveBeenCalledWith("prod", "");
+  });
+
+  it("keeps the kinds that answered when one of them is refused", async () => {
+    core.listDeployments.mockResolvedValue({ deployments: [aDeployment("checkout-api", "9/12")] });
+    core.listStatefulSets.mockResolvedValue({ error: 'statefulsets is forbidden: User "dev" cannot list' });
+    core.listDaemonSets.mockResolvedValue({ daemonsets: [aDaemonSet("log-agent", 2, 4)] });
+
+    const { result } = renderHook(() => useOverviewWorkloads("prod"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    expect(result.current.deployments).toHaveLength(1);
+    expect(result.current.daemonSets).toHaveLength(1);
+    // Not an empty list, which would read as a cluster with no StatefulSets.
+    expect(result.current.statefulSets).toBeUndefined();
+    expect(result.current.errors).toEqual([
+      'statefulsets is forbidden: User "dev" cannot list',
+    ]);
+  });
+
+  it("carries no reasons at all when every kind answered", async () => {
+    const { result } = renderHook(() => useOverviewWorkloads("prod"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.errors).toEqual([]);
+  });
+});
+
 describe("useOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -352,6 +435,7 @@ describe("useOverview", () => {
     expect(result.current.namespaces.count).toBe(2);
     expect(result.current.objects.counts.every((c) => c.count === 3)).toBe(true);
     expect(result.current.facts.facts?.provider).toBe("kind");
+    expect(result.current.workloads.status).toBe("ready");
   });
 
   it("feeds the pod list into the nodes' pod counts without a second list call", async () => {
@@ -373,6 +457,7 @@ describe("useOverview", () => {
     await waitFor(() => expect(core.listNodes).toHaveBeenCalledTimes(2));
     expect(core.listPods).toHaveBeenCalledTimes(2);
     expect(core.listNamespaces).toHaveBeenCalledTimes(2);
+    expect(core.listDeployments).toHaveBeenCalledTimes(2);
     expect(core.clusterFacts).toHaveBeenCalledTimes(2);
   });
 });

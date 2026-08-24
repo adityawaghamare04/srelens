@@ -3,18 +3,24 @@ import {
   K8S_KIND,
   clusterCapacity,
   clusterFacts,
+  listDaemonSets,
+  listDeployments,
   listNamespaces,
   listNodes,
   listPods,
   listResource,
+  listStatefulSets,
   nodeMetrics,
   nodeUsage,
   type ClusterCapacity,
   type ClusterFacts,
+  type DaemonSetSummary,
+  type DeploymentSummary,
   type NodeSummary,
   type NodeUsage,
   type PodSummary,
   type ResourceKind,
+  type StatefulSetSummary,
 } from "@srelens/core";
 import { useResource, type ResourceStatus } from "./useResource";
 
@@ -257,6 +263,67 @@ export function useObjectCounts(context: string): ObjectCounts {
   };
 }
 
+export interface OverviewWorkloads {
+  status: ResourceStatus;
+  /**
+   * The kind's rows, or `undefined` when it could not be listed. Deliberately
+   * not `[]`: an empty array is the answer "this cluster runs no Deployments",
+   * and the `Not ready` list would then read a refusal as a clean bill of
+   * health — the one thing that section must never do.
+   */
+  deployments?: DeploymentSummary[];
+  statefulSets?: StatefulSetSummary[];
+  daemonSets?: DaemonSetSummary[];
+  /** One reason per kind that was refused. The kinds that answered still render. */
+  errors: string[];
+  error?: string;
+  reload(): void;
+}
+
+/**
+ * The three scaling kinds the `Not ready` list draws its workload rows from.
+ *
+ * Deployments, StatefulSets and DaemonSets — the kinds core's `scaledStatus`
+ * gives a ready-out-of-desired verdict for. Jobs and CronJobs are deliberately
+ * not here: a CronJob has no unhealthy state of its own (the health lives in
+ * the Jobs it spawns), and a failed Job's pods are already in the pod list as
+ * Pods, with the phase that says what went wrong.
+ *
+ * One `useResource` over three calls that cannot reject — every `list*`
+ * wrapper returns its error rather than throwing — so the fan-out is safe in
+ * the way classic's `Promise.all` was not: no branch can cancel the others.
+ */
+export function useOverviewWorkloads(context: string): OverviewWorkloads {
+  const loaded = useResource(
+    () =>
+      Promise.all([
+        // The empty namespace is every namespace: the overview is a whole
+        // cluster's view, and so is the list beneath it.
+        listDeployments(context, ""),
+        listStatefulSets(context, ""),
+        listDaemonSets(context, ""),
+      ]).then(([deployments, statefulSets, daemonSets]) => ({
+        deployments: deployments.deployments,
+        statefulSets: statefulSets.statefulsets,
+        daemonSets: daemonSets.daemonsets,
+        errors: [deployments.error, statefulSets.error, daemonSets.error].filter(
+          (reason): reason is string => reason !== undefined,
+        ),
+      })),
+    [context],
+  );
+
+  return {
+    status: loaded.status,
+    deployments: loaded.data?.deployments,
+    statefulSets: loaded.data?.statefulSets,
+    daemonSets: loaded.data?.daemonSets,
+    errors: loaded.data?.errors ?? [],
+    error: loaded.error,
+    reload: loaded.reload,
+  };
+}
+
 export interface OverviewFacts {
   status: ResourceStatus;
   /**
@@ -291,6 +358,7 @@ export function useClusterFacts(context: string): OverviewFacts {
 export interface Overview {
   nodes: OverviewNodes;
   pods: OverviewPods;
+  workloads: OverviewWorkloads;
   namespaces: NamespaceCount;
   objects: ObjectCounts;
   facts: OverviewFacts;
@@ -309,22 +377,25 @@ export interface Overview {
 export function useOverview(context: string): Overview {
   const pods = useOverviewPods(context);
   const nodes = useOverviewNodes(context, pods.pods);
+  const workloads = useOverviewWorkloads(context);
   const namespaces = useNamespaceCount(context);
   const objects = useObjectCounts(context);
   const facts = useClusterFacts(context);
 
   const reloadNodes = nodes.reload;
   const reloadPods = pods.reload;
+  const reloadWorkloads = workloads.reload;
   const reloadNamespaces = namespaces.reload;
   const reloadObjects = objects.reload;
   const reloadFacts = facts.reload;
   const reload = useCallback(() => {
     reloadNodes();
     reloadPods();
+    reloadWorkloads();
     reloadNamespaces();
     reloadObjects();
     reloadFacts();
-  }, [reloadNodes, reloadPods, reloadNamespaces, reloadObjects, reloadFacts]);
+  }, [reloadNodes, reloadPods, reloadWorkloads, reloadNamespaces, reloadObjects, reloadFacts]);
 
-  return { nodes, pods, namespaces, objects, facts, reload };
+  return { nodes, pods, workloads, namespaces, objects, facts, reload };
 }

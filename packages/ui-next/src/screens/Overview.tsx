@@ -13,11 +13,14 @@ import {
   type NodeSummary,
   type NodeUsage,
   type PodSummary,
+  type StatusVerdict,
 } from "@srelens/core";
 import {
   ActionBar,
+  Alert,
   Button,
   ConfirmDialog,
+  EmptyState,
   ErrorState,
   KubectlPreview,
   LoadingState,
@@ -26,6 +29,7 @@ import {
   Screen,
   Stat,
   StatusPill,
+  StatusRow,
   Table,
   loadTone,
   statusTone,
@@ -37,10 +41,21 @@ import { useConsole } from "../console";
 import { useActiveContext } from "../lib/clusters";
 import { detailRoute } from "../lib/detailRoute";
 import { Icons } from "../lib/icons";
-import { nodeVerdict, podFlagged } from "../lib/kinds/columns";
+import {
+  daemonSetVerdict,
+  deploymentVerdict,
+  nodeVerdict,
+  podFlagged,
+  statefulSetVerdict,
+} from "../lib/kinds/columns";
 import { ROW_ACTION_LABEL } from "../lib/kinds/rowActions";
 import { UnhealthyDot } from "../lib/kinds/rowAffordances";
-import { useOverview, type Overview as OverviewData, type OverviewNodes } from "../lib/overview";
+import {
+  useOverview,
+  type Overview as OverviewData,
+  type OverviewNodes,
+  type OverviewWorkloads,
+} from "../lib/overview";
 import { describe } from "../lib/routes";
 import { openTab } from "../lib/tabsStore";
 import { NoClusterScreen } from "./resourceShell";
@@ -80,9 +95,9 @@ type NodeRow = NodeSummary & { usage: NodeUsage };
 /**
  * `/overview` — the cluster overview (§7).
  *
- * Two of its three left-hand sections are here: the capacity strip and the
- * nodes table. `Not ready` and the `At a glance` rail arrive with their own
- * tasks and slot in where this file says so.
+ * All three of its left-hand sections are here: the capacity strip, the nodes
+ * table and the `Not ready` list. The `At a glance` rail arrives with its own
+ * task and slots in where this file says so.
  *
  * Split in two the way `Events.tsx` and `Workloads.tsx` are: with no cluster
  * in focus there is no context name to load anything for, and a hook cannot be
@@ -134,12 +149,12 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
         </Button>
       }
     >
-      {/* A column of sections. The `Not ready` list belongs after the table,
-          and the `At a glance` rail wraps this column — each with its own
-          task, and neither needs any state held here. */}
+      {/* A column of sections. The `At a glance` rail wraps this column —
+          its own task, and it needs no state held here. */}
       <div className="flex flex-col gap-3">
         <Capacity overview={overview} />
         <Nodes context={name} nodes={overview.nodes} />
+        <NotReady context={name} overview={overview} />
       </div>
     </Screen>
   );
@@ -395,18 +410,22 @@ function Nodes({ context, nodes }: { context: string; nodes: OverviewNodes }) {
 /**
  * The node's pool — the machine type it was created from.
  *
- * `NodeSummary` carries name, status, taints, version, roles, age and the
- * allocatable trio, and no labels at all, so the
- * `node.kubernetes.io/instance-type` label this column reads is not on the
- * wire today and every cell shows nothing. That is the design's own answer for
- * a node without the label, and the column is deliberately NOT filled from
- * something else that happens to be present: the mock's pools (`c3-standard`
- * out of `eu-w4-c3-standard-a1`) are a naming convention, and `roles` is a
- * different fact entirely. A guess here would be read as the machine type the
- * cluster is billed for. One label on `NodeSummary` fills it in.
+ * `NodeSummary.instanceType` is the backend's reading of
+ * `node.kubernetes.io/instance-type` (falling back to the deprecated
+ * `beta.kubernetes.io/instance-type`), and an empty string when the node
+ * carries neither. Empty stays empty here and renders as the em dash every
+ * other absent fact on this screen uses: the node said nothing, and a word in
+ * its place would look like an answer.
+ *
+ * Deliberately NOT filled from something else that happens to be present. The
+ * mock's pools (`c3-standard` out of `eu-w4-c3-standard-a1`) are a naming
+ * convention, and `roles` is a different fact entirely; either guess would be
+ * read as the machine type the cluster is billed for. kind's nodes are
+ * containers rather than cloud machines and carry neither label, so an
+ * em-dashed column there is the correct answer rather than a missing one.
  */
-function pool(_node: NodeRow): string {
-  return "";
+function pool(node: NodeRow): string {
+  return node.instanceType;
 }
 
 /** The percentage a meter draws, or the words that say there is none. */
@@ -540,6 +559,202 @@ function nodeActions(context: string, row: NodeRow, open: (pending: Pending) => 
       onSelect: () => void copyKubectlCommand(toKubectl({ ...kubectlBase, action: "get", output: "yaml" })),
     },
   ];
+}
+
+/* --------------------------------------------------------------- not ready */
+
+/**
+ * How bad, as an order.
+ *
+ * Emphatically NOT a ninth hand-paired label/tone table: no word and no colour
+ * is named here. Core has already decided both, and this only says which of
+ * core's verdicts an operator wants to read first — red before amber, and
+ * amber before a state nobody recognised.
+ *
+ * Total over `HealthKind` rather than over the three flagged tones, so a tone
+ * core starts flagging tomorrow sorts somewhere defined instead of `NaN`.
+ */
+const SEVERITY: Record<HealthKind, number> = {
+  danger: 0,
+  warning: 1,
+  neutral: 2,
+  info: 3,
+  success: 4,
+};
+
+/** One unhealthy thing, whatever kind it is. */
+interface NotReadyRow {
+  /** The Kubernetes kind, as `detailRoute` spells it. */
+  kind: string;
+  name: string;
+  namespace: string;
+  /** The word, the tone and the dot — core's, decided together. */
+  verdict: StatusVerdict;
+  /** Ready out of desired, as the row itself reports it: `9/12`. */
+  ratio: string;
+}
+
+/**
+ * The trailing facts, each carrying the noun that says what it is.
+ *
+ * `StatusRow` takes `ReactNode`s and genuinely cannot know what a fact means;
+ * naming them is the caller's job and nobody else's. The design draws the
+ * bare figures of the mock — `checkout   9/12` — which reads to a screen
+ * reader as a row called "Degraded checkout-api checkout 9/12": two values,
+ * no nouns, and no way to tell a namespace from a ratio. `Inspector` settled
+ * the same argument the same way, and for the same reason its facts read
+ * "9/12 ready" rather than "9/12".
+ */
+function facts(row: NotReadyRow): string[] {
+  return [`namespace ${row.namespace}`, `${row.ratio} ready`];
+}
+
+/**
+ * Every unhealthy workload and pod, worst first.
+ *
+ * Two rules, and the section is the two of them:
+ *
+ * **Which rows qualify is core's `flagged`, never a predicate of this file's.**
+ * The verdicts come off `deploymentVerdict`/`statefulSetVerdict`/
+ * `daemonSetVerdict`/`podStatus`, which are the same `scaledStatus` and
+ * `podStatus` that `resourceStatusLine` calls for a fetched object — so a row
+ * here and the detail pane a click away cannot disagree about the same thing.
+ * Badness is read as data, not off the colour: a Deployment scaled to zero is
+ * neutral and absent, a Pending pod is amber and present, and a pod in a phase
+ * core does not recognise is grey and present, because not recognising a state
+ * is not the same as knowing it is fine.
+ *
+ * **The order is severity, not kind.** A list that put every Deployment above
+ * every Pod would bury a crash-looping pod under four healthy-ish rollouts,
+ * and the whole point of the section is that the worst thing is at the top.
+ * Ties break on the name — the three workload lists and the pod list settle
+ * independently, so concatenation order is not stable between renders, and a
+ * list that reshuffled itself under the reader's cursor would be its own bug.
+ */
+function notReadyRows(workloads: OverviewWorkloads, pods: PodSummary[] | undefined): NotReadyRow[] {
+  const rows: NotReadyRow[] = [];
+
+  for (const row of workloads.deployments ?? []) {
+    rows.push({
+      kind: "Deployment",
+      name: row.name,
+      namespace: row.namespace,
+      verdict: deploymentVerdict(row),
+      ratio: row.ready,
+    });
+  }
+  for (const row of workloads.statefulSets ?? []) {
+    rows.push({
+      kind: "StatefulSet",
+      name: row.name,
+      namespace: row.namespace,
+      verdict: statefulSetVerdict(row),
+      ratio: row.ready,
+    });
+  }
+  for (const row of workloads.daemonSets ?? []) {
+    rows.push({
+      kind: "DaemonSet",
+      name: row.name,
+      namespace: row.namespace,
+      verdict: daemonSetVerdict(row),
+      // A DaemonSet reports two numbers where a Deployment reports the string.
+      ratio: `${row.ready}/${row.desired}`,
+    });
+  }
+  for (const row of pods ?? []) {
+    rows.push({
+      kind: "Pod",
+      name: row.name,
+      namespace: row.namespace,
+      verdict: podStatus(row.phase, row.waitingReason),
+      ratio: row.ready,
+    });
+  }
+
+  return rows
+    .filter((row) => row.verdict.flagged)
+    .sort(
+      (a, b) =>
+        SEVERITY[a.verdict.health] - SEVERITY[b.verdict.health] || a.name.localeCompare(b.name),
+    );
+}
+
+/**
+ * `NOT READY` — the unhealthy workloads and pods, in one list.
+ *
+ * It reads two loaders and adds no fetch of its own: the pod list is the one
+ * the Pods tile and the per-node counts already share.
+ *
+ * A refusal never reads as good news. "Nothing is unhealthy" is a claim about
+ * everything that was checked, so a kind that could not be listed is said out
+ * loud — beside the rows when some kinds answered, and in place of them when
+ * none did. Silently showing three rows out of a possible six, or an empty
+ * state for a cluster nobody was allowed to look at, is the failure this
+ * section would be worst at.
+ */
+function NotReady({ context, overview }: { context: string; overview: OverviewData }) {
+  const { workloads, pods } = overview;
+  const rows = notReadyRows(workloads, pods.pods);
+
+  // `workloads.error` is the whole fan-out failing; `workloads.errors` is one
+  // kind of it. Both are reasons this list may be shorter than the truth.
+  const failures = [pods.error, workloads.error, ...workloads.errors].filter(
+    (reason): reason is string => reason !== undefined && reason !== "",
+  );
+
+  const reload = () => {
+    workloads.reload();
+    pods.reload();
+  };
+
+  return (
+    <Panel title="Not ready">
+      {workloads.status === "loading" || pods.status === "loading" ? (
+        <LoadingState label="Checking workloads and pods" />
+      ) : failures.length > 0 && rows.length === 0 ? (
+        <ErrorState
+          title={`Could not check every workload on ${context}`}
+          detail={failures.join(" · ")}
+          onRetry={reload}
+        />
+      ) : (
+        <>
+          {failures.length > 0 && (
+            <Alert tone="warn" title="Some kinds could not be checked">
+              {failures.join(" · ")}
+            </Alert>
+          )}
+          {rows.length === 0 ? (
+            <EmptyState
+              title="Nothing is unhealthy"
+              hint={`Every workload and pod in ${context} is where it should be.`}
+            />
+          ) : (
+            <div className="flex flex-col">
+              {rows.map((row) => (
+                <StatusRow
+                  // Kind and namespace as well as the name: a Deployment and
+                  // its own pod share a prefix, and two namespaces may each
+                  // run a `web`.
+                  key={`${row.kind}/${row.namespace}/${row.name}`}
+                  status={row.verdict.status}
+                  kind={row.verdict.health}
+                  // Data, not a reading of the tone — see `StatusRow`'s prop.
+                  flagged={row.verdict.flagged}
+                  name={row.name}
+                  facts={facts(row)}
+                  onActivate={() =>
+                    openTab(detailRoute(row.kind, row.namespace, row.name), { clusterName: context })
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </Panel>
+  );
 }
 
 /* ---------------------------------------------------------------- confirms */
