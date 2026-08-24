@@ -2,11 +2,19 @@ import { invokeCapability, type Invoker } from "../transport/transport";
 
 /**
  * Fleet's per-cluster pod tally: pods in the `Running` phase over every pod
- * regardless of phase. A liveness figure, not a health one — a `Running` pod
- * can still be crash-looping.
+ * that is still meant to be running. A liveness figure, not a health one — a
+ * `Running` pod can still be crash-looping.
  */
 export interface PodCount {
   running: number;
+  /**
+   * **Excludes `Succeeded` pods**, and nothing else. A completed Job's pods
+   * stay in the cluster until something reaps them, and they are done rather
+   * than down: counting them would make a cluster whose Jobs all finished read
+   * as one with pods missing. `Failed` stays counted — a failed pod genuinely
+   * is a problem worth seeing. The exclusion is server-side, in the backend's
+   * field selector; see `STILL_RUNNING` in `crates/kube/src/pod_count.rs`.
+   */
   total: number;
 }
 

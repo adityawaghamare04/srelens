@@ -16,6 +16,7 @@ const core = vi.hoisted(() => ({
   listStatefulSets: vi.fn(),
   listDaemonSets: vi.fn(),
   clusterFacts: vi.fn(),
+  podCount: vi.fn(),
   cordonNode: vi.fn(),
   drainNode: vi.fn(),
   copyKubectlCommand: vi.fn(),
@@ -54,6 +55,8 @@ import { ConsoleProvider } from "../console";
 import { defaultState } from "../lib/tabs";
 import * as store from "../lib/tabsStore";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
+import { probeCluster, resetProbes } from "../lib/probe";
+import { resetView, setLink, type LinkState } from "../lib/workspace";
 
 const CTX: ClusterContext = {
   name: "prod-eu",
@@ -146,6 +149,7 @@ function quiet() {
   core.listStatefulSets.mockResolvedValue({ statefulsets: [] });
   core.listDaemonSets.mockResolvedValue({ daemonsets: [] });
   core.clusterFacts.mockResolvedValue(NO_FACTS);
+  core.podCount.mockResolvedValue({ counts: { running: 4, total: 4 } });
   core.cordonNode.mockResolvedValue({ ok: true });
   core.drainNode.mockResolvedValue({ evicted: 3, skipped: 0 });
 }
@@ -157,6 +161,10 @@ beforeEach(() => {
   setContexts([CTX]);
   setKubeconfigFiles(["/home/u/.kube/config"]);
   store.setState(defaultState([CTX]));
+  // The rail reads both: the probe for the server version, the workspace view
+  // for the link. Neither survives a test.
+  resetProbes();
+  resetView();
 });
 
 function open() {
@@ -718,6 +726,261 @@ describe("Overview — the not-ready list", () => {
     // The refusal is stated, not swallowed: the list is short for a reason.
     expect(within(notReady()).getByText(/statefulsets is forbidden/)).toBeTruthy();
     // And it stays one section's failure — the nodes table is untouched.
+    expect(rowFor("n1")).toBeTruthy();
+  });
+});
+
+/* --------------------------------------------------------------- the rail */
+
+/** The `At a glance` rail, as the landmark its own head names. */
+const rail = () => screen.getByRole("complementary", { name: "At a glance" });
+
+/** One rail section, by the heading over it. */
+function section(title: string): HTMLElement {
+  const heading = within(rail()).getByRole("heading", { name: title });
+  const found = heading.closest("section");
+  if (!found) throw new Error(`no ${title} section in the rail`);
+  return found as HTMLElement;
+}
+
+/** The control-plane facts as `label -> value`, in the order the rail draws them. */
+function controlPlane(): Array<[string, string]> {
+  return Array.from(section("Control plane").querySelectorAll(".kv")).map((kv) => [
+    kv.querySelector(".kv-k")?.textContent ?? "",
+    kv.querySelector(".kv-v")?.textContent ?? "",
+  ]);
+}
+
+const factLabels = () => controlPlane().map(([k]) => k);
+const factValue = (label: string) => controlPlane().find(([k]) => k === label)?.[1];
+
+/** Seed the probe store the way the shell does, without a real connect call. */
+async function probed(version: string | null) {
+  await probeCluster(CTX, async () => ({ context: CTX.name, reachable: true, version }));
+}
+
+const SOME_FACTS: ClusterFacts = {
+  context: "prod-eu",
+  provider: "GKE",
+  region: "europe-west4",
+  metricsServer: { state: "present", version: "v1beta1" },
+};
+
+describe("Overview — the rail's control plane", () => {
+  it("omits a fact the cluster did not report rather than calling it unknown", async () => {
+    // The live case, not an edge one: no node on a kind cluster carries a
+    // region label, and `clusterFacts` reports that as an empty string.
+    core.clusterFacts.mockResolvedValue({ ...SOME_FACTS, provider: "", region: "" });
+    open();
+    await waitFor(() => expect(factValue("Context")).toBe("prod-eu"));
+
+    expect(factLabels()).not.toContain("Provider");
+    expect(factLabels()).not.toContain("Region");
+    // And nothing standing in for them: "unknown" and an em dash both read as
+    // answers, and the cluster gave none.
+    expect(section("Control plane").textContent).not.toMatch(/unknown/i);
+    expect(section("Control plane").textContent).not.toContain("—");
+  });
+
+  it("draws the facts the cluster did report, in the design's order", async () => {
+    core.clusterFacts.mockResolvedValue(SOME_FACTS);
+    await probed("v1.31.4");
+    setLink(CTX.stableId, "connected");
+    open();
+
+    await waitFor(() => expect(factValue("Provider")).toBe("GKE"));
+    expect(factLabels()).toEqual([
+      "Version",
+      "Provider",
+      "Region",
+      "Context",
+      "Connection",
+      "Metrics server",
+    ]);
+    expect(factValue("Version")).toBe("v1.31.4");
+    expect(factValue("Region")).toBe("europe-west4");
+  });
+
+  it("takes the connection's word from the one table the status bar reads", async () => {
+    // Four states, not one: a fixture with a single link state cannot tell a
+    // right table from a wrong one. The words are `LINK_WORD`'s, shared with
+    // the status bar, so the rail and the strip cannot disagree about the
+    // same cluster.
+    const cases: Array<[LinkState, string]> = [
+      ["connected", "Connected"],
+      ["connecting", "Connecting"],
+      ["disconnected", "Disconnected"],
+      ["error", "Unreachable"],
+    ];
+    for (const [state, word] of cases) {
+      setLink(CTX.stableId, state);
+      const { unmount } = open();
+      await waitFor(() => expect(factValue("Connection")).toBe(word));
+      unmount();
+    }
+  });
+
+  it("says nothing about the connection until something has probed it", async () => {
+    open();
+    await waitFor(() => expect(factValue("Context")).toBe("prod-eu"));
+    // No link state is not "Disconnected" — it is nobody having asked yet.
+    expect(factLabels()).not.toContain("Connection");
+    // Same for the version, which arrives with the probe.
+    expect(factLabels()).not.toContain("Version");
+  });
+
+  it("reads the metrics server's API group version, not a component version", async () => {
+    core.clusterFacts.mockResolvedValue(SOME_FACTS);
+    open();
+
+    await waitFor(() => expect(factValue("Metrics server")).toBe("v1beta1"));
+    // The mock's `v0.7.2 · reporting` is two claims this screen cannot make:
+    // the component version needs an RBAC-sensitive read of the deployment's
+    // image, and an aggregated APIService stays in discovery while its backing
+    // deployment is down — so "present" is not "answering".
+    expect(section("Control plane").textContent).not.toContain("reporting");
+    expect(section("Control plane").textContent).not.toContain("v0.7.2");
+  });
+
+  it("states a missing metrics server once, in the rail, and nowhere else", async () => {
+    core.clusterFacts.mockResolvedValue({
+      ...SOME_FACTS,
+      metricsServer: { state: "absent", version: "" },
+    });
+    // The same cluster's metrics call fails too, which is what a missing
+    // metrics-server does — every tile and column reads "No reading".
+    core.nodeMetrics.mockResolvedValue({ error: "the server could not find the requested resource" });
+    open();
+
+    await waitFor(() => expect(factValue("Metrics server")).toContain("Not installed"));
+    expect(value("CPU")).toBe("No reading");
+
+    // Once. Five tiles and two columns each announcing it would have said it
+    // seven times and explained it nowhere.
+    expect(screen.getAllByText(/not installed/i)).toHaveLength(1);
+  });
+
+  it("does not call the metrics server absent when only the request failed", async () => {
+    // Discovery says the group is there; the reading failed anyway — a
+    // throttled apiserver, a transient refusal. Two different questions with
+    // the same visible answer, and the rail must read the discovery one.
+    core.clusterFacts.mockResolvedValue(SOME_FACTS);
+    core.nodeMetrics.mockResolvedValue({ error: "the server is currently unable to handle the request" });
+    open();
+
+    await waitFor(() => expect(factValue("Metrics server")).toBe("v1beta1"));
+    expect(screen.queryByText(/not installed/i)).toBeNull();
+    // The tiles still say there is no reading — they just do not say why.
+    expect(value("CPU")).toBe("No reading");
+  });
+
+  it("omits the metrics-server row when nobody could ask", async () => {
+    // `unknown` is not `absent`: an unreachable cluster has not told us
+    // metrics-server is missing, and drawing that as an absence would be the
+    // rail inventing the one fact it exists to report.
+    core.clusterFacts.mockResolvedValue({ ...SOME_FACTS, metricsServer: { state: "unknown", version: "" } });
+    open();
+
+    await waitFor(() => expect(factValue("Provider")).toBe("GKE"));
+    expect(factLabels()).not.toContain("Metrics server");
+  });
+});
+
+describe("Overview — the rail's object counts", () => {
+  const countRow = (label: string) =>
+    within(section("Objects by kind")).getByRole("button", { name: new RegExp(`^${label}`) });
+
+  it("counts a kind off the list the screen already loaded, without asking twice", async () => {
+    core.listDeployments.mockResolvedValue({
+      deployments: [aDeployment("a", "1/1"), aDeployment("b", "1/1")],
+    });
+    core.listStatefulSets.mockResolvedValue({ statefulsets: [aStatefulSet("c", "1/1")] });
+    core.listResource.mockResolvedValue({ items: [{ name: "x" }] });
+    open();
+
+    await waitFor(() => expect(countRow("Deployments").textContent).toContain("2"));
+    expect(countRow("StatefulSets").textContent).toContain("1");
+    // Four pods in the fixture, from the one `listPods` the screen makes.
+    expect(countRow("Pods").textContent).toContain("4");
+
+    // The collapse: Deployments, StatefulSets, DaemonSets and Pods are all
+    // already on screen, so the generic list is called only for the two kinds
+    // nothing else loads.
+    expect(core.listDeployments).toHaveBeenCalledTimes(1);
+    expect(core.listPods).toHaveBeenCalledTimes(1);
+    expect(core.listResource).toHaveBeenCalledTimes(2);
+    expect(core.listResource.mock.calls.map((c: unknown[]) => c[1])).toEqual(["CronJob", "Job"]);
+  });
+
+  it("opens that kind's list when a row is activated", async () => {
+    open();
+    await waitFor(() => expect(countRow("Deployments")).toBeTruthy());
+
+    await userEvent.click(countRow("Deployments"));
+    expect(store.activeRoute()).toBe("/k/deployments");
+
+    await userEvent.click(countRow("CronJobs"));
+    expect(store.activeRoute()).toBe("/k/cronjobs");
+  });
+
+  it("shows no number for a kind it could not count, and says why", async () => {
+    core.listResource.mockImplementation((_context: string, kind: string) =>
+      Promise.resolve(
+        kind === "Job"
+          ? { error: 'jobs is forbidden: User "dev" cannot list resource "jobs"' }
+          : { items: [{ name: "x" }, { name: "y" }] },
+      ),
+    );
+    open();
+
+    await waitFor(() => expect(countRow("CronJobs").textContent).toContain("2"));
+    // Zero is a number a reader will believe. A refusal is not a count.
+    expect(countRow("Jobs").textContent).not.toContain("0");
+    expect(countRow("Jobs").textContent).toContain("—");
+    expect(section("Objects by kind").textContent).toContain("Jobs");
+    expect(within(section("Objects by kind")).getByText(/could not count/i)).toBeTruthy();
+  });
+
+  it("does not count a refused workload list as a cluster with none of that kind", async () => {
+    core.listDeployments.mockResolvedValue({ error: "deployments is forbidden" });
+    open();
+
+    await waitFor(() => expect(countRow("Pods").textContent).toContain("4"));
+    expect(countRow("Deployments").textContent).not.toContain("0");
+    expect(countRow("Deployments").textContent).toContain("—");
+  });
+});
+
+describe("Overview — the rail's incidents and fleet", () => {
+  it("names the incidents section rather than leaving a hole", async () => {
+    open();
+    const incidents = await waitFor(() => section("Open incidents"));
+
+    // A silent absence reads as a bug. This one says what it is: no
+    // Kubernetes API returns an incident's title, severity or trend, and
+    // Incidents is scheduled as its own feature.
+    expect(incidents.textContent).toMatch(/incident/i);
+    expect(incidents.textContent).toMatch(/srelens/);
+    expect(incidents.textContent).not.toMatch(/SEV-\d/);
+  });
+
+  it("counts this cluster's pods in the fleet, whatever else is in the workspace", async () => {
+    core.podCount.mockResolvedValue({ counts: { running: 30, total: 33 } });
+    open();
+
+    const fleet = await waitFor(() => section("Fleet"));
+    await waitFor(() => expect(fleet.textContent).toContain("30/33 running"));
+    expect(within(fleet).getByText("prod-eu")).toBeTruthy();
+    expect(core.podCount).toHaveBeenCalledWith("prod-eu");
+  });
+
+  it("keeps the rest of the screen when the fleet cannot answer", async () => {
+    core.podCount.mockResolvedValue({ error: "pod count timed out" });
+    open();
+
+    await waitFor(() => expect(section("Fleet").textContent).toContain("Unreachable"));
+    // Fleet is a courtesy; the overview is about this cluster.
+    expect(value("Nodes")).toBe("3");
     expect(rowFor("n1")).toBeTruthy();
   });
 });

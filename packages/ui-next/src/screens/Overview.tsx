@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
+  RESOURCE_LABELS,
   copyKubectlCommand,
   cordonNode,
   drainNode,
@@ -10,6 +11,7 @@ import {
   type ClusterCapacity,
   type ClusterContext,
   type HealthKind,
+  type MetricsServerFact,
   type NodeSummary,
   type NodeUsage,
   type PodSummary,
@@ -22,11 +24,14 @@ import {
   ConfirmDialog,
   EmptyState,
   ErrorState,
+  KVList,
   KubectlPreview,
   LoadingState,
   Meter,
   Panel,
   Screen,
+  Section,
+  SideRail,
   Stat,
   StatusPill,
   StatusRow,
@@ -38,7 +43,7 @@ import {
   type Tone,
 } from "@srelens/ui-kit";
 import { useConsole } from "../console";
-import { useActiveContext } from "../lib/clusters";
+import { useActiveContext, useContexts } from "../lib/clusters";
 import { detailRoute } from "../lib/detailRoute";
 import { Icons } from "../lib/icons";
 import {
@@ -52,12 +57,17 @@ import { ROW_ACTION_LABEL } from "../lib/kinds/rowActions";
 import { UnhealthyDot } from "../lib/kinds/rowAffordances";
 import {
   useOverview,
+  type ObjectCounts,
   type Overview as OverviewData,
+  type OverviewFacts,
   type OverviewNodes,
   type OverviewWorkloads,
 } from "../lib/overview";
+import { useInfo } from "../lib/probe";
 import { describe } from "../lib/routes";
-import { openTab } from "../lib/tabsStore";
+import { openTab, useTabs } from "../lib/tabsStore";
+import { LINK_WORD, useWorkspaceView } from "../lib/workspace";
+import { Fleet } from "./overview/Fleet";
 import { NoClusterScreen } from "./resourceShell";
 
 /**
@@ -82,6 +92,9 @@ const UNKNOWN = "—";
 const SUMMARISE_LABEL = "Summarise";
 const SUMMARISE = "Summarise the health of this cluster";
 
+/** §7's rail width, and this screen's alone — see `SideRail`'s note on widths. */
+const RAIL_WIDTH = 286;
+
 /** This screen's own words for the two node actions. Nothing else renders them. */
 const NODE_ACTION_LABEL = {
   cordon: "Cordon",
@@ -95,9 +108,8 @@ type NodeRow = NodeSummary & { usage: NodeUsage };
 /**
  * `/overview` — the cluster overview (§7).
  *
- * All three of its left-hand sections are here: the capacity strip, the nodes
- * table and the `Not ready` list. The `At a glance` rail arrives with its own
- * task and slots in where this file says so.
+ * Its three left-hand sections are here — the capacity strip, the nodes table
+ * and the `Not ready` list — beside the `At a glance` rail's four.
  *
  * Split in two the way `Events.tsx` and `Workloads.tsx` are: with no cluster
  * in focus there is no context name to load anything for, and a hook cannot be
@@ -131,6 +143,10 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
     <Screen
       title={title}
       eyebrow={provider ? `${name} / ${provider}` : name}
+      // The rail is full height beside the main column, so the body fills and
+      // the column below scrolls inside itself rather than the page scrolling
+      // the rail away with it.
+      fill
       actions={
         // Exactly one header action, per §7. A `Button` rather than the row's
         // `AskChip` for the reason `Events.tsx` gives: the chip is invisible
@@ -149,14 +165,206 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
         </Button>
       }
     >
-      {/* A column of sections. The `At a glance` rail wraps this column —
-          its own task, and it needs no state held here. */}
-      <div className="flex flex-col gap-3">
-        <Capacity overview={overview} />
-        <Nodes context={name} nodes={overview.nodes} />
-        <NotReady context={name} overview={overview} />
-      </div>
+      <SideRail head="At a glance" width={RAIL_WIDTH} rail={<AtAGlance context={context} overview={overview} />}>
+        {/* The column of sections, scrolling inside itself. */}
+        <div className="scroll flex min-h-0 flex-1 flex-col gap-3 p-3">
+          <Capacity overview={overview} />
+          <Nodes context={name} nodes={overview.nodes} />
+          <NotReady context={name} overview={overview} />
+        </div>
+      </SideRail>
     </Screen>
+  );
+}
+
+/* -------------------------------------------------------------- the rail */
+
+/**
+ * `At a glance` — the facts about the cluster that are not measurements.
+ *
+ * Four `Section`s and nothing around them. `SideRail` drops what it is handed
+ * straight into one box and `.section + .section` is what rules between them,
+ * so a wrapper per child would break that adjacency and the rail would read as
+ * one undivided block. `AboutKind` renders its sections the same way and for
+ * the same reason; the kit's suite pins it.
+ */
+function AtAGlance({ context, overview }: { context: ClusterContext; overview: OverviewData }) {
+  const contexts = useContexts();
+  const { workspace } = useTabs();
+
+  // The workspace's own order, resolved through the context list — the same
+  // derivation the cluster rail down the edge of the window makes. An id whose
+  // context has gone is skipped rather than drawn as a placeholder; `Fleet`
+  // then puts this cluster back at the head if the list has lost it.
+  const byId = new Map(contexts.map((c) => [c.stableId, c]));
+  const clusters = workspace.clusters
+    .map((id) => byId.get(id))
+    .filter((c): c is ClusterContext => c !== undefined);
+
+  return (
+    <>
+      <ControlPlane context={context} facts={overview.facts} />
+      <ObjectsByKind context={context.name} objects={overview.objects} />
+      <OpenIncidents />
+      <Section title="Fleet">
+        <Fleet clusters={clusters} active={context} />
+      </Section>
+    </>
+  );
+}
+
+/**
+ * What the metrics server row says, or `null` for no row at all.
+ *
+ * **`v1beta1` is the API GROUP's version, and the mock's `v0.7.2` is the
+ * component's.** They are different facts. The component version lives in the
+ * image tag of a Deployment in `kube-system`, which is a read many readers of
+ * this screen are not granted and which would fail differently from everything
+ * around it; that trade was ruled not worth making. Discovery already carries
+ * the group version, it costs nothing, and it is the version that says what
+ * this app will actually be talking to.
+ *
+ * **The mock's `· reporting` is not rendered off this field.** An aggregated
+ * APIService stays registered in discovery while the deployment behind it is
+ * down, so `present` means "the group is registered", not "metrics-server is
+ * answering". The tiles and the node columns are where a missing ANSWER shows
+ * up, as "No reading".
+ *
+ * `unknown` gets no row. It is not `absent`: a cluster nobody could reach has
+ * not told us metrics-server is missing, and drawing that as an absence would
+ * be the rail inventing the one fact it is here to report.
+ */
+function metricsServerRow(fact: MetricsServerFact | undefined): ReactNode {
+  if (!fact) return null;
+  if (fact.state === "absent") {
+    return (
+      <>
+        Not installed
+        {/* Said once, here. The tiles and the node columns read "No reading"
+            and deliberately do not each explain why — a screen where five
+            tiles and two columns announce this has said it seven times and
+            explained it nowhere. */}
+        <span className="block text-faint">No CPU or memory readings without it.</span>
+      </>
+    );
+  }
+  if (fact.state === "present") return fact.version || "Installed";
+  return null;
+}
+
+/**
+ * `Control plane` — six facts about the cluster, of which as many are drawn as
+ * the cluster actually reported.
+ *
+ * **A FACT WITH NOTHING BEHIND IT OMITS ITS ROW.** `provider` and `region`
+ * arrive as empty strings when no node carried them, and on the live cluster
+ * no node carries a region label at all — so this is the ordinary case rather
+ * than an edge one. "Unknown" in the value would look like an answer, and an
+ * em dash reads as one too; silence is what the cluster said.
+ *
+ * The version and the connection come from the probe the shell already ran at
+ * launch, not from a call of this screen's own: `clusterInfo` runs for every
+ * cluster in the rail on every launch, and asking again here would be a second
+ * round trip for a fact already on the machine. Both are absent until it lands,
+ * and absent is honest — nobody has asked yet, which is not the same as
+ * "Disconnected".
+ */
+function ControlPlane({ context, facts }: { context: ClusterContext; facts: OverviewFacts }) {
+  const info = useInfo(context.stableId);
+  const { links } = useWorkspaceView();
+  const link = links[context.stableId];
+
+  const rows: Array<[key: string, value: ReactNode]> = [];
+  if (info?.version) rows.push(["Version", info.version]);
+  if (facts.facts?.provider) rows.push(["Provider", facts.facts.provider]);
+  if (facts.facts?.region) rows.push(["Region", facts.facts.region]);
+  // The one row that is always there: the context is how this screen was
+  // opened, so there is no cluster for which it is unknown.
+  rows.push(["Context", context.name]);
+  // The status bar's own word for the same link, from the one table both read.
+  if (link) rows.push(["Connection", LINK_WORD[link.state]]);
+  const metrics = metricsServerRow(facts.facts?.metricsServer);
+  if (metrics) rows.push(["Metrics server", metrics]);
+
+  return (
+    <Section title="Control plane">
+      <KVList rows={rows} />
+      {/* The facts call itself failing is not the same as a cluster that named
+          none, and the rows above cannot tell the reader which happened. */}
+      {facts.error && <p className="text-faint">Could not read the cluster's facts: {facts.error}</p>}
+    </Section>
+  );
+}
+
+/**
+ * `Objects by kind` — six counts, each a way into that kind's list.
+ *
+ * A button per row rather than a `KV`: §7 draws the counts as a navigation
+ * list, and the accessible name is computed from the words already on screen
+ * ("Deployments 25") rather than from a second string that can drift from
+ * them. `ReasonRail` settled the same shape for the events rail.
+ *
+ * **A kind that could not be counted shows no number and says so.** `0` is a
+ * number a reader will believe, and a refused list and an empty cluster are
+ * the same picture with opposite meanings. The em dash asks the question and
+ * the line beneath answers it.
+ */
+function ObjectsByKind({ context, objects }: { context: string; objects: ObjectCounts }) {
+  const refused = objects.counts.filter((count) => count.error);
+
+  return (
+    <Section title="Objects by kind">
+      {/* Pulled back out to the section's own inset, so the row's text lines
+          up with the label column of the `Control plane` rows above it and
+          the hover fill still bleeds the full width of the block. */}
+      <div className="-mx-2">
+        {objects.counts.map(({ slug, count }) => (
+          <Button
+            key={slug}
+            type="button"
+            variant="ghost"
+            // `.ns-row` is the design's flat row and follows `.btn` in the
+            // stylesheet, so the row's padding, width and alignment win while
+            // `ghost` keeps the border off — see `ReasonRail`.
+            className="ns-row rounded font-normal"
+            onClick={() => openTab(`/k/${slug}`, { clusterName: context })}
+          >
+            <span className="flex min-w-0 flex-1 truncate">{RESOURCE_LABELS[slug]}</span>
+            <span className="path text-faint">{count === null ? UNKNOWN : count}</span>
+          </Button>
+        ))}
+      </div>
+      {refused.length > 0 && (
+        <p className="text-faint">
+          Could not count {refused.map(({ slug }) => RESOURCE_LABELS[slug]).join(", ")}.
+        </p>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * `Open incidents` — a named empty state, and the reason it is empty.
+ *
+ * The mock draws three incidents with titles, severity badges and sparklines.
+ * **No Kubernetes API returns any of that.** There is no object whose title is
+ * "5xx rate rising", no field that says SEV-2, and no series behind the
+ * sparkline; incidents are a product feature the migration plan schedules on
+ * its own, not something this screen could derive from the cluster if it tried
+ * harder. Events come closest and are a different thing — they are per-object,
+ * they expire in an hour, and a list of them is already a screen.
+ *
+ * So the section says what it is. A hole where the mock has content is read as
+ * a bug and reported as one; a stated absence is read as a decision.
+ */
+function OpenIncidents() {
+  return (
+    <Section title="Open incidents">
+      <EmptyState
+        title="No incident feed yet"
+        hint="Kubernetes reports no incident's title, severity or trend. srelens will grow its own incidents; until then this stays empty on purpose."
+      />
+    </Section>
   );
 }
 
@@ -697,9 +905,9 @@ function NotReady({ context, overview }: { context: string; overview: OverviewDa
   const { workloads, pods } = overview;
   const rows = notReadyRows(workloads, pods.pods);
 
-  // `workloads.error` is the whole fan-out failing; `workloads.errors` is one
-  // kind of it. Both are reasons this list may be shorter than the truth.
-  const failures = [pods.error, workloads.error, ...workloads.errors].filter(
+  // `workloads.error` is the whole fan-out failing; `workloads.refusals` is
+  // one kind of it. Both are reasons this list may be shorter than the truth.
+  const failures = [pods.error, workloads.error, ...Object.values(workloads.refusals)].filter(
     (reason): reason is string => reason !== undefined && reason !== "",
   );
 

@@ -220,6 +220,24 @@ export const OVERVIEW_KINDS: ResourceKind[] = [
   "jobs",
 ];
 
+/**
+ * The kinds this screen has to LIST to count — the two nothing else on it
+ * loads.
+ *
+ * The other four of `OVERVIEW_KINDS` are already on screen: Deployments,
+ * StatefulSets and DaemonSets are the rows the `Not ready` list reads, and
+ * Pods is the list the Pods tile, the per-node counts and that same list all
+ * share. Counting them through `listResource` as well would be four extra
+ * whole-cluster list calls to produce four numbers the screen has already
+ * fetched — and on a cluster with 1 284 pods, the pod one is not a small
+ * request. So the counts are taken off the loaders that own those kinds, and
+ * only CronJobs and Jobs are listed here.
+ *
+ * The rail's ORDER is still `OVERVIEW_KINDS`; this is only about where each
+ * number comes from.
+ */
+const COUNTED_BY_LISTING: ResourceKind[] = ["cronjobs", "jobs"];
+
 export interface KindCount {
   slug: ResourceKind;
   /** `null` when this kind could not be counted. Never `0` for a refusal. */
@@ -236,18 +254,28 @@ export interface ObjectCounts {
 }
 
 /**
- * One list call per kind, each carrying its own failure.
+ * One row per kind, each carrying its own count or its own failure.
  *
- * The `Promise.all` here is safe in the way classic's was not: `listResource`
- * returns its error rather than throwing, so no branch of this fan-out can
- * reject and cancel the others. A kind the user cannot list becomes one row
- * with `count: null` and a reason; the other five keep their numbers.
+ * Two sources, and the seam between them is invisible to the rail: the four
+ * kinds the screen already loaded are counted off those loaders (see
+ * {@link COUNTED_BY_LISTING}), and the two it does not are listed here. The
+ * `Promise.all` over the second group is safe in the way classic's was not:
+ * `listResource` returns its error rather than throwing, so no branch of the
+ * fan-out can reject and cancel the others.
+ *
+ * A kind that could not be counted becomes `count: null` WITH the reason,
+ * never `0` — a refused list and an empty cluster are the same picture and
+ * opposite facts, and zero is the one a reader believes.
  */
-export function useObjectCounts(context: string): ObjectCounts {
-  const counts = useResource(
+export function useObjectCounts(
+  context: string,
+  workloads: OverviewWorkloads,
+  pods: OverviewPods,
+): ObjectCounts {
+  const listed = useResource(
     () =>
       Promise.all(
-        OVERVIEW_KINDS.map((slug) =>
+        COUNTED_BY_LISTING.map((slug) =>
           listResource(context, K8S_KIND[slug], "").then<KindCount>((o) =>
             o.error ? { slug, count: null, error: o.error } : { slug, count: (o.items ?? []).length },
           ),
@@ -255,12 +283,41 @@ export function useObjectCounts(context: string): ObjectCounts {
       ),
     [context],
   );
-  return {
-    status: counts.status,
-    counts: counts.data ?? [],
-    error: counts.error,
-    reload: counts.reload,
-  };
+
+  const data = listed.data;
+  const listedError = listed.error;
+  const counts = useMemo<KindCount[]>(() => {
+    /** A count off a list the screen already has, or the reason it has none. */
+    const shared = (slug: ResourceKind, rows: unknown[] | undefined, error?: string): KindCount => ({
+      slug,
+      count: rows ? rows.length : null,
+      error: rows ? undefined : error,
+    });
+
+    const already = new Map<ResourceKind, KindCount>([
+      ["deployments", shared("deployments", workloads.deployments, workloads.refusals.deployments ?? workloads.error)],
+      ["statefulsets", shared("statefulsets", workloads.statefulSets, workloads.refusals.statefulsets ?? workloads.error)],
+      ["daemonsets", shared("daemonsets", workloads.daemonSets, workloads.refusals.daemonsets ?? workloads.error)],
+      ["pods", shared("pods", pods.pods, pods.error)],
+    ]);
+    const byList = new Map((data ?? []).map((c) => [c.slug, c]));
+
+    return OVERVIEW_KINDS.map(
+      (slug) => already.get(slug) ?? byList.get(slug) ?? { slug, count: null, error: listedError },
+    );
+  }, [
+    workloads.deployments,
+    workloads.statefulSets,
+    workloads.daemonSets,
+    workloads.refusals,
+    workloads.error,
+    pods.pods,
+    pods.error,
+    data,
+    listedError,
+  ]);
+
+  return { status: listed.status, counts, error: listedError, reload: listed.reload };
 }
 
 export interface OverviewWorkloads {
@@ -274,8 +331,17 @@ export interface OverviewWorkloads {
   deployments?: DeploymentSummary[];
   statefulSets?: StatefulSetSummary[];
   daemonSets?: DaemonSetSummary[];
-  /** One reason per kind that was refused. The kinds that answered still render. */
-  errors: string[];
+  /**
+   * Why a kind has no rows, keyed by the slug the rail counts it under. The
+   * kinds that answered still render.
+   *
+   * Keyed rather than a flat list of reasons because two readers want
+   * different things from it: the `Not ready` list wants all of them at once,
+   * to say why it may be short, and the rail's count row for one kind wants
+   * that kind's own reason and no other. A flat array can serve the first and
+   * not the second.
+   */
+  refusals: Partial<Record<ResourceKind, string>>;
   error?: string;
   reload(): void;
 }
@@ -302,14 +368,18 @@ export function useOverviewWorkloads(context: string): OverviewWorkloads {
         listDeployments(context, ""),
         listStatefulSets(context, ""),
         listDaemonSets(context, ""),
-      ]).then(([deployments, statefulSets, daemonSets]) => ({
-        deployments: deployments.deployments,
-        statefulSets: statefulSets.statefulsets,
-        daemonSets: daemonSets.daemonsets,
-        errors: [deployments.error, statefulSets.error, daemonSets.error].filter(
-          (reason): reason is string => reason !== undefined,
-        ),
-      })),
+      ]).then(([deployments, statefulSets, daemonSets]) => {
+        const refusals: Partial<Record<ResourceKind, string>> = {};
+        if (deployments.error) refusals.deployments = deployments.error;
+        if (statefulSets.error) refusals.statefulsets = statefulSets.error;
+        if (daemonSets.error) refusals.daemonsets = daemonSets.error;
+        return {
+          deployments: deployments.deployments,
+          statefulSets: statefulSets.statefulsets,
+          daemonSets: daemonSets.daemonsets,
+          refusals,
+        };
+      }),
     [context],
   );
 
@@ -318,11 +388,18 @@ export function useOverviewWorkloads(context: string): OverviewWorkloads {
     deployments: loaded.data?.deployments,
     statefulSets: loaded.data?.statefulSets,
     daemonSets: loaded.data?.daemonSets,
-    errors: loaded.data?.errors ?? [],
+    refusals: loaded.data?.refusals ?? EMPTY_REFUSALS,
     error: loaded.error,
     reload: loaded.reload,
   };
 }
+
+/**
+ * One shared empty object rather than a fresh `{}` per render: it is a
+ * `useMemo` dependency in {@link useObjectCounts}, and a new identity every
+ * render would rebuild those counts every render.
+ */
+const EMPTY_REFUSALS: Partial<Record<ResourceKind, string>> = {};
 
 export interface OverviewFacts {
   status: ResourceStatus;
@@ -379,7 +456,8 @@ export function useOverview(context: string): Overview {
   const nodes = useOverviewNodes(context, pods.pods);
   const workloads = useOverviewWorkloads(context);
   const namespaces = useNamespaceCount(context);
-  const objects = useObjectCounts(context);
+  // Fed the two loaders whose kinds it would otherwise list a second time.
+  const objects = useObjectCounts(context, workloads, pods);
   const facts = useClusterFacts(context);
 
   const reloadNodes = nodes.reload;

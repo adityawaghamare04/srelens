@@ -1,8 +1,39 @@
 import { useSyncExternalStore } from "react";
 import { settingsStorage } from "@srelens/core";
+import type { Tone } from "@srelens/ui-kit";
 import type { Storage } from "./tabsPersist";
 
 export type LinkState = "connected" | "connecting" | "disconnected" | "error";
+
+/**
+ * What the link says, in words. The mock said it in colour alone — a green dot
+ * for connected, a red one for unreachable — which is no readout at all for
+ * anyone who cannot separate the two, so the words are the readout and the
+ * tone is the second channel. "Unreachable" rather than "Error" for `error`:
+ * the failure being reported is the cluster's, not the app's, and the person
+ * reading it wants to know which. (#320)
+ *
+ * It lives beside {@link LinkState} rather than in the status bar that first
+ * drew it, because there is now more than one readout of the same fact — the
+ * strip along the bottom and the overview rail's `Connection` row — and a
+ * second copy of this table is how the two start disagreeing about the same
+ * cluster. A link state is not a Kubernetes status, so core has no vocabulary
+ * for it; this is the one place that does, and the word and its tone are
+ * decided together here so no caller can pair them itself.
+ */
+export const LINK_WORD: Record<LinkState, string> = {
+  connected: "Connected",
+  connecting: "Connecting",
+  disconnected: "Disconnected",
+  error: "Unreachable",
+};
+
+export const LINK_TONE: Record<LinkState, Tone> = {
+  connected: "ok",
+  connecting: "info",
+  disconnected: "muted",
+  error: "sev",
+};
 
 export interface WorkspaceView {
   /** Per cluster. Derived from `ClusterInfo.reachable` and in-flight connects; never persisted. */

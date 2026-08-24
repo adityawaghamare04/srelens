@@ -33,7 +33,6 @@ import {
   OVERVIEW_KINDS,
   useClusterFacts,
   useNamespaceCount,
-  useObjectCounts,
   useOverview,
   useOverviewNodes,
   useOverviewPods,
@@ -289,6 +288,12 @@ describe("useNamespaceCount", () => {
   });
 });
 
+/**
+ * The counts now have two sources, so they are exercised through `useOverview`
+ * rather than alone: four of the six come off the loaders that already hold
+ * those kinds, and wiring them by hand in a test would be a second answer to
+ * the question the hook exists to settle.
+ */
 describe("useObjectCounts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -296,15 +301,41 @@ describe("useObjectCounts", () => {
   });
 
   it("counts one kind per row, in the rail's order", async () => {
-    core.listResource.mockImplementation((_context: string, kind: string) =>
-      Promise.resolve({ items: kind === "Deployment" ? [{ name: "a" }, { name: "b" }] : [] }),
-    );
+    core.listDeployments.mockResolvedValue({ deployments: [aDeployment("a", "1/1"), aDeployment("b", "1/1")] });
+    core.listResource.mockResolvedValue({ items: [] });
 
-    const { result } = renderHook(() => useObjectCounts("prod"));
-    await waitFor(() => expect(result.current.status).toBe("ready"));
+    const { result } = renderHook(() => useOverview("prod"));
+    await waitFor(() => expect(result.current.objects.status).toBe("ready"));
 
-    expect(result.current.counts.map((c) => c.slug)).toEqual(OVERVIEW_KINDS);
-    expect(result.current.counts[0]).toEqual({ slug: "deployments", count: 2 });
+    expect(result.current.objects.counts.map((c) => c.slug)).toEqual(OVERVIEW_KINDS);
+    expect(result.current.objects.counts[0]).toEqual({ slug: "deployments", count: 2, error: undefined });
+  });
+
+  it("lists only the kinds nothing else on the screen loads", async () => {
+    core.listDeployments.mockResolvedValue({ deployments: [aDeployment("a", "1/1")] });
+    core.listStatefulSets.mockResolvedValue({ statefulsets: [aStatefulSet("b", "1/1")] });
+    core.listDaemonSets.mockResolvedValue({ daemonsets: [aDaemonSet("c", 1, 1)] });
+    core.listPods.mockResolvedValue({ pods: [aPod("p1", "n1"), aPod("p2", "n1")] });
+    core.listResource.mockResolvedValue({ items: [{ name: "x" }] });
+
+    const { result } = renderHook(() => useOverview("prod"));
+    await waitFor(() => expect(result.current.objects.status).toBe("ready"));
+
+    const count = (slug: string) => result.current.objects.counts.find((c) => c.slug === slug)?.count;
+    expect(count("deployments")).toBe(1);
+    expect(count("statefulsets")).toBe(1);
+    expect(count("daemonsets")).toBe(1);
+    expect(count("pods")).toBe(2);
+    expect(count("cronjobs")).toBe(1);
+    expect(count("jobs")).toBe(1);
+
+    // The collapse: four of the six kinds were already fetched, so the generic
+    // list goes out twice rather than six times — and the pod list, the
+    // largest of them, is fetched once for the whole screen.
+    expect(core.listResource).toHaveBeenCalledTimes(2);
+    expect(core.listResource.mock.calls.map((c: unknown[]) => c[1])).toEqual(["CronJob", "Job"]);
+    expect(core.listPods).toHaveBeenCalledTimes(1);
+    expect(core.listDeployments).toHaveBeenCalledTimes(1);
   });
 
   it("keeps every other kind's count when one kind is refused", async () => {
@@ -313,17 +344,34 @@ describe("useObjectCounts", () => {
         ? Promise.resolve({ error: 'jobs is forbidden: User "dev" cannot list resource "jobs"' })
         : Promise.resolve({ items: [{ name: "a" }] }),
     );
+    core.listDeployments.mockResolvedValue({ deployments: [aDeployment("a", "1/1")] });
 
-    const { result } = renderHook(() => useObjectCounts("prod"));
-    await waitFor(() => expect(result.current.status).toBe("ready"));
+    const { result } = renderHook(() => useOverview("prod"));
+    await waitFor(() => expect(result.current.objects.status).toBe("ready"));
 
-    const jobs = result.current.counts.find((c) => c.slug === "jobs");
+    const jobs = result.current.objects.counts.find((c) => c.slug === "jobs");
     expect(jobs?.count).toBeNull();
     expect(jobs?.error).toContain("forbidden");
-    for (const other of result.current.counts.filter((c) => c.slug !== "jobs")) {
-      expect(other.count).toBe(1);
-      expect(other.error).toBeUndefined();
-    }
+    expect(result.current.objects.counts.find((c) => c.slug === "cronjobs")?.count).toBe(1);
+    expect(result.current.objects.counts.find((c) => c.slug === "deployments")?.count).toBe(1);
+  });
+
+  it("carries a refused kind's own reason onto that kind's row alone", async () => {
+    core.listDeployments.mockResolvedValue({ error: 'deployments is forbidden: User "dev" cannot list' });
+    core.listPods.mockResolvedValue({ error: "pods is forbidden" });
+
+    const { result } = renderHook(() => useOverview("prod"));
+    await waitFor(() => expect(result.current.objects.status).toBe("ready"));
+
+    const row = (slug: string) => result.current.objects.counts.find((c) => c.slug === slug);
+    // Never `0`, which reads as a cluster with no Deployments at all.
+    expect(row("deployments")?.count).toBeNull();
+    expect(row("deployments")?.error).toContain("deployments is forbidden");
+    expect(row("pods")?.count).toBeNull();
+    expect(row("pods")?.error).toContain("pods is forbidden");
+    // The kinds that answered are untouched by either refusal.
+    expect(row("statefulsets")?.count).toBe(0);
+    expect(row("statefulsets")?.error).toBeUndefined();
   });
 });
 
@@ -391,15 +439,15 @@ describe("useOverviewWorkloads", () => {
     expect(result.current.daemonSets).toHaveLength(1);
     // Not an empty list, which would read as a cluster with no StatefulSets.
     expect(result.current.statefulSets).toBeUndefined();
-    expect(result.current.errors).toEqual([
-      'statefulsets is forbidden: User "dev" cannot list',
-    ]);
+    expect(result.current.refusals).toEqual({
+      statefulsets: 'statefulsets is forbidden: User "dev" cannot list',
+    });
   });
 
   it("carries no reasons at all when every kind answered", async () => {
     const { result } = renderHook(() => useOverviewWorkloads("prod"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
-    expect(result.current.errors).toEqual([]);
+    expect(result.current.refusals).toEqual({});
   });
 });
 
@@ -433,7 +481,12 @@ describe("useOverview", () => {
 
     expect(result.current.pods.pods).toHaveLength(2);
     expect(result.current.namespaces.count).toBe(2);
-    expect(result.current.objects.counts.every((c) => c.count === 3)).toBe(true);
+    // The two kinds the rail lists for itself answered 3; the pod count came
+    // off the pod list this same render already has.
+    const count = (slug: string) => result.current.objects.counts.find((c) => c.slug === slug)?.count;
+    expect(count("cronjobs")).toBe(3);
+    expect(count("jobs")).toBe(3);
+    expect(count("pods")).toBe(2);
     expect(result.current.facts.facts?.provider).toBe("kind");
     expect(result.current.workloads.status).toBe("ready");
   });
