@@ -14,6 +14,7 @@ function node(overrides: Partial<NodeSummary> = {}): NodeSummary {
     allocatableCpuMillicores: 4000,
     allocatableMemoryMiB: 16000,
     allocatablePods: 110,
+    instanceType: "c3-standard-4",
     ...overrides,
   };
 }

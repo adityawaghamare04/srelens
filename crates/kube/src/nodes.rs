@@ -38,6 +38,13 @@ pub struct NodeSummary {
     /// `status.allocatable.pods`.
     #[serde(rename = "allocatablePods")]
     pub allocatable_pods: i64,
+    /// The node's machine type, read from its `node.kubernetes.io/instance-type`
+    /// label, falling back to the deprecated `beta.kubernetes.io/instance-type`
+    /// when the modern one is absent. Empty when the node carries neither —
+    /// e.g. on kind, whose nodes are containers rather than cloud machines —
+    /// not a guessed or placeholder value.
+    #[serde(rename = "instanceType")]
+    pub instance_type: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -108,6 +115,20 @@ fn summarise(node: Node) -> NodeSummary {
         .and_then(|a| a.get("pods"))
         .map(|q| q.0.trim().parse::<f64>().unwrap_or(0.0) as i64)
         .unwrap_or(0);
+    // Modern label preferred; deprecated one is a fallback for older clusters.
+    // Neither present reports empty, not "unknown" — an empty column cell is
+    // the truthful answer for a node (e.g. on kind) that has no machine type.
+    let instance_type = node
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|labels| {
+            labels
+                .get("node.kubernetes.io/instance-type")
+                .or_else(|| labels.get("beta.kubernetes.io/instance-type"))
+        })
+        .cloned()
+        .unwrap_or_default();
     NodeSummary {
         name,
         status,
@@ -119,6 +140,7 @@ fn summarise(node: Node) -> NodeSummary {
         allocatable_cpu_millicores,
         allocatable_memory_mib,
         allocatable_pods,
+        instance_type,
     }
 }
 
@@ -241,6 +263,63 @@ mod tests {
         assert_eq!(summarise(node_with_no_status()).allocatable_cpu_millicores, 0);
         assert_eq!(summarise(node_with_no_status()).allocatable_memory_mib, 0);
         assert_eq!(summarise(node_with_no_status()).allocatable_pods, 0);
+    }
+
+    fn node_with_labels(labels: BTreeMap<String, String>) -> Node {
+        Node {
+            metadata: kube::core::ObjectMeta {
+                name: Some("n1".into()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reads_the_modern_instance_type_label() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "node.kubernetes.io/instance-type".to_string(),
+            "c3-standard-4".to_string(),
+        );
+        let s = summarise(node_with_labels(labels));
+        assert_eq!(s.instance_type, "c3-standard-4");
+    }
+
+    #[test]
+    fn falls_back_to_the_deprecated_beta_instance_type_label() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "beta.kubernetes.io/instance-type".to_string(),
+            "n2-standard-8".to_string(),
+        );
+        let s = summarise(node_with_labels(labels));
+        assert_eq!(s.instance_type, "n2-standard-8");
+    }
+
+    #[test]
+    fn prefers_the_modern_label_when_both_are_present() {
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            "node.kubernetes.io/instance-type".to_string(),
+            "t2d-spot".to_string(),
+        );
+        labels.insert(
+            "beta.kubernetes.io/instance-type".to_string(),
+            "n2-standard-8".to_string(),
+        );
+        let s = summarise(node_with_labels(labels));
+        assert_eq!(s.instance_type, "t2d-spot");
+    }
+
+    #[test]
+    fn a_node_with_neither_instance_type_label_reports_empty_not_unknown() {
+        let s = summarise(node_with_labels(BTreeMap::new()));
+        assert_eq!(s.instance_type, "");
+
+        let s = summarise(node_with_no_status());
+        assert_eq!(s.instance_type, "");
     }
 
     #[test]

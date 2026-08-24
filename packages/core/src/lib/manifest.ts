@@ -18,6 +18,13 @@ export interface NodeSummary {
   allocatableMemoryMiB: number;
   /** `status.allocatable.pods`. */
   allocatablePods: number;
+  /**
+   * The node's machine type, read from its `node.kubernetes.io/instance-type`
+   * label, falling back to the deprecated `beta.kubernetes.io/instance-type`.
+   * Empty when the node carries neither — e.g. on kind, whose nodes are
+   * containers rather than cloud machines — not a guessed placeholder.
+   */
+  instanceType: string;
 }
 
 /** Dynamic GVK + plural for a custom resource (CRD-backed kinds). */
