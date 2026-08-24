@@ -143,8 +143,32 @@ function lineTerm(tokens: readonly string[], kvFrequency: ReadonlyMap<string, nu
   return bareRun.length > 0 ? bareRun.slice(0, TERM_WORDS).join(" ") : null;
 }
 
-/** A line's severity, read off its raw text — see the module doc's Tone section. */
-function lineHealth(text: string): HealthKind {
+/**
+ * A raw log line's severity — the ONE place in srelens that decides this,
+ * on core's canonical `HealthKind` vocabulary (`./k8sHealth`).
+ *
+ * This is a **text-scan heuristic, not a parsed field** — say so plainly,
+ * because the stream gives us nothing structured to read instead.
+ * `LogLine` (`./logBuffer`) carries only `{ source, text }`; there is no
+ * level column anywhere between the backend and here. So this scans the
+ * whole raw line, case-insensitively, for a recognised severity word —
+ * `error` / `fatal` / `panic` → danger, `warn(ing)` → warning, `info` →
+ * info, anything else → neutral — the same shape of check classic already
+ * runs (`lineLevel`, `apps/desktop/src/components/LogsView.tsx:61`), just
+ * projected onto `HealthKind` instead of classic's own local union so this
+ * is a second consumer of one rule, not a second rule. If `LogLine` ever
+ * grows a real parsed level, THIS is the one place to repoint at it — every
+ * other caller (the term tally below, and the Logs screen's `LogLine`
+ * level prop and level filter) goes through here rather than re-deriving
+ * severity on its own, which is exactly what the plan's "every status word
+ * and tone comes from core" constraint is guarding against: a second
+ * hand-paired label/tone table, invented at the call site.
+ *
+ * Checked worst-first (danger, then warning, then info) so a line that
+ * somehow carries more than one recognised word — "escalated to error
+ * after a warn" — is not toned by whichever regex happened to match first.
+ */
+export function logLineHealth(text: string): HealthKind {
   if (DANGER_WORD.test(text)) return "danger";
   if (WARNING_WORD.test(text)) return "warning";
   if (INFO_WORD.test(text)) return "info";
@@ -201,7 +225,7 @@ export function tallyLogTerms(
     const term = lineTerm(tokenized[i], kvFrequency);
     if (term === null) continue;
     counts.set(term, (counts.get(term) ?? 0) + 1);
-    const health = lineHealth(lines[i].text);
+    const health = logLineHealth(lines[i].text);
     const worst = tones.get(term);
     if (worst === undefined || HEALTH_RANK[health] > HEALTH_RANK[worst]) {
       tones.set(term, health);

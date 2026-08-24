@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { tallyLogTerms } from "./logTerms";
+import { tallyLogTerms, logLineHealth } from "./logTerms";
 import type { LogLine } from "./logBuffer";
 
 const line = (text: string, source = ""): LogLine => ({ source, text });
@@ -148,5 +148,50 @@ describe("tallyLogTerms", () => {
     // Different level words, same headline: still "pool timeout", not
     // "error pool" / "warn pool" — and the tone is the worst of the two.
     expect(tallyLogTerms(lines)).toEqual([{ term: "pool timeout", count: 2, tone: "danger" }]);
+  });
+});
+
+describe("logLineHealth", () => {
+  // The public surface: this is now the one place that decides a raw log
+  // line's severity, for both the term tally above and any other consumer
+  // (the Logs screen's LogLine level prop and its level filter). Tested in
+  // its own right, not just indirectly through tallyLogTerms.
+
+  it("reads 'error', 'fatal' and 'panic' as danger", () => {
+    expect(logLineHealth("connection error: pool exhausted")).toBe("danger");
+    expect(logLineHealth("fatal: liveness deadline exceeded, terminating")).toBe("danger");
+    expect(logLineHealth("panic: runtime error: index out of range")).toBe("danger");
+  });
+
+  it("reads 'warn' and 'warning' as warning", () => {
+    expect(logLineHealth("warn pool saturated, queueing request")).toBe("warning");
+    expect(logLineHealth("WARNING: certificate expires in 6 days")).toBe("warning");
+  });
+
+  it("reads 'info' as info", () => {
+    expect(logLineHealth("info starting checkout-api build=4f2a1c")).toBe("info");
+  });
+
+  it("reads anything with no recognised level word as neutral", () => {
+    expect(logLineHealth("GET /healthz 200 1ms")).toBe("neutral");
+    expect(logLineHealth("")).toBe("neutral");
+  });
+
+  it("is case-insensitive and matches anywhere in the line, not only a leading word", () => {
+    expect(logLineHealth("14:07:41.902 ERROR pool timeout waited=30.0s")).toBe("danger");
+    expect(logLineHealth("request failed status=503, see Warn budget below")).toBe("warning");
+  });
+
+  it("prefers danger over warning or info when a line somehow carries more than one", () => {
+    // Not expected in practice, but the precedence should be principled
+    // (worst word wins) rather than "whichever regex runs first" by luck.
+    expect(logLineHealth("warn: escalated to error after 3 retries")).toBe("danger");
+  });
+
+  it("does not match a level word as a substring of an unrelated word", () => {
+    // 'informant' contains 'info', 'forewarned' contains 'warn' — neither
+    // should trip the level scan; the classic-derived word-boundary regexes
+    // guard exactly this.
+    expect(logLineHealth("the informant forewarned the team")).toBe("neutral");
   });
 });
