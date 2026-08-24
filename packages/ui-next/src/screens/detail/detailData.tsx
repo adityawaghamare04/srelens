@@ -15,11 +15,10 @@ import {
 } from "@srelens/core";
 import {
   Alert,
-  Badge,
   CodeEditor,
   ErrorState,
   LoadingState,
-  statusTone,
+  StatusPill,
   Table,
   type Column,
   type TabItem,
@@ -641,12 +640,19 @@ const EVENT_COLUMNS: Column<EventSummary>[] = [
   {
     key: "type",
     header: "Type",
-    // The tone comes from core's one rule for an event, not from a literal
-    // comparison against "Warning" written here — see `eventVerdict`. This
-    // moves a Warning's badge from the old hand-paired "warn" (amber) to
-    // "sev" (red/danger), which is the point: the design tones Warning
-    // danger, not merely worth a look.
-    render: (e) => <Badge tone={statusTone(eventVerdict(e.type).health)}>{e.type}</Badge>,
+    // Both halves of core's one rule for an event, not a literal comparison
+    // against "Warning" written here — see `eventVerdict`. A `Badge` used to
+    // sit here and could carry only `health` (a single tone on the whole
+    // label); it has no dot and no notion of "colour the word but not always",
+    // so it could not express the design's `bad` half at all. `StatusPill` is
+    // the design's own `Status` component: the dot is always toned by `kind`,
+    // and `tinted` colours and bolds the WORD only when `bad` is true — a
+    // Warning reads bold and danger-red, a Normal (or any type this cluster
+    // invented) reads a plain word beside a neutral dot.
+    render: (e) => {
+      const { health, bad } = eventVerdict(e.type);
+      return <StatusPill status={e.type} kind={health} tinted={bad} />;
+    },
   },
   { key: "reason", header: "Reason" },
   { key: "object", header: "Object" },

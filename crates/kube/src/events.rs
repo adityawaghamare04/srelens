@@ -183,6 +183,23 @@ mod tests {
     }
 
     #[test]
+    fn summarise_treats_an_explicit_empty_namespace_the_same_as_absent() {
+        // The API server never actually sends this — it omits
+        // `metadata.namespace` for a cluster-scoped event rather than sending
+        // `""` — but `unwrap_or_default()` collapses `None` and `Some("")`
+        // one line before the branch that reads it, so both inputs must
+        // produce the identical result. Pinned on its own input, rather than
+        // assumed from the `None` case above, so the claim that this shape is
+        // covered is actually true.
+        let mut ev = Event::default();
+        ev.metadata.namespace = Some("".into());
+        ev.metadata.name = Some("node-a.17c".into());
+        let s = summarise(ev);
+        assert_eq!(s.namespace, "");
+        assert_eq!(s.name, "node-a.17c");
+    }
+
+    #[test]
     fn filters_events_by_exact_involved_object() {
         let params = event_list_params("Pod", "web-1");
         assert_eq!(

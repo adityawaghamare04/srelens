@@ -346,11 +346,17 @@ describe("ResourceDetailView", () => {
     expect(getByText("container crashed")).toBeDefined();
     expect(getByText("Scheduled")).toBeDefined();
     expect(getByText("assigned to node-3")).toBeDefined();
-    // The Type cell's tone comes from `eventVerdict`, not a hand-paired
-    // literal — Warning reads danger (sev), which moved from the old table's
-    // "warn" (amber); Normal stays muted.
-    expect(getByText("Warning").getAttribute("data-tone")).toBe("sev");
-    expect(getByText("Normal").getAttribute("data-tone")).toBe("muted");
+    // The Type cell reads BOTH halves of `eventVerdict`, not just the dot's
+    // tone: the word itself is only bold/coloured (`data-bad="true"`) for a
+    // Warning, plain for a Normal — the design's rule for `bad`, and the
+    // second half of the one-rule promise that a `Badge` (tone only, no
+    // separate word/dot treatment) could not keep.
+    const warningPill = getByText("Warning");
+    expect(warningPill.getAttribute("data-kind")).toBe("danger");
+    expect(warningPill.getAttribute("data-bad")).toBe("true");
+    const normalPill = getByText("Normal");
+    expect(normalPill.getAttribute("data-kind")).toBe("neutral");
+    expect(normalPill.getAttribute("data-bad")).toBeNull();
   });
 
   it("does not query the cluster's CRDs to fetch a built-in kind's manifest", async () => {
