@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { parseDetailRoute } from "./detailRoute";
 import { AppLog } from "../screens/AppLog";
+import { Events } from "../screens/Events";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
@@ -119,6 +120,7 @@ const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(nul
   "/applog": AppLog,
   "/notes": ReleaseNotes,
   "/resources": Workloads,
+  "/events": Events,
 });
 
 /**
@@ -143,6 +145,15 @@ export function screenFor(route: string): ScreenComponent | null {
   // were just another kind slug. Matched by parse rather than by adding a
   // second `/k/` entry to `PREFIXED`, which cannot tell the two apart at all.
   if (parseDetailRoute(route)) return ResourceDetailScreen;
+  // `/k/events` shares its `/k/` prefix with every other built-in list route
+  // below, and `events` IS in core's `K8S_KIND` (so `isBuiltInKind` is true) —
+  // but `descriptors.ts`'s `TYPED` table has no `events` entry, so the prefix
+  // loop's `Resources` would fall to the generic Name/Namespace/Age
+  // descriptor, silently losing Type, Reason, Object, Message and Count. This
+  // must be checked ahead of that loop, or the sidebar's Events node — which
+  // already points at `/events`, not `/k/events` — would still leave `/k/events`
+  // reachable only by typing it or restoring an old session, as a trap.
+  if (route === "/k/events") return Events;
   for (const [prefix, screen] of PREFIXED) {
     // A bare prefix names no resource; `/k/` is not a route.
     if (route.startsWith(prefix) && route.length > prefix.length) return screen;

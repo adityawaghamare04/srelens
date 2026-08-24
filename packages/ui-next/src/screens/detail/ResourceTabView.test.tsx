@@ -36,7 +36,8 @@ vi.mock("../../lib/kinds/descriptors", () => ({ descriptorFor }));
 
 import { ConsoleProvider } from "../../console";
 import { loadSectionFolds, setSectionOpen } from "../../lib/sectionFolds";
-import { ResourceTab } from "./ResourceTab";
+import { detailFacts } from "./detailData";
+import { ResourceTabView } from "./ResourceTabView";
 
 function Wrapper({ children }: { children: ReactNode }) {
   return <ConsoleProvider>{children}</ConsoleProvider>;
@@ -122,7 +123,7 @@ const tabNames = () => screen.getAllByRole("tab").map((t) => t.textContent);
 
 async function openPod(props: Partial<{ kind: string; namespace: string | null; name: string }> = {}) {
   const view = render_(
-    <ResourceTab
+    <ResourceTabView
       context="prod-eu"
       kind={props.kind ?? "Pod"}
       namespace={props.namespace === undefined ? "checkout" : props.namespace}
@@ -142,7 +143,7 @@ async function expand(name: string) {
   await userEvent.click(screen.getByRole("button", { name }));
 }
 
-describe("ResourceTab — the full tab the design draws", () => {
+describe("ResourceTabView — the full tab the design draws", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getObject.mockResolvedValue({ object: POD });
@@ -273,14 +274,46 @@ describe("ResourceTab — the full tab the design draws", () => {
   });
 
   describe("Overview", () => {
-    it("lays the facts out as three columns of label-above-value", async () => {
+    it("lays the facts out as three columns of label-above-value, in a grid of its own", async () => {
       await openPod();
-      const grid = document.querySelector<HTMLElement>(".factgrid")!;
-      expect(grid.style.getPropertyValue("--fact-cols")).toBe("3");
-      // The very rows the peek reads down a column — one derivation, two
+      // THIS SCREEN'S grid, built here — not the peek's rows restyled from
+      // above, which is what `FactGrid` did. The rows say so themselves:
+      // `stacked` is the form a row takes, so the label sits over the value
+      // and the pair is ruled off beneath.
+      const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']")!;
+      expect(grid).toBeTruthy();
+      expect(grid.className).toContain("grid-cols-3");
+      const rows = [...grid.querySelectorAll<HTMLElement>(".kv")];
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((row) => row.dataset.stacked === "true")).toBe(true);
+      // The very facts the peek reads down a column — one derivation, two
       // layouts.
       expect(within(grid).getByText("QoS class")).toBeDefined();
       expect(within(grid).getByText("Burstable")).toBeDefined();
+    });
+
+    it("draws every fact it was handed, not a selection of them", async () => {
+      await openPod();
+      // EQUALS the derived list, in its order. A screen that filtered three
+      // facts out of the list it shares with the peek would pass every other
+      // assertion in this file, and the two screens would silently disagree
+      // about what a pod is — the drift the retired both-hosts comparison
+      // used to catch, caught here without either screen's markup standing in
+      // for the other's.
+      const derived = detailFacts({ kind: "Pod", object: POD }).map((f) => f.label);
+      expect(derived.length).toBeGreaterThan(3);
+      const drawn = [...document.querySelectorAll("[data-slot='fact-grid'] .kv-k")].map(
+        (el) => el.textContent ?? "",
+      );
+      expect(drawn).toEqual(derived);
+    });
+
+    it("draws no fact of the peek's own form, so nothing here is the peek's markup", async () => {
+      await openPod();
+      const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']")!;
+      // Every row in the grid is this screen's form. A row here in the peek's
+      // form would mean the tab was showing something the peek built.
+      expect(grid.querySelectorAll(".kv:not([data-stacked])")).toHaveLength(0);
     });
 
     it("puts the containers table on Overview, with the design's columns", async () => {
@@ -313,6 +346,27 @@ describe("ResourceTab — the full tab the design draws", () => {
       expect(cells[6]).toContain("running");
     });
 
+    it("compensates by hand for the one hairline it breaks on purpose", async () => {
+      await openPod();
+      const body = document.querySelector<HTMLElement>(".pane-body")!;
+      // Every block of Overview is a `.section` sibling of every other, which
+      // is what `.section + .section` draws the hairlines between — with one
+      // exception, and the exception is the point: Labels and Annotations read
+      // side by side here, so neither can be the other's adjacent sibling and
+      // the rule between them would run down the middle of the row instead of
+      // across it.
+      const breaks = [...body.children].filter((el) => !el.matches("section.section"));
+      expect(breaks.map((el) => el.getAttribute("data-slot"))).toEqual(["metadata-pair"]);
+
+      // Which means this block owes the run the two rules it took away, drawn
+      // by hand: one above the row, where the sibling rule would have drawn
+      // against the block before it, and one down the middle, between the two
+      // columns. The peek needs neither and has neither — it stacks them.
+      const pair = breaks[0];
+      expect(pair.className).toContain("rule-t");
+      expect([...pair.children].map((column) => column.className)).toEqual(["", "rule-l"]);
+    });
+
     it("reads Labels and Annotations side by side", async () => {
       await openPod();
       const pair = document.querySelector<HTMLElement>("[data-slot='metadata-pair']")!;
@@ -337,7 +391,7 @@ describe("ResourceTab — the full tab the design draws", () => {
       const view = await openPod();
       expect(getManifest).not.toHaveBeenCalled();
       await view.rerender(
-        <ResourceTab context="prod-eu" kind="Pod" namespace="checkout" name="cart-session-store-1" />,
+        <ResourceTabView context="prod-eu" kind="Pod" namespace="checkout" name="cart-session-store-1" />,
       );
       expect(getManifest).not.toHaveBeenCalled();
     });

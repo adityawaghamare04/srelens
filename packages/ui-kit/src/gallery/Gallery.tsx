@@ -17,13 +17,13 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Dialog } from "../Dialog";
 import { ConsoleDock } from "../ConsoleDock";
 import { ContextMenu } from "../ContextMenu";
+import { CopyCommand } from "../CopyCommand";
 import { CustomizeMark, type MarkAppearance } from "../CustomizeMark";
 import { Drawer } from "../Drawer";
 import { DrillCard } from "../DrillCard";
 import { EmptyState } from "../EmptyState";
 import { ErrorState } from "../ErrorState";
 import { Eyebrow } from "../Eyebrow";
-import { FactGrid } from "../FactGrid";
 import { Field } from "../Field";
 import { FilterBar } from "../FilterBar";
 import { IconButton } from "../IconButton";
@@ -50,6 +50,7 @@ import { Section } from "../Section";
 import { SegmentBar } from "../SegmentBar";
 import { Select } from "../Select";
 import { Sidebar } from "../Sidebar";
+import { SideRail } from "../SideRail";
 import { Sparkline } from "../Sparkline";
 import { Spinner } from "../Spinner";
 import { Stat } from "../Stat";
@@ -457,37 +458,6 @@ export function Gallery() {
       </section>
 
       <section>
-        <h2>FactGrid</h2>
-        {/* The SAME rows as the run above, on a page instead of in a column:
-            the wrapper restyles a body it did not build, so a subject drawn in
-            both places is derived once. The heading spans, the pairs do not. */}
-        <div className="card">
-          <FactGrid>
-            <Section>
-              <KV k="Status" v="Running" />
-              <KV k="Node" v="eu-w4-c3-standard-a3" mono />
-              <KV k="Pod IP" v="10.44.21.4" mono />
-              <KV k="QoS class" v="Burstable" />
-              <KV k="Service account" v="cart-session-store" mono />
-              <KV k="Containers ready" v="1 of 1" />
-            </Section>
-            <Section title="Conditions">
-              <KV k={<StatusPill status="Ready" kind="success" tinted />} v="True · —" />
-            </Section>
-          </FactGrid>
-        </div>
-        {/* Two columns, for a surface with less room than a full tab. */}
-        <div className="card">
-          <FactGrid columns={2}>
-            <Section>
-              <KV k="Replicas" v="9 ready · 12 desired" />
-              <KV k="Up to date" v="9 of 12" />
-            </Section>
-          </FactGrid>
-        </div>
-      </section>
-
-      <section>
         <h2>Tabs</h2>
         <Tabs
           tabs={[
@@ -708,7 +678,21 @@ export function Gallery() {
       </section>
 
       <section>
+        <h2>CopyCommand</h2>
+        {/* The other half of the pair below, and the distinction is the whole
+            point of there being two: this hands the reader something to run
+            themselves, so the command is the content and carries no preamble.
+            Shown at a rail's width, because that is where it clips — and it
+            wraps instead. */}
+        <div style={{ width: 264 }}>
+          <CopyCommand command="kubectl --context prod-eu get servicemonitors.monitoring.coreos.com -A -o wide" />
+        </div>
+      </section>
+
+      <section>
         <h2>KubectlPreview</h2>
+        {/* Not `CopyCommand`: this sits inside a confirm dialog, beside an
+            action the app is about to perform, and says so. */}
         <KubectlPreview command="kubectl delete pod web-1 -n default" onCopy={() => {}} />
         {/* Not every action has a faithful one-liner; the note says so in the
             same place rather than leaving the dialog silent. */}
@@ -1515,6 +1499,41 @@ export function Gallery() {
             emptyHint="Connect a cluster to see what is in it."
           />
           <p className="flex-1 p-3 text-[0.75rem] text-muted">nothing connected</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>SideRail</h2>
+        {/* The other half of the pair above: the sidebar resizes, this does
+            not. No grip on the hairline, nothing to drag, one number per
+            screen. The wide line in the middle is the whole reason the main
+            region carries `min-w-0` — it scrolls inside its own box instead of
+            shoving the rail off the edge. */}
+        <div className="card flex overflow-hidden" style={{ height: 220 }}>
+          <SideRail
+            head="About this kind"
+            width={264}
+            rail={
+              <>
+                <Section title="Definition">
+                  <KV k="Kind" v="ServiceMonitor" />
+                  <KV k="Scope" v="Namespaced" />
+                  <KV k="Served versions" v="v1, v1beta1" />
+                  <KV k="Storage version" v="v1" />
+                  <KV k="Objects" v="42" />
+                </Section>
+                <Section title="Fetch it yourself">
+                  <KubectlPreview command="kubectl --context prod-eu get servicemonitors.monitoring.coreos.com -A -o wide" />
+                </Section>
+              </>
+            }
+          >
+            <div className="scroll min-h-0 min-w-0 flex-1 p-3">
+              <p className="whitespace-nowrap text-[0.75rem] text-muted">
+                the main region — a table this wide scrolls here rather than widening the row
+              </p>
+            </div>
+          </SideRail>
         </div>
       </section>
 

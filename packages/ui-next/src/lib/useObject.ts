@@ -11,7 +11,7 @@ export interface ObjectResource {
 }
 
 /** The four values that identify what is being loaded, as one comparable
- *  string. Same shape `ResourceDetail` already builds for its own reset. */
+ *  string. Same shape `ResourceDetailView` already builds for its own reset. */
 function keyFor(context: string, kind: string, namespace: string | null, name: string): string {
   return `${context}|${kind}|${namespace ?? ""}|${name}`;
 }
@@ -24,7 +24,7 @@ function keyFor(context: string, kind: string, namespace: string | null, name: s
  *
  * What it returns is GATED on the target the held state was fetched for
  * matching the one passed in THIS render — the same render-time gate
- * `ResourceDetail`'s own `useLoad` applies to its panes, and for the same
+ * `ResourceDetailView`'s own `useLoad` applies to its panes, and for the same
  * reason. The effect below resets to "loading" on a target change, but an
  * effect runs after commit and after paint: on the very render the caller
  * switches subjects, the previous subject's object is still in this hook's

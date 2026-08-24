@@ -276,6 +276,47 @@ function nodeStatusLine(object: K8sObject): ResourceStatusLine {
 }
 
 /**
+ * `eventVerdict`'s own two-member union, deliberately narrower than the
+ * general `{ health: HealthKind; bad: boolean }` shape it used to return:
+ * that wider shape does not stop `{ health: "success", bad: true }` from
+ * typechecking — the exact "green pill, red dot" pairing this file's
+ * `Verdict` union exists to make unrepresentable. Declaring the two legal
+ * pairs by name closes the same hole here: constructing the illegal pair
+ * against this type is a compile error (see the test that proves it).
+ */
+type EventVerdict = { health: "danger"; bad: true } | { health: "neutral"; bad: false };
+
+/**
+ * An event's tone — the ONE rule for it, replacing two hand-paired ones: the
+ * classic list's danger/info and the detail pane's warning/neutral. Per the
+ * design (mock-full-design §B.2): `Warning` is danger and bold; everything
+ * else — `Normal`, or a type this cluster invented — reads plain.
+ *
+ * Reuses the same six-pair table above rather than writing a seventh: a
+ * `Warning` is exactly {@link BROKEN}'s (danger, dot-worthy) pair, and
+ * everything else is exactly {@link AT_REST}'s (neutral, nothing to see)
+ * pair. `bad` is that pair's `flagged`, renamed because an event has no
+ * status word of its own to hang a dot off — it names only whether the WORD
+ * is worth colouring, which is what the kit's `StatusPill` calls `tinted`.
+ *
+ * An unrecognised type is deliberately read the SAME as `Normal`, not as
+ * {@link UNREADABLE} — and this is a principled asymmetry, not a special
+ * case. `UNREADABLE` exists because a resource's status WORD is a vocabulary
+ * this file claims to know (a phase, a condition reason); failing to
+ * recognise one means the reader is looking at a state nobody has assessed,
+ * and a dot is the honest answer. An event's `type` is not a status at all —
+ * the API defines exactly two values, and the event carries its own
+ * separately-toned `reason` and `message` to say what actually happened; the
+ * field itself asserts no health about anything. "Not Warning" is therefore
+ * not "an unknown state" the way an unrecognised phase is — it is "not the
+ * alarm channel". Colouring it would train the reader to ignore red.
+ */
+export function eventVerdict(type: string): EventVerdict {
+  if (type === "Warning") return { health: BROKEN.health, bad: BROKEN.flagged };
+  return { health: AT_REST.health, bad: AT_REST.flagged };
+}
+
+/**
  * The status line for a fetched resource, or `null` for a kind that has none.
  *
  * `kind` is passed rather than read off `object.kind` for the same reason the

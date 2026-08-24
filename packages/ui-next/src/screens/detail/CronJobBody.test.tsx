@@ -16,6 +16,7 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 }));
 
 import { GenericBody } from "./GenericBody";
+import { detailFacts } from "./detailData";
 import { CronJobDetailsBody } from "./CronJobBody";
 
 function cronjob(
@@ -188,7 +189,10 @@ describe("CronJobDetailsBody", () => {
         </GenericBody>,
       );
       await waitFor(() => expect(screen.getByText("No jobs yet")).toBeDefined());
-      expect(screen.getAllByText("Namespace")).toHaveLength(1);
+      // The namespace is a fact the SCREEN draws, off the one derivation
+      // both screens read; neither wrapper nor body states it again.
+      expect(detailFacts({ kind: "CronJob", object: cj }).map((f) => f.label)).toContain("Namespace");
+      expect(screen.queryByText("Namespace")).toBeNull();
       expect(screen.getByRole("heading", { name: "Schedule" })).toBeDefined();
       // CronJob has no `relatedPodSelector` case, so GenericBody fetches nothing.
       expect(screen.queryByRole("heading", { name: "Pods" })).toBeNull();

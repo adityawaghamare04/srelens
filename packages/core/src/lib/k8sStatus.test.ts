@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cronJobStatus, jobStatus, nodeStatus, podStatus, resourceStatusLine, scaledStatus } from "./k8sStatus";
+import { cronJobStatus, eventVerdict, jobStatus, nodeStatus, podStatus, resourceStatusLine, scaledStatus } from "./k8sStatus";
 import type { K8sObject } from "./manifest";
 
 /** A Deployment-shaped object: `spec.replicas` desired, the rest on `status`. */
@@ -500,10 +500,54 @@ describe("the tone and the dot are paired structurally", () => {
       if (line.health === "danger") expect({ subject, flagged: line.flagged }).toEqual({ subject, flagged: true });
     }
 
+    // `eventVerdict` shares this same table — the sweep this file uses to
+    // catch a producer pairing a healthy tone with a flagged word applies to
+    // it too, not just to `resourceStatusLine`'s producers. `bad` stands in
+    // for `flagged` here: an event has no status word to hang a dot off, so
+    // it names only whether the word itself is worth colouring.
+    for (const type of ["Warning", "Normal", "", "Something"]) {
+      const { health, bad } = eventVerdict(type);
+      const subject = `Event · ${type || "(empty)"}`;
+      const verdict = LEGAL_VERDICTS[`${health}/${bad}`];
+      expect({ subject, verdict }).toEqual({ subject, verdict: expect.any(String) });
+      reached.add(verdict);
+      // No `health === "success"` arm here, unlike the loop above: unlike
+      // `HealthKind`, `eventVerdict`'s return type has no "success" member at
+      // all, so that comparison is a compile error (TS2367) rather than a
+      // runtime-only guarantee — the type itself is the proof.
+      if (health === "danger") expect({ subject, bad }).toEqual({ subject, bad: true });
+    }
+
     // The sweep is only worth its prose if it actually walks every branch:
     // without this, a verdict could stop being produced by anything and no
     // test would notice.
     expect([...reached].sort()).toEqual([...new Set(Object.values(LEGAL_VERDICTS))].sort());
+  });
+});
+
+describe("eventVerdict", () => {
+  it("colours a Warning and leaves a Normal plain", () => {
+    expect(eventVerdict("Warning")).toEqual({ health: "danger", bad: true });
+    expect(eventVerdict("Normal")).toEqual({ health: "neutral", bad: false });
+  });
+
+  it("reads an unknown type as unremarkable rather than alarming", () => {
+    expect(eventVerdict("")).toEqual({ health: "neutral", bad: false });
+    expect(eventVerdict("Something")).toEqual({ health: "neutral", bad: false });
+  });
+
+  it("makes the illegal pair a compile error, not merely an untested one", () => {
+    // A green tone paired with a flagged word — the exact `Succeeded`-pod bug
+    // `Verdict` exists to prevent — must not typecheck against `eventVerdict`'s
+    // return type. `@ts-expect-error` fails `tsc --noEmit` if this line ever
+    // STOPS erroring (an "unused directive" error), so a future widening of
+    // the return type back to `{ health: HealthKind; bad: boolean }` fails the
+    // typecheck gate, not just this assertion.
+    type EV = ReturnType<typeof eventVerdict>;
+    // @ts-expect-error — "success" is not one of eventVerdict's two health
+    // words, and pairing it with `bad: true` is unrepresentable by design.
+    const illegal: EV = { health: "success", bad: true };
+    expect(illegal).toEqual({ health: "success", bad: true });
   });
 });
 

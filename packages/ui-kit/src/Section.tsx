@@ -93,13 +93,14 @@ function Caret({ open }: { open: boolean }) {
  * props and stays open. The design heads the first block of a detail with
  * nothing, and a pane that opens showing nothing at all is hostile.
  *
- * There is deliberately no `aria-controls`. The rows have to stay the
- * section's own direct children — `FactGrid` places them as grid items of the
- * section (`.factgrid .section > :not(.kv)`), so a panel element around them
- * would cost the full tab its three columns — which leaves no single element
- * for an id to point at. `aria-expanded` on a button inside the heading that
- * names the block is the disclosure pattern's own requirement; `aria-controls`
- * is its optional half, and it is the half almost no screen reader acts on.
+ * There is deliberately no `aria-controls`. The rows stay the section's own
+ * direct children — a caller lays them out (`ui-next`'s full tab grids its
+ * facts three across), and a panel element around them would be a box between
+ * that caller's grid and the rows it is placing — which leaves no single
+ * element for an id to point at. `aria-expanded` on a button inside the
+ * heading that names the block is the disclosure pattern's own requirement;
+ * `aria-controls` is its optional half, and it is the half almost no screen
+ * reader acts on.
  */
 export function Section({ title, children, className, open = true, onToggle }: SectionProps) {
   const headed = filled(title);

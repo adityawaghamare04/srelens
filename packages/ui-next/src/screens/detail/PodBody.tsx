@@ -34,6 +34,7 @@ import {
 } from "@srelens/ui-kit";
 import { Section } from "./Section";
 import { ConditionsSection, StringList } from "./sections";
+import type { DetailFact, FactsFor } from "./facts";
 
 /**
  * Kubernetes' own labels for a pod volume's source kind, keyed on which field
@@ -109,9 +110,15 @@ function ImageValue({ images }: { images: string[] }) {
  * Status, Node, Pod IP, QoS class, Service account, Containers ready,
  * Restarts, Controlled by, Created, Image.
  *
- * No heading. The design heads the first block of a detail with nothing — the
- * pane's header has already given the name, the kind and the namespace — and
- * no `Name` row either, which repeated that header verbatim.
+ * DATA, so each of the two detail screens can lay the list out its own way —
+ * the peek down one column, the full tab across three. Neither draws the
+ * other's markup; both draw this list. It used to be a `Section` rendered
+ * here, which is why the tab had to restyle it from above (`FactGrid`). (#331)
+ *
+ * No heading, either way. The design heads the first block of a detail with
+ * nothing — the pane's header has already given the name, the kind and the
+ * namespace — and there is no `Name` fact either, which repeated that header
+ * verbatim.
  *
  * The frame's ten facts are not everything srelens knows, and the extras it
  * carries over from classic (Pod IPs, Priority class, Runtime class, Image
@@ -133,7 +140,7 @@ function ImageValue({ images }: { images: string[] }) {
  * by and Image pull secrets are `ResourceLink`s in classic that navigate;
  * they render here as plain text (see the task report for the full list).
  */
-function FactsSection({ object }: { object: K8sObject }) {
+export const podFacts: FactsFor = ({ object }) => {
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
@@ -162,41 +169,47 @@ function FactsSection({ object }: { object: K8sObject }) {
   const images = imagesOf(spec.containers);
   const statusLine = resourceStatusLine("Pod", object);
 
-  return (
-    <Section>
-      {statusLine && (
-        <KV k="Status" v={<StatusPill status={statusLine.status} kind={statusLine.health} tinted />} />
-      )}
-      {nodeName && <KV k="Node" v={nodeName} mono />}
-      {podIP && <KV k="Pod IP" v={podIP} mono />}
-      {podIPs.length > 0 && <KV k="Pod IPs" v={<StringList items={podIPs} />} />}
-      {qosClass && <KV k="QoS class" v={qosClass} />}
-      {serviceAccountName && <KV k="Service account" v={serviceAccountName} mono />}
-      {priorityClassName && <KV k="Priority class" v={priorityClassName} mono />}
-      {runtimeClassName && <KV k="Runtime class" v={runtimeClassName} mono />}
-      {imagePullSecrets.length > 0 && (
-        <KV
-          k="Image pull secrets"
-          v={<StringList items={imagePullSecrets.map((name) => `Secret/${name}`)} />}
-        />
-      )}
-      {/* No container status at all means the kubelet has not reported yet:
-          "0 of 0" and "0 restarts" would read as facts where there is only an
-          absence. */}
-      {containerStatuses.length > 0 && (
-        <KV k="Containers ready" v={`${containersReady} of ${containerStatuses.length}`} />
-      )}
-      {allContainerStatuses.length > 0 && <KV k="Restarts" v={str(podRestartCount)} />}
-      {podLastRestart && <KV k="Last restart" v={timestampWithAge(podLastRestart, Date.now())} />}
-      {owners.length > 0 && (
-        <KV k="Controlled by" v={<StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />} />
-      )}
-      {meta.namespace && <KV k="Namespace" v={str(meta.namespace)} mono />}
-      {created && <KV k="Created" v={`${ageFromTimestamp(created, Date.now())} ago`} />}
-      {images.length > 0 && <KV k="Image" v={<ImageValue images={images} />} />}
-    </Section>
-  );
-}
+  const facts: DetailFact[] = [];
+  if (statusLine) {
+    facts.push({
+      label: "Status",
+      value: <StatusPill status={statusLine.status} kind={statusLine.health} tinted />,
+    });
+  }
+  if (nodeName) facts.push({ label: "Node", value: nodeName, mono: true });
+  if (podIP) facts.push({ label: "Pod IP", value: podIP, mono: true });
+  if (podIPs.length > 0) facts.push({ label: "Pod IPs", value: <StringList items={podIPs} /> });
+  if (qosClass) facts.push({ label: "QoS class", value: qosClass });
+  if (serviceAccountName) facts.push({ label: "Service account", value: serviceAccountName, mono: true });
+  if (priorityClassName) facts.push({ label: "Priority class", value: priorityClassName, mono: true });
+  if (runtimeClassName) facts.push({ label: "Runtime class", value: runtimeClassName, mono: true });
+  if (imagePullSecrets.length > 0) {
+    facts.push({
+      label: "Image pull secrets",
+      value: <StringList items={imagePullSecrets.map((name) => `Secret/${name}`)} />,
+    });
+  }
+  // No container status at all means the kubelet has not reported yet:
+  // "0 of 0" and "0 restarts" would read as facts where there is only an
+  // absence.
+  if (containerStatuses.length > 0) {
+    facts.push({ label: "Containers ready", value: `${containersReady} of ${containerStatuses.length}` });
+  }
+  if (allContainerStatuses.length > 0) facts.push({ label: "Restarts", value: str(podRestartCount) });
+  if (podLastRestart) {
+    facts.push({ label: "Last restart", value: timestampWithAge(podLastRestart, Date.now()) });
+  }
+  if (owners.length > 0) {
+    facts.push({
+      label: "Controlled by",
+      value: <StringList items={owners.map((o) => `${o.kind}/${o.name}`)} />,
+    });
+  }
+  if (meta.namespace) facts.push({ label: "Namespace", value: str(meta.namespace), mono: true });
+  if (created) facts.push({ label: "Created", value: `${ageFromTimestamp(created, Date.now())} ago` });
+  if (images.length > 0) facts.push({ label: "Image", value: <ImageValue images={images} /> });
+  return facts;
+};
 
 /**
  * Where and how the pod is placed — classic's "Scheduling" section, shown
@@ -254,8 +267,10 @@ function PodVolumesSection({ object }: { object: K8sObject }) {
 
 /**
  * A pod's Details pane, as a flat run of blocks divided by hairline rules —
- * the facts, then Scheduling and Pod Volumes, then Conditions, Labels and
- * Annotations.
+ * Scheduling and Pod Volumes, then Conditions.
+ *
+ * The lead fact list is NOT here: it is data ({@link podFacts}), and the
+ * screen drawing the pane lays it out above this in its own layout.
  *
  * Every block is a sibling of every other, with nothing wrapped around any of
  * them: `.section + .section` is what draws the rule between two blocks, so a
@@ -280,7 +295,6 @@ export function PodDetailsBody({ object }: { object: K8sObject }) {
   const conditions = asArray(status.conditions) as unknown as Condition[];
 
   const sections: ReactNode[] = [
-    <FactsSection key="facts" object={object} />,
     <SchedulingSection key="scheduling" object={object} />,
     <PodVolumesSection key="volumes" object={object} />,
     <ConditionsSection key="conditions" conditions={orderPodConditions(conditions)} />,
@@ -411,7 +425,17 @@ export function PodContainersBody({ object }: { object: K8sObject }) {
         containers={initContainers}
         statuses={statusesByName(status.initContainerStatuses)}
       />
-      <Section title="Containers">
+      {/* Always open, never conditional on this pod having init or ephemeral
+          containers beside it. It is the pane's subject — a reader who clicks
+          a tab named Containers and is shown one word and a caret has been
+          answered with nothing — and the fold memory is keyed per KIND, so a
+          default that varied with the subject would make the stored document
+          mean different things depending on which pod was on screen when the
+          reader clicked: open on a pod with an init group, shut it, and the
+          entry is dropped as "back to default" — leaving the next pod without
+          one open. The init and ephemeral groups keep the shut rule; they are
+          extras, and the pane says something either way. */}
+      <Section title="Containers" defaultOpen>
         {containers.length === 0 ? (
           <EmptyState title="No containers" />
         ) : (

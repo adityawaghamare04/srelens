@@ -16,10 +16,11 @@ const KindContext = createContext<string | null>(null);
  * Everything inside this remembers which of its blocks the reader opened, for
  * this kind.
  *
- * Rendered ONCE, around the pane both hosts share (`useDetailPanes`), so the
- * peek and the full tab get the same memory without either of them knowing
- * that there is a store at all. They are different layouts of one subject; a
- * block a reader cares about is the same block in both.
+ * Rendered ONCE by each screen, around its own pane, so the peek and the full
+ * tab get the same memory without either of them knowing the other exists —
+ * the key is the KIND, and the store is neither screen's. They are different
+ * layouts of one subject; a block a reader cares about is the same block in
+ * both.
  *
  * A provider renders no element, so the run of sections beneath it is still a
  * run of direct siblings and `.section + .section` still draws every hairline.
@@ -41,6 +42,24 @@ export interface DetailSectionProps {
    * ConfigMap, and a memory keyed on the heading would go with it.
    */
   id?: string;
+  /**
+   * Open this block on a first visit, rather than shut.
+   *
+   * FOR ONE SHAPE ONLY: a pane whose whole content is this single titled
+   * block, which would otherwise open showing nothing at all — the peek's
+   * Containers tab, a ConfigMap's Data. That is the same hostility argument
+   * the unheaded lead fact list is exempted under, and the reader's "first
+   * open should keep everything collapsed" still holds everywhere else.
+   *
+   * Declared by the body that draws the block, because a section cannot see
+   * its siblings: a rule that counted them would be wrong the moment a Labels
+   * block turned up beside it.
+   *
+   * It still folds and is still remembered. Shutting one is recorded as the
+   * reader's own choice and survives the launch, exactly as opening a shut one
+   * does — only the starting point differs.
+   */
+  defaultOpen?: boolean;
   children: ReactNode;
   className?: string;
 }
@@ -59,7 +78,11 @@ export interface DetailSectionProps {
  * module decides what open means and where it is written down. The kit holds
  * no app state and touches no storage.
  *
- * WHAT DOES NOT FOLD, and both cases are deliberate:
+ * WHAT STARTS OPEN. Almost nothing: the reader asked for everything
+ * collapsed. The exception is {@link DetailSectionProps.defaultOpen}, for a
+ * block that is the only thing in its pane — see there.
+ *
+ * WHAT DOES NOT FOLD AT ALL, and both cases are deliberate:
  *
  * - An untitled block. The design heads the first fact list with nothing, so
  *   there is no line to hang a control on — and a pane that opens showing
@@ -78,13 +101,13 @@ export interface DetailSectionProps {
  * read by it. A remembered "open" on `Secret`/`Annotations` therefore shows a
  * reader the words "Show 1 annotation" and nothing else. (#331)
  */
-export function Section({ title, id, children, className }: DetailSectionProps) {
+export function Section({ title, id, defaultOpen = false, children, className }: DetailSectionProps) {
   const kind = useContext(KindContext);
   // A heading that is not a plain string has no stable key to be remembered
   // under, and inventing one from a ReactNode is how a memory starts pointing
   // at the wrong block. Such a section simply does not fold.
   const sectionId = id ?? (typeof title === "string" ? title : null);
-  const open = useSectionOpen(kind, sectionId);
+  const open = useSectionOpen(kind, sectionId, defaultOpen);
 
   if (kind === null || sectionId === null) {
     return (
@@ -99,7 +122,7 @@ export function Section({ title, id, children, className }: DetailSectionProps) 
       title={title}
       className={className}
       open={open}
-      onToggle={(next) => setSectionOpen(kind, sectionId, next)}
+      onToggle={(next) => setSectionOpen(kind, sectionId, next, { defaultOpen })}
     >
       {children}
     </KitSection>

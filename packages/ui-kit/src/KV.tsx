@@ -6,6 +6,19 @@ export interface KVProps {
   v: ReactNode;
   /** Set the value in the monospace face — for identifiers, not for prose. */
   mono?: boolean;
+  /**
+   * Read the label ABOVE the value, ruled off beneath the pair, instead of
+   * beside it in a fixed label column.
+   *
+   * The form a page-wide surface asks for: the resource full tab reads its
+   * facts across three columns of these, where the peek reads the same facts
+   * down one column of the ordinary row. A prop on the ROW rather than a
+   * wrapper around the body, which is what `FactGrid` was — a component
+   * restyling markup it did not build, described in terms of someone else's
+   * children, needing a new exception for every kind of child that turned up.
+   * A caller that wants this layout asks the row for it. (#331)
+   */
+  stacked?: boolean;
   className?: string;
 }
 
@@ -30,9 +43,11 @@ export interface KVProps {
  * apply`-managed Secret leaked through it via an annotation. There is no prop
  * to put it back, for the same reason. (#331)
  */
-export function KV({ k, v, mono, className }: KVProps) {
+export function KV({ k, v, mono, stacked, className }: KVProps) {
   return (
-    <dl className={cx("kv", className)}>
+    // A data attribute rather than a second class: the form is a state of
+    // this row, and the stylesheet reads it off the row it is laying out.
+    <dl className={cx("kv", className)} data-stacked={stacked ? "true" : undefined}>
       <dt className="kv-k">{k}</dt>
       <dd className={cx("kv-v", mono && "code")}>{v}</dd>
     </dl>

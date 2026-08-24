@@ -46,6 +46,16 @@ describe("AppearanceSettingsSection", () => {
     expect(items).toContain("Resource lists and details");
   });
 
+  it("lists Events, which has its own screen rather than riding the kind lists", () => {
+    // `/events` is not one of the `/k/<kind>` lists: it has its own chrome —
+    // the by-reason rail and the type filter — so it earns its own line here.
+    // Without it the new design's own Placeholder tells a reader Events is
+    // not ported while the screen is sitting there working.
+    render(<AppearanceSettingsSection />);
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toContain("Events");
+  });
+
   it("introduces the list, so the names are not a bare list under the hint", () => {
     render(<AppearanceSettingsSection />);
     expect(screen.getByText(/in the new design so far/i)).toBeDefined();

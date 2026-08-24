@@ -203,6 +203,10 @@ export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [
   // details too: there is no build in which one is ported and the other is
   // not.
   { route: "/k", name: "Resource lists and details" },
+  // Its own screen over the same list engine, not one of the `/k` kinds:
+  // `/events` has its own chrome — the by-reason rail and the type filter —
+  // and `/k/events` resolves to it too.
+  { route: "/events", name: "Events" },
 ];
 
 /**

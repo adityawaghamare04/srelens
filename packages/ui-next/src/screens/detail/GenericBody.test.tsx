@@ -31,9 +31,10 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 }));
 
 import userEvent from "@testing-library/user-event";
-import { Section } from "@srelens/ui-kit";
+import { KV, Section } from "@srelens/ui-kit";
+import { Section as DetailSection } from "./Section";
 import { GenericBody, SELF_DESCRIBING_KINDS } from "./GenericBody";
-import { DETAILS_BODY } from "./ResourceDetail";
+import { DETAILS_BODY, detailFacts } from "./detailData";
 
 function object(
   kind: string,
@@ -92,6 +93,32 @@ function runIsUnbroken(container: HTMLElement): boolean {
   return [...container.children].every((el) => el.matches("section.section"));
 }
 
+/**
+ * A kind's lead fact list, drawn.
+ *
+ * The facts are DATA (`detailFacts`, and `identityFacts` for every kind
+ * without a list of its own) because the peek and the full tab lay one list
+ * out two different ways. Neither layout is this file's business, so the cases
+ * below render the plainest possible rows and assert what was DERIVED; each
+ * screen's own test pins its own layout. (#331)
+ */
+function Lead({ kind, object }: { kind: string; object: K8sObject }) {
+  const facts = detailFacts({ kind, object });
+  if (facts.length === 0) return null;
+  return (
+    <DetailSection>
+      {facts.map((fact) => (
+        <KV key={fact.label} k={fact.label} v={fact.value} mono={fact.mono} />
+      ))}
+    </DetailSection>
+  );
+}
+
+/** What a screen composes: the lead facts, then the wrapper's blocks. */
+function renderFacts(kind: string, object: K8sObject) {
+  return render(<Lead kind={kind} object={object} />);
+}
+
 describe("GenericBody", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -100,7 +127,7 @@ describe("GenericBody", () => {
   });
 
   describe("a kind with no specific body", () => {
-    // Lease has no `DETAILS_BODY` entry in `ResourceDetail` and is not one of
+    // Lease has no `DETAILS_BODY` entry in `ResourceDetailView` and is not one of
     // `SELF_DESCRIBING_KINDS` — exactly the ~23-kind case this task exists
     // to fix: no `children` at all, the wrapper alone must be a complete,
     // correct detail.
@@ -118,8 +145,8 @@ describe("GenericBody", () => {
       },
     );
 
-    it("renders every identity fact, with cross-resource references as plain text", () => {
-      render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
+    it("derives every identity fact, with cross-resource references as plain text", () => {
+      renderFacts("Lease", LEASE);
       expect(screen.getByText("kube-node-lease")).toBeDefined();
       expect(screen.getByText("Node/node-a")).toBeDefined();
 
@@ -132,39 +159,43 @@ describe("GenericBody", () => {
 
     it("heads the first fact list with nothing, the way the design does", () => {
       // The pane's own header has already named the subject; a "Metadata"
-      // bar above the first list is a second name for it.
-      render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
+      // bar above the first list is a second name for it. There is no title
+      // to give it either: the list is data, and neither screen heads it.
+      renderFacts("Lease", LEASE);
       expect(screen.queryByText("Metadata")).toBeNull();
       expect(screen.queryByRole("heading", { name: "Metadata" })).toBeNull();
     });
 
     it("drops Name, which repeats the header verbatim", () => {
-      render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
+      renderFacts("Lease", LEASE);
       expect(screen.queryByText("Name")).toBeNull();
       expect(screen.queryByText("lease-1")).toBeNull();
     });
 
     it("dates the object by age alone, not age plus an absolute stamp", () => {
-      render(<GenericBody kind="Lease" object={LEASE} context="ctx" />);
+      renderFacts("Lease", LEASE);
       expect(screen.getByText(/^\d+[smhd] ago$/)).toBeDefined();
       expect(screen.queryByText(/ago \(/)).toBeNull();
     });
 
     it("omits absent identity facts rather than showing them empty", () => {
       const bare = object("Lease", {}, {}, { name: "bare-lease" });
-      render(<GenericBody kind="Lease" object={bare} context="ctx" />);
-      expect(screen.queryByText("Namespace")).toBeNull();
-      expect(screen.queryByText("Created")).toBeNull();
-      expect(screen.queryByText("Controlled by")).toBeNull();
-      expect(screen.queryByText("Labels")).toBeNull();
-      expect(screen.queryByText("Annotations")).toBeNull();
+      const { container } = renderFacts("Lease", bare);
+      expect(detailFacts({ kind: "Lease", object: bare })).toEqual([]);
+      // And no block at all rather than an empty one, which would still have
+      // its padding and still rule against whatever followed it.
+      expect(container.querySelector("section.section")).toBeNull();
     });
   });
 
   describe("the run of sections", () => {
     it("is flat blocks divided by rules, not a stack of cards", () => {
       const { container } = render(
-        <GenericBody kind="Lease" object={object("Lease", {}, {}, { name: "l", namespace: "default" })} context="ctx" />,
+        <GenericBody
+          kind="Lease"
+          object={object("Lease", {}, { conditions: [{ type: "Ready", status: "True" }] }, { name: "l", namespace: "default" })}
+          context="ctx"
+        />,
       );
       expect(container.querySelector("section.section")).not.toBeNull();
       expect(container.querySelector(".card")).toBeNull();
@@ -223,7 +254,7 @@ describe("GenericBody", () => {
       expect(container.querySelectorAll("section.section")).toHaveLength(0);
     });
 
-    it("leaves the nested body first in the run when the object has no identity facts to show", () => {
+    it("opens the run with the nested body, since the lead facts are the screen's to place above it", () => {
       const { container } = render(
         <GenericBody kind="ConfigMap" object={object("ConfigMap", {}, {}, { name: "cm-1" })} context="ctx">
           <NestedBody title="Nested kind body" />
@@ -236,7 +267,7 @@ describe("GenericBody", () => {
 
   /**
    * Labels, Annotations and the Secret annotation gate all moved off this
-   * wrapper and onto the pane that draws it — see `ResourceDetail.test`'s
+   * wrapper and onto the pane that draws it — see `ResourceDetailView.test`'s
    * "Labels and Annotations, which the host places", where every one of the
    * properties that used to be asserted here is asserted through the real
    * render path instead.
@@ -267,24 +298,26 @@ describe("GenericBody", () => {
   });
 
   describe("a kind with a DETAILS_BODY entry", () => {
-    it("renders the wrapper's facts and the nested body together, in classic's order", () => {
+    it("reads lead facts, then the nested body, in classic's order", () => {
+      // Classic's `GenericDetail` nests `KindBody` after its own metadata
+      // section, and both screens keep that order — they place the lead facts
+      // above the wrapper. Composed here the way a screen composes it, since
+      // the two halves now live on either side of the data/design line.
+      const CM = object("ConfigMap");
       const { container } = render(
-        <GenericBody kind="ConfigMap" object={object("ConfigMap")} context="ctx">
-          <NestedBody title="Nested kind body" />
-        </GenericBody>,
+        <>
+          <Lead kind="ConfigMap" object={CM} />
+          <GenericBody kind="ConfigMap" object={CM} context="ctx">
+            <NestedBody title="Nested kind body" />
+          </GenericBody>
+        </>,
       );
-      expect(screen.getByText("Namespace")).toBeDefined();
-      expect(screen.getByRole("heading", { level: 3, name: "Nested kind body" })).toBeDefined();
-
-      // The wrapper's own facts precede the nested body in the DOM — classic's
-      // `GenericDetail` nests `KindBody` after its own metadata section.
       const namespaceKey = screen.getByText("Namespace");
       const nested = screen.getByRole("heading", { level: 3, name: "Nested kind body" });
       // eslint-disable-next-line no-bitwise
       expect(namespaceKey.compareDocumentPosition(nested) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(container.textContent?.indexOf("Namespace")).toBeLessThan(
-        container.textContent?.indexOf("Nested kind body") ?? -1,
-      );
+      // And still one unbroken run of siblings across the join.
+      expect(runIsUnbroken(container)).toBe(true);
     });
   });
 
@@ -353,14 +386,24 @@ describe("GenericBody", () => {
       );
     });
 
-    it.each([...SELF_DESCRIBING_KINDS])("passes %s's children through without a second identity block", (kind) => {
+    it.each([...SELF_DESCRIBING_KINDS])("passes %s's children through untouched", (kind) => {
       render(
         <GenericBody kind={kind} object={object(kind)} context="ctx">
           <NestedBody title="Own properties" />
         </GenericBody>,
       );
       expect(screen.getByRole("heading", { level: 3, name: "Own properties" })).toBeDefined();
-      expect(screen.queryByText("Namespace")).toBeNull();
+      // No Conditions and no Pods either: these four state their own.
+      expect(screen.queryByRole("heading", { level: 3, name: "Conditions" })).toBeNull();
+    });
+
+    it.each([...SELF_DESCRIBING_KINDS])("gives %s a fact list of its own rather than the identity one", (kind) => {
+      // The other half of the same rule, and the half that used to be a
+      // `SELF_DESCRIBING_KINDS` check inside the wrapper: these four already
+      // state Namespace, Created and their owner, so they must not be handed
+      // the generic list on top of their own.
+      const facts = detailFacts({ kind, object: object(kind) }).map((f) => f.label);
+      expect(facts).not.toEqual(["Namespace"]);
     });
 
     // DaemonSet is deliberately NOT in `SELF_DESCRIBING_KINDS` — classic's
@@ -368,11 +411,18 @@ describe("GenericBody", () => {
     // wrapper (and its own DaemonSetBody nests inside it, per classic's
     // `GenericDetail` + `KindBody`).
     it("still wraps DaemonSet, which classic does not special-case", () => {
+      const DS = object("DaemonSet");
       render(
-        <GenericBody kind="DaemonSet" object={object("DaemonSet")} context="ctx">
-          <NestedBody title="Scheduling" />
-        </GenericBody>,
+        <>
+          <Lead kind="DaemonSet" object={DS} />
+          <GenericBody kind="DaemonSet" object={DS} context="ctx">
+            <NestedBody title="Scheduling" />
+          </GenericBody>
+        </>,
       );
+      // It leads with the identity facts every wrapped kind gets — a
+      // DaemonSet's own numbers are per-node and state themselves in a titled
+      // Scheduling block instead.
       expect(screen.getByText("Namespace")).toBeDefined();
       expect(screen.getByRole("heading", { level: 3, name: "Scheduling" })).toBeDefined();
     });
@@ -419,9 +469,16 @@ describe("every real DETAILS_BODY entry lands in an unbroken run", () => {
     const Body = DETAILS_BODY[kind];
     const fixture = FIXTURES[kind];
     const { container } = render(
-      <GenericBody kind={kind} object={fixture} context="ctx">
-        <Body kind={kind} object={fixture} context="ctx" />
-      </GenericBody>,
+      <>
+        {/* Composed the way a screen composes it: the lead facts, then the
+            wrapper and the kind's own blocks. A body alone is not the run a
+            reader sees, and the join between the two is exactly where a
+            hairline would be lost. */}
+        <Lead kind={kind} object={fixture} />
+        <GenericBody kind={kind} object={fixture} context="ctx">
+          <Body kind={kind} object={fixture} context="ctx" revisions={{ status: "idle" }} />
+        </GenericBody>
+      </>,
     );
     // Every block a sibling of every other: `.section + .section` is what
     // draws the hairline, so one element wrapped around one block costs the

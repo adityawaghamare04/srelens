@@ -54,7 +54,13 @@ describe("the list of ported screens", () => {
     // One list, read by classic's Settings and by the new design's Placeholder,
     // so the two cannot disagree about what has been ported. A screen is added
     // here in the PR that ports it.
-    expect(PORTED_SCREENS.map((s) => s.route)).toEqual(["/applog", "/notes", "/resources", "/k"]);
+    expect(PORTED_SCREENS.map((s) => s.route)).toEqual([
+      "/applog",
+      "/notes",
+      "/resources",
+      "/k",
+      "/events",
+    ]);
   });
 
   it("gives every screen a name to show, since the route is not user-facing", () => {
@@ -63,6 +69,7 @@ describe("the list of ported screens", () => {
       "Release notes",
       "Workloads",
       "Resource lists and details",
+      "Events",
     ]);
   });
 });

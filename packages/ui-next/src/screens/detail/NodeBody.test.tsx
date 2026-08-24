@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { K8sObject } from "@srelens/core";
 import { GenericBody } from "./GenericBody";
+import { detailFacts } from "./detailData";
 import { NodeDetailsBody } from "./NodeBody";
 
 function node(
@@ -93,7 +94,10 @@ describe("NodeDetailsBody", () => {
           <NodeDetailsBody object={n} />
         </GenericBody>,
       );
-      expect(screen.getAllByText("Created")).toHaveLength(1);
+      // The age is a fact the SCREEN draws, off the one derivation both
+      // screens read; this body must not state it a second time.
+      expect(detailFacts({ kind: "Node", object: n }).map((f) => f.label)).toContain("Created");
+      expect(screen.queryByText("Created")).toBeNull();
       expect(screen.getByRole("heading", { name: "Info" })).toBeDefined();
       expect(screen.getByRole("heading", { name: "Capacity" })).toBeDefined();
       // Node has no `relatedPodSelector` case, so GenericBody fetches nothing.

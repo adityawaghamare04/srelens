@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import {
   ageFromTimestamp,
   asRecord,
@@ -7,22 +7,36 @@ import {
   restartTotal,
   str,
   type K8sObject,
+  type ResourceStatusLine,
 } from "@srelens/core";
 import {
   Breadcrumb,
   ErrorState,
+  KV,
   LoadingState,
   Stat,
   statusTone,
   Tabs,
   type StatProps,
+  type TabItem,
 } from "@srelens/ui-kit";
 import { CUSTOM_RESOURCE_ACTIONS } from "../../lib/kinds/custom";
 import { formatCpu, formatMemory } from "../../lib/kinds/columns";
-import { useLoad, useDetailPanes } from "./ResourceDetail";
 import { DetailActions } from "./DetailActions";
+import { SectionMemory, Section } from "./Section";
+import {
+  describeTarget,
+  useDetailPaneState,
+  useDetailSubject,
+  useLoad,
+  PANE_DETAILS,
+  PANE_EVENTS,
+  PANE_METRICS,
+  PANE_YAML,
+} from "./detailData";
+import type { DetailFact } from "./facts";
 
-export interface ResourceTabProps {
+export interface ResourceTabViewProps {
   context: string;
   /** The Kubernetes kind, as the route carries it — not the list's slug. */
   kind: string;
@@ -44,9 +58,9 @@ type Tile = StatProps & { key: string };
  *
  * Best-effort, exactly as `RelatedPodsSection` treats the same call: a cluster
  * with no metrics-server must cost the reader two tiles, not the page. It
- * rides `useLoad`, so it is target-gated like every other fetch here — a tile
- * can never show the previous subject's usage — and it is fetched once per
- * subject rather than per pane switch.
+ * rides `useLoad`, so it is target-gated like every other fetch in this
+ * screen — a tile can never show the previous subject's usage — and it is
+ * fetched once per subject rather than per pane switch.
  */
 function usageTiles(cpuMillicores?: number, memoryMiB?: number): Tile[] {
   if (cpuMillicores === undefined || memoryMiB === undefined) return [];
@@ -63,7 +77,8 @@ function usageTiles(cpuMillicores?: number, memoryMiB?: number): Tile[] {
 
 /**
  * The design's strip: Ready, Restarts, CPU, Memory, Age — and only the ones
- * this subject actually has.
+ * this subject actually has. THIS SCREEN'S ALONE; the peek states the same
+ * verdict as one line of words under the subject's name.
  *
  * Same discipline as the tab strip above it: a ConfigMap has no health, no
  * containers and no usage, so it gets one tile rather than four em dashes
@@ -83,11 +98,7 @@ function usageTiles(cpuMillicores?: number, memoryMiB?: number): Tile[] {
  * "ready" for every kind, and slicing it off here would be this file parsing a
  * string core deliberately assembled.
  */
-function metricTiles(
-  statusLine: ReturnType<typeof useDetailPanes>["statusLine"],
-  object: K8sObject,
-  usage: Tile[],
-): Tile[] {
+function metricTiles(statusLine: ResourceStatusLine | null, object: K8sObject, usage: Tile[]): Tile[] {
   const tiles: Tile[] = [];
   if (statusLine?.readyText) {
     tiles.push({
@@ -119,21 +130,57 @@ function metricTiles(
 }
 
 /**
+ * THE FULL TAB'S OWN FACT LAYOUT: three columns of label-above-value, each
+ * pair ruled off beneath, filling the width of a page.
+ *
+ * The mock's grid, built here, by the screen that draws it. The peek reads the
+ * very same facts down one column of label-beside-value rows and builds that
+ * itself. What the two share is the LIST (`detailFacts`), so they cannot
+ * disagree about what a subject says; what neither shares is a line of the
+ * other's markup, so a change to this grid changes nothing in the peek.
+ *
+ * It replaces `FactGrid` — a kit wrapper that took the peek's rendered rows
+ * and restyled them into these columns. That wrapper had to describe a layout
+ * in terms of children it did not build (`.factgrid .section > :not(.kv)`,
+ * then a second rule for tables, and a reviewer's note that a third kind of
+ * child was coming), and it made the tab's layout a property of the peek's
+ * DOM. `KV`'s own `stacked` form is what a row looks like here; the grid
+ * around them is this screen's. (#331)
+ *
+ * Untitled, like the peek's list and for the same reason: the header above has
+ * already named the subject, and an untitled block cannot fold, so Overview
+ * can never open showing nothing.
+ */
+function TabFacts({ facts }: { facts: DetailFact[] }) {
+  if (facts.length === 0) return null;
+  return (
+    <Section>
+      <div data-slot="fact-grid" className="grid grid-cols-3 gap-x-6">
+        {facts.map((fact) => (
+          <KV key={fact.label} stacked k={fact.label} v={fact.value} mono={fact.mono} />
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/**
  * The resource FULL TAB: one subject filling a tab of its own, headed by its
  * name and the trail that locates it, its actions on the same line, a strip of
  * figures beneath, then its panes.
  *
- * A different screen from the peek, not the peek at a wider width. Spec rule
- * R-5 said otherwise and the user's own mock of this tab retired it: the peek
- * heads a column with a name, a kind and a status line and puts its actions in
- * a footer; this heads a page with a breadcrumb and puts them in the header,
- * calls the first pane Overview rather than Details, folds the containers
- * table into it, and reads its facts across three columns instead of down one.
+ * ONE OF TWO SCREENS, and it knows nothing about the other. Spec rule R-5 said
+ * the peek and the full tab were the same pane and the user's own mock of this
+ * tab retired it: the peek heads a column with a name, a kind and a status
+ * line and puts its actions in a footer; this heads a page with a breadcrumb
+ * and puts them in the header, calls the first pane Overview rather than
+ * Details, folds the containers table into it, and reads its facts across
+ * three columns instead of down one.
  *
  * WHAT IT DOES NOT DUPLICATE, which is the point: the object is read once, the
- * panes load lazily under one rule, the per-kind bodies are the peek's own,
- * and the actions are the row menu's — all of it through
- * {@link useDetailPanes} and {@link DetailActions}. The two hosts differ in
+ * panes load lazily under one rule, the per-kind blocks are the shared ones,
+ * the facts are one derivation, and the actions are the row menu's — all of it
+ * through `detailData` and {@link DetailActions}. The two screens differ in
  * how a fact reads and cannot differ in what it says.
  *
  * Deferred, and deliberately not scaffolded: the right-hand agent rail, the
@@ -141,9 +188,26 @@ function metricTiles(
  * Each needs something that does not exist yet, and a tab named after an empty
  * pane is worse than an absent one.
  */
-export function ResourceTab({ context, kind, namespace, name }: ResourceTabProps) {
-  const { object, status, error, descriptor, statusLine, tabs, active, selectTab, pane } =
-    useDetailPanes({ context, kind, namespace, name, host: "tab" });
+export function ResourceTabView({ context, kind, namespace, name }: ResourceTabViewProps) {
+  const subject = useDetailSubject({ context, kind, namespace, name });
+  const { object, status, error, descriptor, statusLine, hasMetrics } = subject;
+
+  // THIS SCREEN'S STRIP: `Overview YAML Events Metrics`. Overview rather than
+  // the peek's Details, and no Containers tab at all — the design puts that
+  // table inline, which a page has the room for and a 352px column does not.
+  const tabs: TabItem[] = [
+    { id: PANE_DETAILS, label: "Overview" },
+    { id: PANE_YAML, label: "YAML" },
+    { id: PANE_EVENTS, label: "Events" },
+    ...(hasMetrics ? [{ id: PANE_METRICS, label: "Metrics" }] : []),
+  ];
+  const { active, selectTab, yamlPane, eventsPane } = useDetailPaneState({
+    context,
+    kind,
+    namespace,
+    name,
+    tabs,
+  });
 
   // Hooks before any early return, so the fetch below is never conditional on
   // the object having arrived. Only a Pod is looked up — see `usageTiles`.
@@ -157,16 +221,39 @@ export function ResourceTab({ context, kind, namespace, name }: ResourceTabProps
 
   const headingId = useId();
   const activeLabel = tabs.find((t) => t.id === active)?.label;
-  const describeTarget = `${kind} ${namespace ? `${namespace}/` : ""}${name}`;
 
   if (status === "loading") {
-    return <LoadingState label={`Loading ${describeTarget}`} />;
+    return <LoadingState label={`Loading ${describeTarget(kind, namespace, name)}`} />;
   }
   if (status === "error" || !object) {
-    return <ErrorState title={`Could not load ${describeTarget}`} detail={error} />;
+    return <ErrorState title={`Could not load ${describeTarget(kind, namespace, name)}`} detail={error} />;
   }
 
   const tiles = metricTiles(statusLine, object, usageTiles(usage.data?.cpu, usage.data?.memory));
+
+  // The tab's Overview: the fact grid, then the kind's own blocks, then the
+  // containers table the design folds in here, then Labels and Annotations
+  // side by side. Every block is a sibling of every other — `.section +
+  // .section` draws the hairlines — except the metadata pair, which is a row
+  // on purpose (see below).
+  let pane: ReactNode =
+    active === PANE_DETAILS ? (
+      <>
+        <TabFacts facts={subject.facts} />
+        {subject.body}
+        {subject.containersTable}
+        {/* Two columns, and each wrapped, so neither section is the other's
+            adjacent sibling — `.section + .section` would otherwise rule down
+            the middle of the row instead of across it. */}
+        <div data-slot="metadata-pair" className="rule-t grid grid-cols-2">
+          <div>{subject.labels}</div>
+          <div className="rule-l">{subject.annotations}</div>
+        </div>
+      </>
+    ) : null;
+  if (active === PANE_METRICS) pane = subject.metricsPane;
+  else if (active === PANE_YAML) pane = yamlPane;
+  else if (active === PANE_EVENTS) pane = eventsPane;
 
   return (
     <section
@@ -241,7 +328,12 @@ export function ResourceTab({ context, kind, namespace, name }: ResourceTabProps
         // to anyone driving the page from the keyboard.
         tabIndex={0}
       >
-        {pane}
+        {/* The same fold memory the peek reads, wrapped by this screen around
+            its own pane: the store is keyed by kind, so a block a reader opens
+            in one screen is open in the other without either screen knowing
+            the other exists. A provider renders no element, so the run of
+            sections beneath is unbroken. */}
+        <SectionMemory kind={kind}>{pane}</SectionMemory>
       </div>
     </section>
   );

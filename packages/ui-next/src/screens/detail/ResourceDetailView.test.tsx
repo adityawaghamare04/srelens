@@ -60,8 +60,9 @@ vi.mock("@srelens/ui-kit", async (importOriginal) => {
 
 import { ConsoleProvider, useConsole } from "../../console";
 import { loadSectionFolds, setSectionOpen } from "../../lib/sectionFolds";
-import { ResourceDetail } from "./ResourceDetail";
-import { ResourceTab } from "./ResourceTab";
+import { detailFacts } from "./detailData";
+import { ResourceDetailView } from "./ResourceDetailView";
+import { ResourceTabView } from "./ResourceTabView";
 
 /** Every question the console was handed, in order. */
 const asked: string[] = [];
@@ -131,6 +132,12 @@ function documentContains(value: string): boolean {
 const factLabels = (): string[] =>
   Array.from(document.querySelectorAll(".kv-k")).map((el) => el.textContent ?? "");
 
+/** The labels of one block's rows, in the order they read — the peek's lead
+ *  fact list (`.fact-list`), or the full tab's grid. Scoped, because "equals
+ *  the derived list" is only a claim about the block that draws it. */
+const labelsIn = (selector: string): string[] =>
+  Array.from(document.querySelectorAll(`${selector} .kv-k`)).map((el) => el.textContent ?? "");
+
 // Obviously-fake fixture text — never anything that reads as a real
 // credential, per this screen's secrecy ruling.
 const FIXTURE_B64 = "ZmFrZS1maXh0dXJlLW5vdC1hLXJlYWwtc2VjcmV0";
@@ -180,7 +187,7 @@ function baseDescriptor(overrides: Partial<KindDescriptor<ListRow>> = {}): KindD
   return { k8sKind: "Pod", columns: [], source: "watch", scope: "namespaced", actions: {}, ...overrides };
 }
 
-describe("ResourceDetail", () => {
+describe("ResourceDetailView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getManifest.mockResolvedValue({ yaml: "kind: Pod\n" });
@@ -207,14 +214,14 @@ describe("ResourceDetail", () => {
 
   it("shows a loading state while the object is in flight", () => {
     getObject.mockImplementation(() => new Promise(() => {}));
-    const { getByText } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
+    const { getByText } = render(<ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />);
     expect(getByText(/loading/i)).toBeDefined();
   });
 
   it("renders Details, YAML and Events once ready, and no Containers or Metrics for a kind whose descriptor doesn't offer them", async () => {
     getObject.mockResolvedValue({ object: POD });
     const { getByRole, queryByRole } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
     expect(getByRole("tab", { name: "YAML" })).toBeDefined();
@@ -225,7 +232,7 @@ describe("ResourceDetail", () => {
 
   it("names the object in the error state", async () => {
     getObject.mockResolvedValue({ error: "forbidden" });
-    const { getByRole } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
+    const { getByRole } = render(<ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />);
     await waitFor(() => expect(getByRole("alert")).toBeDefined());
     const text = getByRole("alert").textContent ?? "";
     expect(text).toContain("Pod");
@@ -236,7 +243,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: POD });
     descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
     const { getByRole, queryByRole } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "Containers" })).toBeDefined());
     expect(queryByRole("tab", { name: "Metrics" })).toBeNull();
@@ -245,14 +252,14 @@ describe("ResourceDetail", () => {
   it("offers Metrics only for a kind whose descriptor sets panes.metrics", async () => {
     getObject.mockResolvedValue({ object: { kind: "Node", metadata: { name: "n1" } } });
     descriptorFor.mockReturnValue(baseDescriptor({ k8sKind: "Node", scope: "cluster", panes: { metrics: true } }));
-    const { getByRole, queryByRole } = render(<ResourceDetail context="ctx" kind="Node" namespace={null} name="n1" />);
+    const { getByRole, queryByRole } = render(<ResourceDetailView context="ctx" kind="Node" namespace={null} name="n1" />);
     await waitFor(() => expect(getByRole("tab", { name: "Metrics" })).toBeDefined());
     expect(queryByRole("tab", { name: "Containers" })).toBeNull();
   });
 
   it("loads YAML and Events lazily, only once each pane is opened, and never refetches a pane already opened", async () => {
     getObject.mockResolvedValue({ object: POD });
-    const { getByRole } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
+    const { getByRole } = render(<ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />);
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
 
     // A reader who never leaves Details pays for the object alone — a peek
@@ -284,7 +291,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: POD });
     getManifest.mockImplementation(() => new Promise(() => {}));
     const { getByRole, getByText } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -295,7 +302,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: POD });
     getManifest.mockResolvedValue({ yaml: "kind: Pod\nspec:\n  nodeName: node-7\n" });
     const { getByRole, container } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -305,7 +312,7 @@ describe("ResourceDetail", () => {
   it("keeps the YAML pane usable when the manifest fetch fails", async () => {
     getObject.mockResolvedValue({ object: POD });
     getManifest.mockResolvedValue({ error: "forbidden" });
-    const { getByRole } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
+    const { getByRole } = render(<ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />);
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
     await waitFor(() => expect(getByRole("alert")).toBeDefined());
@@ -326,12 +333,12 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: POD });
     listEvents.mockResolvedValue({
       events: [
-        { name: "web-1.abc", type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "container crashed", age: "5m" },
-        { name: "web-1.def", type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned to node-3", age: "10m" },
+        { name: "web-1.abc", namespace: "default", type: "Warning", reason: "BackOff", object: "Pod/web-1", message: "container crashed", age: "5m", count: 1 },
+        { name: "web-1.def", namespace: "default", type: "Normal", reason: "Scheduled", object: "Pod/web-1", message: "assigned to node-3", age: "10m", count: 1 },
       ],
     });
     const { getByRole, getByText } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "Events" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "Events" }));
@@ -339,11 +346,22 @@ describe("ResourceDetail", () => {
     expect(getByText("container crashed")).toBeDefined();
     expect(getByText("Scheduled")).toBeDefined();
     expect(getByText("assigned to node-3")).toBeDefined();
+    // The Type cell reads BOTH halves of `eventVerdict`, not just the dot's
+    // tone: the word itself is only bold/coloured (`data-bad="true"`) for a
+    // Warning, plain for a Normal — the design's rule for `bad`, and the
+    // second half of the one-rule promise that a `Badge` (tone only, no
+    // separate word/dot treatment) could not keep.
+    const warningPill = getByText("Warning");
+    expect(warningPill.getAttribute("data-kind")).toBe("danger");
+    expect(warningPill.getAttribute("data-bad")).toBe("true");
+    const normalPill = getByText("Normal");
+    expect(normalPill.getAttribute("data-kind")).toBe("neutral");
+    expect(normalPill.getAttribute("data-bad")).toBeNull();
   });
 
   it("does not query the cluster's CRDs to fetch a built-in kind's manifest", async () => {
     getObject.mockResolvedValue({ object: POD });
-    const { getByRole } = render(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />);
+    const { getByRole } = render(<ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />);
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
     await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1));
@@ -367,7 +385,7 @@ describe("ResourceDetail", () => {
     });
     getManifest.mockResolvedValue({ yaml: "kind: Certificate\n" });
     const { getByRole } = render(
-      <ResourceDetail context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
+      <ResourceDetailView context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -383,7 +401,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: { kind: "Certificate", metadata: { name: "cert-1", namespace: "default" } } });
     listCrds.mockResolvedValue({ crds: [] });
     const { getByRole } = render(
-      <ResourceDetail context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
+      <ResourceDetailView context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -400,7 +418,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: { kind: "Certificate", metadata: { name: "cert-1", namespace: "default" } } });
     listCrds.mockResolvedValue({ error: "forbidden" });
     const { getByRole } = render(
-      <ResourceDetail context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
+      <ResourceDetailView context="ctx" kind="Certificate" namespace="default" name="cert-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -415,7 +433,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: POD });
     listEvents.mockResolvedValue({ events: [] });
     const { getByRole, getByText, queryByRole } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "Events" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "Events" }));
@@ -428,7 +446,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: POD });
     listEvents.mockResolvedValue({ error: "forbidden" });
     const { getByRole, queryByText } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "Events" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "Events" }));
@@ -443,7 +461,7 @@ describe("ResourceDetail", () => {
     getManifest.mockResolvedValueOnce({ yaml: "kind: Pod\nmetadata:\n  name: web-1\n" });
 
     const { getByRole, container, rerender } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -453,7 +471,7 @@ describe("ResourceDetail", () => {
     // nearly every row click.
     getObject.mockResolvedValueOnce({ object: POD_2 });
     getManifest.mockResolvedValueOnce({ yaml: "kind: Pod\nmetadata:\n  name: web-2\n" });
-    rerender(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-2" />);
+    rerender(<ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-2" />);
 
     await waitFor(() => expect(container.querySelector(".cm-content")?.textContent).toContain("web-2"));
     expect(container.querySelector(".cm-content")?.textContent).not.toContain("web-1");
@@ -463,14 +481,14 @@ describe("ResourceDetail", () => {
   it("persists the selected pane across a subject change when the new subject's kind also offers it", async () => {
     getObject.mockResolvedValueOnce({ object: POD });
     const { getByRole, rerender } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
     await waitFor(() => expect(getByRole("tab", { name: "YAML" }).getAttribute("aria-selected")).toBe("true"));
 
     getObject.mockResolvedValueOnce({ object: POD_2 });
-    rerender(<ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-2" />);
+    rerender(<ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-2" />);
 
     await waitFor(() => expect(getByRole("heading").textContent).toBe("web-2"));
     // Still on YAML — comparing YAML (or scanning Events) across several rows
@@ -485,7 +503,7 @@ describe("ResourceDetail", () => {
     );
     getObject.mockResolvedValueOnce({ object: POD });
     const { getByRole, queryByRole, rerender } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="default" name="web-1" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="web-1" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "Containers" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "Containers" }));
@@ -497,7 +515,7 @@ describe("ResourceDetail", () => {
     // already exists for "this kind doesn't have the selected pane" is what
     // must catch this, not a reset that also clobbers the persist case above.
     getObject.mockResolvedValueOnce({ object: CONFIGMAP });
-    rerender(<ResourceDetail context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />);
+    rerender(<ResourceDetailView context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />);
 
     await waitFor(() => expect(getByRole("heading").textContent).toBe("cm-1"));
     expect(queryByRole("tab", { name: "Containers" })).toBeNull();
@@ -531,7 +549,7 @@ describe("ResourceDetail", () => {
     function Harness(props: { namespace: string | null; name: string }) {
       return (
         <>
-          <ResourceDetail context="ctx" kind="Pod" {...props} />
+          <ResourceDetailView context="ctx" kind="Pod" {...props} />
           <FrameProbe />
         </>
       );
@@ -560,17 +578,25 @@ describe("ResourceDetail", () => {
   });
 
   /**
-   * R-5 IS RETIRED. It said the peek and the full tab were the same pane with
-   * the same props, and the user's full-tab mock says otherwise: a breadcrumb
-   * header, actions on the header row, a metric strip, a three-column fact
-   * grid, Overview rather than Details, and no Containers tab.
+   * R-5 IS RETIRED, and so is the last of the tests that held the two screens
+   * in step by comparing their rendered trees.
    *
-   * What is asserted here is what replaced it — the discipline underneath the
-   * rule rather than the rule. The two hosts draw ONE subject from ONE read
-   * through ONE set of per-kind bodies, so they can differ in how a fact reads
-   * and cannot differ in what it says. Deleting these tests along with the
-   * rule would have left that unwatched, which is the property that actually
-   * matters.
+   * The rule said the peek and the full tab were one pane with one set of
+   * props; the user's full-tab mock says otherwise, and the user's own ruling
+   * is that they are two screens with two designs. What replaced the rule is
+   * asserted here — the discipline underneath it: one read of the subject, one
+   * lazy-load rule, one derivation of the facts. So the two can differ in how
+   * a fact reads and cannot differ in what it says.
+   *
+   * WHERE EACH HALF IS ASSERTED, which is the whole point of the split:
+   *
+   * - that the two get the SAME facts is asserted at the DATA layer
+   *   (`detailFacts`), not by rendering both screens and comparing labels. A
+   *   comparison of two trees is a comparison of two layouts, and the two
+   *   layouts are meant to differ now.
+   * - that each screen draws its own mock's layout is asserted in that
+   *   screen's own tests — "the facts, the peek's way" below, and
+   *   `ResourceTabView.test`'s "lays the facts out as three columns".
    */
   describe("what the two hosts still share, now that they are two screens", () => {
     const props = { context: "ctx", kind: "Pod", namespace: "checkout", name: "cart-session-store-0" } as const;
@@ -579,45 +605,77 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
 
-      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      const asPeek = render(<ResourceDetailView {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
       await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
       expect(getObject).toHaveBeenCalledTimes(1);
       const fromPeek = getObject.mock.calls[0];
       asPeek.unmount();
 
       getObject.mockClear();
-      const asTab = render(<ResourceTab {...props} />);
+      const asTab = render(<ResourceTabView {...props} />);
       await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
       expect(getObject).toHaveBeenCalledTimes(1);
       expect(getObject.mock.calls[0]).toEqual(fromPeek);
     });
 
-    it("renders the same per-kind body for the same subject, however it is laid out", async () => {
+    it("derives one fact list for one subject, whichever screen asks for it", async () => {
+      // THE SHARED LAYER ITSELF, not two rendered trees compared. `detailFacts`
+      // is the only place a subject's facts are derived; both screens call it
+      // and neither can reach the other's layout. A fact fixed in one is
+      // therefore fixed in both by construction — the property the deleted
+      // tree comparison was standing in for, asserted where it actually lives.
+      const facts = detailFacts({ kind: "Pod", object: RUNNING_POD });
+      expect(facts.map((f) => f.label)).toContain("Status");
+      expect(facts.map((f) => f.label)).toContain("Containers ready");
+      // Pure and stable: two readings of one subject are the same list, so
+      // two screens rendering it cannot drift apart between them.
+      expect(detailFacts({ kind: "Pod", object: RUNNING_POD }).map((f) => f.label)).toEqual(
+        facts.map((f) => f.label),
+      );
+      // And it is a kind's OWN list, dispatched on the route's kind: a
+      // ConfigMap gets the identity facts, not a pod's.
+      expect(detailFacts({ kind: "ConfigMap", object: AGED_CONFIGMAP }).map((f) => f.label)).toEqual([
+        "Namespace",
+        "Created",
+      ]);
+    });
+
+    it("draws the WHOLE list in each screen, in that screen's own layout and no other's", async () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
 
-      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      // EQUALS, not contains. A screen that quietly dropped three of the
+      // facts it was handed would look right in every other assertion here,
+      // and the drift between the two screens would be exactly what the
+      // retired both-hosts comparison used to catch. Each screen is held to
+      // the derived list instead — which catches the same drift without
+      // either screen's markup standing in for the other's.
+      const derived = detailFacts({ kind: "Pod", object: RUNNING_POD }).map((f) => f.label);
+      expect(derived.length).toBeGreaterThan(3);
+
+      const asPeek = render(<ResourceDetailView {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
       await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
-      // Every fact the body derived, by its label. Two layouts of one list —
-      // a two-column run in the peek, three columns of label-above-value in
-      // the tab — so the LABELS are what must match, not the markup.
-      const inPeek = factLabels();
-      expect(inPeek).toContain("Status");
-      expect(inPeek).toContain("Containers ready");
+      // The peek's own form: a label column beside a value column, and no
+      // grid — the mock's two-column list, in a 352px pane.
+      expect(document.querySelectorAll(".kv[data-stacked]")).toHaveLength(0);
+      expect(document.querySelector("[data-slot='fact-grid']")).toBeNull();
+      expect(labelsIn(".fact-list")).toEqual(derived);
       asPeek.unmount();
 
-      const asTab = render(<ResourceTab {...props} />);
+      const asTab = render(<ResourceTabView {...props} />);
       await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
-      // The tab folds the containers table into Overview, so it says strictly
-      // more; what it must never do is say less, or say it differently.
-      for (const label of inPeek) expect(factLabels()).toContain(label);
+      // The tab's own: three columns of label-above-value, built by the tab.
+      const grid = document.querySelector<HTMLElement>("[data-slot='fact-grid']");
+      expect(grid).not.toBeNull();
+      expect(grid!.querySelectorAll(".kv[data-stacked='true']")).toHaveLength(derived.length);
+      expect(labelsIn("[data-slot='fact-grid']")).toEqual(derived);
     });
 
     it("neither refetches a pane it has already opened, and neither fetches one it has not", async () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
 
-      const asTab = render(<ResourceTab {...props} />);
+      const asTab = render(<ResourceTabView {...props} />);
       await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
       // Lazy: nothing behind YAML or Events has been asked for yet.
       expect(getManifest).not.toHaveBeenCalled();
@@ -635,7 +693,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(baseDescriptor());
 
-      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      const asPeek = render(<ResourceDetailView {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
       await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
       expect(asPeek.getByRole("button", { name: "Close inspector" })).toBeDefined();
       expect(asPeek.getByRole("button", { name: "Open tab" })).toBeDefined();
@@ -643,7 +701,7 @@ describe("ResourceDetail", () => {
 
       // The tab IS the tab: closing it is the window strip's job, and an
       // "Open tab" there would open a second copy of what you are reading.
-      const asTab = render(<ResourceTab {...props} />);
+      const asTab = render(<ResourceTabView {...props} />);
       await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
       expect(asTab.queryByRole("button", { name: "Close inspector" })).toBeNull();
       expect(asTab.queryByRole("button", { name: "Open tab" })).toBeNull();
@@ -676,7 +734,7 @@ describe("ResourceDetail", () => {
 
     async function open(kind: string, meta: Record<string, unknown>) {
       getObject.mockResolvedValue({ object: withMeta(kind, meta) });
-      const view = render(<ResourceDetail context="ctx" kind={kind} namespace="default" name="subject-1" />);
+      const view = render(<ResourceDetailView context="ctx" kind={kind} namespace="default" name="subject-1" />);
       await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
       return view;
     }
@@ -777,10 +835,111 @@ describe("ResourceDetail", () => {
 
     async function open(kind: string, meta: Record<string, unknown> = {}) {
       getObject.mockResolvedValue({ object: withMeta(kind, meta) });
-      const view = render(<ResourceDetail context="ctx" kind={kind} namespace="default" name="subject-1" />);
+      const view = render(<ResourceDetailView context="ctx" kind={kind} namespace="default" name="subject-1" />);
       await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
       return view;
     }
+
+    /**
+     * THE RULING, at the pane a reader actually sees: a titled section that is
+     * the only content of its pane defaults to open. Everything else opens
+     * shut — "first open should keep everything collapsed" — but a pane whose
+     * whole substance is one block would otherwise open completely empty,
+     * which is the very hostility the unheaded lead fact list was exempted
+     * for.
+     */
+    describe("a pane whose whole content is one block", () => {
+      it("opens the Containers pane showing the containers", async () => {
+        descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
+        getObject.mockResolvedValue({
+          object: {
+            kind: "Pod",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            spec: { containers: [{ name: "app", image: "redis:7.4-alpine" }] },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Containers" })).toBeDefined());
+        await userEvent.click(view.getByRole("tab", { name: "Containers" }));
+        expect(screen.getByRole("button", { name: "Containers" }).getAttribute("aria-expanded")).toBe("true");
+        expect(screen.getByText("redis:7.4-alpine")).toBeDefined();
+      });
+
+      it("opens it for a pod with init containers too, so one kind means one default", async () => {
+        // The default may NOT vary with the subject. The memory is keyed per
+        // KIND: a reader who opens Containers on a pod with init containers
+        // stores a marker, shuts it again and the marker is dropped — and the
+        // next pod without init containers would then show it open. What the
+        // document means would depend on which pod happened to be on screen
+        // when they clicked. The main group is the pane's subject either way,
+        // so it always leads open and the init group keeps the shut rule.
+        descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true } }));
+        getObject.mockResolvedValue({
+          object: {
+            kind: "Pod",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            spec: {
+              initContainers: [{ name: "migrate", image: "ghcr.io/example/migrate:2" }],
+              containers: [{ name: "app", image: "redis:7.4-alpine" }],
+            },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="Pod" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Containers" })).toBeDefined());
+        await userEvent.click(view.getByRole("tab", { name: "Containers" }));
+        expect(screen.getByRole("button", { name: "Containers" }).getAttribute("aria-expanded")).toBe("true");
+        expect(screen.getByText("redis:7.4-alpine")).toBeDefined();
+        // And nothing else opened with it.
+        expect(screen.getByRole("button", { name: "Init containers" }).getAttribute("aria-expanded")).toBe(
+          "false",
+        );
+        expect(screen.queryByText("ghcr.io/example/migrate:2")).toBeNull();
+      });
+
+      it("opens a ConfigMap's Data, the only titled block its pane offers", async () => {
+        getObject.mockResolvedValue({
+          object: {
+            kind: "ConfigMap",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            data: { "app.conf": "level=info" },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="ConfigMap" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
+        expect(screen.getByText("level=info")).toBeDefined();
+      });
+
+      it("leaves a Secret's Data shut, whose pane says more than the values", async () => {
+        // Not the same shape, and the safer answer where the difference is
+        // arguable: a Secret's pane heads its data with a summary block, so
+        // it never opens empty, and less disclosed by default is the right
+        // way to be wrong about a Secret.
+        getObject.mockResolvedValue({
+          object: {
+            kind: "Secret",
+            apiVersion: "v1",
+            metadata: { name: "subject-1", namespace: "default" },
+            type: "Opaque",
+            data: { token: FIXTURE_B64 },
+          } as K8sObject,
+        });
+        const view = render(
+          <ResourceDetailView context="ctx" kind="Secret" namespace="default" name="subject-1" />,
+        );
+        await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
+        expect(screen.getByRole("button", { name: /^Data/ }).getAttribute("aria-expanded")).toBe("false");
+        expect(screen.queryByRole("button", { name: "Reveal" })).toBeNull();
+      });
+    });
 
     it("opens every titled block shut on a first visit, and the unheaded lead block open", async () => {
       await open("ConfigMap", {
@@ -868,7 +1027,7 @@ describe("ResourceDetail", () => {
         yaml: `apiVersion: v1\nkind: Secret\nmetadata:\n  name: s-1\ndata:\n  token: ${FIXTURE_B64}\n`,
       });
       const { getByRole, container } = render(
-        <ResourceDetail context="ctx" kind="Secret" namespace="default" name="s-1" />,
+        <ResourceDetailView context="ctx" kind="Secret" namespace="default" name="s-1" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
       await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -884,7 +1043,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: SECRET });
       getManifest.mockResolvedValue({ yaml: `kind: Secret\ndata:\n  token: ${FIXTURE_B64}\n` });
       const { getByRole, container } = render(
-        <ResourceDetail context="ctx" kind="Secret" namespace="default" name="s-1" />,
+        <ResourceDetailView context="ctx" kind="Secret" namespace="default" name="s-1" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
       await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -904,7 +1063,7 @@ describe("ResourceDetail", () => {
       // and must fail closed rather than pass the input through.
       getManifest.mockResolvedValue({ yaml: `kind: Secret\ndata:\n\ttoken: ${FIXTURE_B64}\n` });
       const { getByRole, container } = render(
-        <ResourceDetail context="ctx" kind="Secret" namespace="default" name="s-1" />,
+        <ResourceDetailView context="ctx" kind="Secret" namespace="default" name="s-1" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
       await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -917,7 +1076,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: CONFIGMAP });
       getManifest.mockResolvedValue({ yaml: "kind: ConfigMap\ndata:\n  greeting: hello-world\n" });
       const { getByRole, queryByRole, container } = render(
-        <ResourceDetail context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />,
+        <ResourceDetailView context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
       await userEvent.click(getByRole("tab", { name: "YAML" }));
@@ -939,7 +1098,7 @@ describe("ResourceDetail", () => {
         { name: "widgets.other.io", group: "other.io", version: "v1", kind: "Widget", plural: "widgets", namespaced: true },
       ],
     });
-    const { getByRole } = render(<ResourceDetail context="ctx" kind="Widget" namespace="default" name="w-1" />);
+    const { getByRole } = render(<ResourceDetailView context="ctx" kind="Widget" namespace="default" name="w-1" />);
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
     await waitFor(() => expect(getByRole("alert")).toBeDefined());
@@ -959,7 +1118,7 @@ describe("ResourceDetail", () => {
         { name: "widgets.other.io", group: "other.io", version: "v2", kind: "Widget", plural: "widgets", namespaced: true },
       ],
     });
-    const { getByRole } = render(<ResourceDetail context="ctx" kind="Widget" namespace="default" name="w-1" />);
+    const { getByRole } = render(<ResourceDetailView context="ctx" kind="Widget" namespace="default" name="w-1" />);
     await waitFor(() => expect(getByRole("tab", { name: "YAML" })).toBeDefined());
     await userEvent.click(getByRole("tab", { name: "YAML" }));
     await waitFor(() => expect(getManifest).toHaveBeenCalledTimes(1));
@@ -978,7 +1137,7 @@ describe("ResourceDetail", () => {
     it("reads the state, the ready ratio and the age across one line", async () => {
       getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
       const { getByText, container } = render(
-        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+        <ResourceDetailView context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
       );
       await waitFor(() => expect(getByText("Degraded")).toBeDefined());
       // Bare figures, each carrying its own noun — the user's call, taken over
@@ -991,7 +1150,7 @@ describe("ResourceDetail", () => {
     it("names every bare figure for a reader who cannot see it", async () => {
       getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
       const { container, getByText } = render(
-        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+        <ResourceDetailView context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
       );
       await waitFor(() => expect(getByText("Degraded")).toBeDefined());
       // `InspectorFact.label` is never drawn — it is an `sr-only` `dt`. A fact
@@ -1006,7 +1165,7 @@ describe("ResourceDetail", () => {
     it("draws the age quietly and the ready ratio in normal ink", async () => {
       getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
       const { getByText } = render(
-        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+        <ResourceDetailView context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
       );
       await waitFor(() => expect(getByText("Degraded")).toBeDefined());
       expect(getByText("84d").style.color).toBe(toneColor("muted"));
@@ -1017,7 +1176,7 @@ describe("ResourceDetail", () => {
     it("colours the state and marks the name only when the subject is unhealthy", async () => {
       getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
       const bad = render(
-        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+        <ResourceDetailView context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
       );
       await waitFor(() => expect(bad.getByText("Degraded")).toBeDefined());
       expect(bad.container.querySelector("header .status")?.getAttribute("data-bad")).toBe("true");
@@ -1029,7 +1188,7 @@ describe("ResourceDetail", () => {
 
       getObject.mockResolvedValue({ object: RUNNING_POD });
       const good = render(
-        <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+        <ResourceDetailView context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
       );
       // Read off the HEADER's own pill: the Details body below it states the
       // pod's phase as well, so a bare text query finds two "Running"s.
@@ -1044,7 +1203,7 @@ describe("ResourceDetail", () => {
     it("draws no status line at all for a kind that has no health of its own", async () => {
       getObject.mockResolvedValue({ object: AGED_CONFIGMAP });
       const { container, getByRole } = render(
-        <ResourceDetail context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />,
+        <ResourceDetailView context="ctx" kind="ConfigMap" namespace="default" name="cm-1" />,
       );
       await waitFor(() => expect(getByRole("heading", { name: "cm-1" })).toBeDefined());
       // `resourceStatusLine` returning null is an answer, not a gap: a
@@ -1059,7 +1218,7 @@ describe("ResourceDetail", () => {
     getObject.mockResolvedValue({ object: RUNNING_POD });
     descriptorFor.mockReturnValue(baseDescriptor({ panes: { containers: true, metrics: true } }));
     const { getAllByRole, getByRole } = render(
-      <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+      <ResourceDetailView context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
     );
     await waitFor(() => expect(getByRole("tab", { name: "Metrics" })).toBeDefined());
     // `Details Containers YAML Events Metrics`. Metrics is deferred and no
@@ -1080,7 +1239,7 @@ describe("ResourceDetail", () => {
     const onClose = vi.fn();
     const props = { context: "ctx", kind: "Pod", namespace: "default", name: "web-1" } as const;
 
-    const asPeek = render(<ResourceDetail {...props} peek={{ onClose, onOpenTab }} />);
+    const asPeek = render(<ResourceDetailView {...props} peek={{ onClose, onOpenTab }} />);
     await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
     await userEvent.click(asPeek.getByRole("button", { name: "Open tab" }));
     expect(onOpenTab).toHaveBeenCalledTimes(1);
@@ -1090,7 +1249,7 @@ describe("ResourceDetail", () => {
     asPeek.unmount();
 
     // The tab host IS the tab. An Open tab there would open itself.
-    const asTab = render(<ResourceDetail {...props} />);
+    const asTab = render(<ResourceDetailView {...props} />);
     await waitFor(() => expect(asTab.getByRole("tab", { name: "Details" })).toBeDefined());
     expect(asTab.queryByRole("button", { name: "Open tab" })).toBeNull();
   });
@@ -1107,7 +1266,7 @@ describe("ResourceDetail", () => {
    */
   describe("the YAML pane's height", () => {
     async function openYaml(kind: string, name: string) {
-      const view = render(<ResourceDetail context="ctx" kind={kind} namespace="default" name={name} />);
+      const view = render(<ResourceDetailView context="ctx" kind={kind} namespace="default" name={name} />);
       await waitFor(() => expect(view.getByRole("tab", { name: "YAML" })).toBeDefined());
       await userEvent.click(view.getByRole("tab", { name: "YAML" }));
       return view;
@@ -1173,7 +1332,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
       descriptorFor.mockReturnValue(deploymentDescriptor());
       const { getByRole } = render(
-        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+        <ResourceDetailView context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
 
@@ -1184,7 +1343,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(podDescriptor());
       const { getByRole } = render(
-        <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+        <ResourceDetailView context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
 
@@ -1195,7 +1354,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
       descriptorFor.mockReturnValue(deploymentDescriptor());
       const { getByRole } = render(
-        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+        <ResourceDetailView context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
       await userEvent.click(within(footer()!).getByRole("button", { name: /^Ask/ }));
@@ -1209,7 +1368,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: RUNNING_POD });
       descriptorFor.mockReturnValue(podDescriptor());
       const { getByRole } = render(
-        <ResourceDetail context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
+        <ResourceDetailView context="ctx" kind="Pod" namespace="checkout" name="cart-session-store-0" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
       await userEvent.click(within(footer()!).getByRole("button", { name: /^Ask/ }));
@@ -1221,7 +1380,7 @@ describe("ResourceDetail", () => {
       getObject.mockResolvedValue({ object: DEGRADED_DEPLOYMENT });
       descriptorFor.mockReturnValue(deploymentDescriptor());
       const { getByRole } = render(
-        <ResourceDetail context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
+        <ResourceDetailView context="ctx" kind="Deployment" namespace="checkout" name="checkout-api" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
       await userEvent.click(getByRole("button", { name: "More actions" }));
@@ -1253,7 +1412,7 @@ describe("ResourceDetail", () => {
       // and an action that cannot work is worse than an absent one.
       descriptorFor.mockReturnValue(undefined);
       const { getByRole, queryByRole } = render(
-        <ResourceDetail context="ctx" kind="Widget" namespace="default" name="w-1" />,
+        <ResourceDetailView context="ctx" kind="Widget" namespace="default" name="w-1" />,
       );
       await waitFor(() => expect(getByRole("tab", { name: "Details" })).toBeDefined());
 
@@ -1268,7 +1427,7 @@ describe("ResourceDetail", () => {
       descriptorFor.mockReturnValue(podDescriptor());
       const props = { context: "ctx", kind: "Pod", namespace: "checkout", name: "cart-session-store-0" } as const;
 
-      const asPeek = render(<ResourceDetail {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
+      const asPeek = render(<ResourceDetailView {...props} peek={{ onClose: vi.fn(), onOpenTab: vi.fn() }} />);
       await waitFor(() => expect(asPeek.getByRole("tab", { name: "Details" })).toBeDefined());
       expect(barWords()).toEqual(["Ask", "Logs", "Shell", "More actions"]);
       asPeek.unmount();
@@ -1277,7 +1436,7 @@ describe("ResourceDetail", () => {
       // the tab, and gives the wider surface four of the kind's own actions
       // instead of two. The ACTIONS are the row menu's in both — the placement
       // and the count are the only things the host decides.
-      const asTab = render(<ResourceTab {...props} />);
+      const asTab = render(<ResourceTabView {...props} />);
       await waitFor(() => expect(asTab.getByRole("tab", { name: "Overview" })).toBeDefined());
       const header = document.querySelector("[data-slot='tab-actions']") as HTMLElement;
       expect(Array.from(header.querySelectorAll("button")).map((b) => b.textContent)).toEqual([
@@ -1330,7 +1489,7 @@ describe("ResourceDetail", () => {
     async function footerActionsFor(suspend: boolean): Promise<(string | null)[]> {
       getObject.mockResolvedValue({ object: cronJob(suspend) });
       descriptorFor.mockReturnValue(cronJobDescriptor());
-      const view = render(<ResourceDetail context="ctx" kind="CronJob" namespace="batch" name="nightly-backup" />);
+      const view = render(<ResourceDetailView context="ctx" kind="CronJob" namespace="batch" name="nightly-backup" />);
       await waitFor(() => expect(view.getByRole("tab", { name: "Details" })).toBeDefined());
       const words = await allFooterActions();
       view.unmount();

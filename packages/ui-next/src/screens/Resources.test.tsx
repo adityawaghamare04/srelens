@@ -45,10 +45,11 @@ vi.mock("@srelens/core", async (importOriginal) => ({
 }));
 
 /**
- * `ResourceDetail` itself, unchanged — wrapped only to record the props each
- * host hands it. R-5 says the peek and the tab mount the same component with
- * the same props, and the only way to assert that structurally (rather than
- * by eyeballing two rendered trees) is to capture what each host passed.
+ * `ResourceDetailView` itself, unchanged — wrapped only to record the props
+ * each host hands it. The two hosts mount two different screens now, so what
+ * is captured is the SUBJECT each was pointed at: the only way to assert
+ * structurally (rather than by eyeballing two rendered trees, which are meant
+ * to differ) that one row and one route resolve to one resource.
  *
  * `createElement` rather than JSX inside the factory: `vi.mock` factories are
  * hoisted above this module's own imports, and the JSX runtime binding is not
@@ -63,12 +64,12 @@ const { detailProps, detailFrames, tabProps } = vi.hoisted(() => ({
   tabProps: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("./detail/ResourceDetail", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./detail/ResourceDetail")>();
+vi.mock("./detail/ResourceDetailView", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./detail/ResourceDetailView")>();
   const { createElement, useLayoutEffect } = await import("react");
   return {
     ...actual,
-    ResourceDetail: (props: Record<string, unknown>) => {
+    ResourceDetailView: (props: Record<string, unknown>) => {
       detailProps.push({ ...props });
       // The frame probe lives HERE, wrapped directly around the pane, because
       // this is the only component that re-renders when the peek's subject
@@ -86,19 +87,19 @@ vi.mock("./detail/ResourceDetail", async (importOriginal) => {
           body: pane?.querySelector(".pane-body")?.textContent ?? "",
         });
       });
-      return createElement(actual.ResourceDetail, props as never);
+      return createElement(actual.ResourceDetailView, props as never);
     },
   };
 });
 
-vi.mock("./detail/ResourceTab", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./detail/ResourceTab")>();
+vi.mock("./detail/ResourceTabView", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./detail/ResourceTabView")>();
   const { createElement } = await import("react");
   return {
     ...actual,
-    ResourceTab: (props: Record<string, unknown>) => {
+    ResourceTabView: (props: Record<string, unknown>) => {
       tabProps.push({ ...props });
-      return createElement(actual.ResourceTab, props as never);
+      return createElement(actual.ResourceTabView, props as never);
     },
   };
 });
@@ -278,7 +279,7 @@ function open(route: string) {
  * The detail, in whichever host is on screen — they are two screens now, not
  * one pane in two frames (R-5 is retired). `Inspector` is the only thing in
  * the app that renders `section.pane` (`Panel` renders `section.card`), and
- * `ResourceTab` marks its own root.
+ * `ResourceTabView` marks its own root.
  */
 const peekPane = () => document.querySelector("section.pane, [data-slot='resource-tab']");
 
@@ -297,7 +298,7 @@ const paneTabs = () => screen.queryAllByRole("tab").map((tab) => tab.textContent
  * Settles on the pane's READY frame, by name.
  *
  * Neither `paneName()` nor `paneBody()` will do on its own, and that cost a
- * flake. `ResourceDetail` renders its loading `Inspector` with `name` straight
+ * flake. `ResourceDetailView` renders its loading `Inspector` with `name` straight
  * from props, and that frame's own `LoadingState` reads "Loading Pod
  * default/web-1" — so the heading AND the body already say "web-1" before
  * `getObject` has answered. What does not exist until it has is the tab strip,
@@ -333,7 +334,7 @@ const row = (name: string) =>
 const peekGrip = () => screen.getByRole("separator", { name: "Resize the resource details" });
 const peekWidth = () => (peekGrip().parentElement as HTMLElement).style.width;
 
-/** The props the most recently rendered `ResourceDetail` was handed. */
+/** The props the most recently rendered `ResourceDetailView` was handed. */
 const lastDetailProps = () => ({ ...detailProps[detailProps.length - 1] });
 
 /**
@@ -353,6 +354,12 @@ function openDetailTab(route: string) {
     </ConsoleProvider>,
   );
 }
+
+/** One row of the "About this kind" rail, by its key. */
+const railRow = (rail: HTMLElement, key: string) =>
+  Array.from(rail.querySelectorAll("dl.kv"))
+    .find((kv) => kv.querySelector(".kv-k")?.textContent === key)
+    ?.querySelector(".kv-v")?.textContent;
 
 /** Open the column picker and hand back its panel. */
 async function openColumns() {
@@ -440,6 +447,65 @@ describe("Resources", () => {
     await waitFor(() => expect(rowNames()).toEqual(["left"]));
     expect(headers()).toContain("Phase");
     expect(listCrds).toHaveBeenCalledWith("prod-eu");
+  });
+
+  it("tells the reader what a custom kind is, in a rail beside its list", async () => {
+    listCrds.mockResolvedValue({
+      crds: [{ ...WIDGETS, versions: ["v1", "v1beta1"], storageVersion: "v1" }],
+    });
+    listCustomResource.mockResolvedValue({
+      items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
+    });
+
+    open("/k/widgets.example.com");
+
+    await waitFor(() => expect(rowNames()).toEqual(["left"]));
+    const rail = screen.getByRole("complementary", { name: "About this kind" });
+    expect(railRow(rail, "Kind")).toBe("Widget");
+    expect(railRow(rail, "Scope")).toBe("Namespaced");
+    expect(railRow(rail, "Served versions")).toBe("v1, v1beta1");
+    expect(railRow(rail, "Storage version")).toBe("v1");
+    expect(railRow(rail, "Objects")).toBe("1");
+    expect(within(rail).getByText(/kubectl --context prod-eu get widgets.example.com -A -o wide/)).toBeDefined();
+  });
+
+  it("counts no objects until the list has answered, rather than saying nought", async () => {
+    // `Objects 0` while the rows are still in flight is not a small number,
+    // it is a wrong one — and it is the number a reader glances at and
+    // believes. The row waits for a count.
+    listCrds.mockResolvedValue({ crds: [WIDGETS] });
+    listCustomResource.mockReturnValue(new Promise(() => {}));
+
+    open("/k/widgets.example.com");
+
+    const rail = await screen.findByRole("complementary", { name: "About this kind" });
+    expect(railRow(rail, "Kind")).toBe("Widget");
+    expect(rail.textContent).not.toContain("Objects");
+  });
+
+  it("heads the custom list's own pane with the kind, not the slug", async () => {
+    listCrds.mockResolvedValue({ crds: [WIDGETS] });
+    listCustomResource.mockResolvedValue({
+      items: [{ name: "left", namespace: "default", age: "1d", columns: ["Ready"] }],
+    });
+
+    open("/k/widgets.example.com");
+
+    await waitFor(() => expect(rowNames()).toEqual(["left"]));
+    expect(document.querySelector("[data-slot='rail-main'] .pane-head")?.textContent).toBe(
+      "Widget \u00b7 custom resource",
+    );
+  });
+
+  it("gives a built-in kind no rail — there is no CRD behind one", async () => {
+    open("/k/pods");
+
+    await waitFor(() => expect(rowNames()).toEqual(["web-1", "api-7"]));
+    expect(screen.queryByRole("complementary", { name: "About this kind" })).toBeNull();
+    expect(document.body.textContent).not.toContain("custom resource");
+    // Discovery is what a rail would have to be built from, and a built-in
+    // kind must never pay for it.
+    expect(listCrds).not.toHaveBeenCalled();
   });
 
   it("narrows the list by the filter text", async () => {
@@ -922,9 +988,11 @@ describe("Resources", () => {
 });
 
 /**
- * The two hosts the detail pane is mounted in: the peek beside the list, and
- * the full tab the detail route resolves to. R-5 — they are the same pane, so
- * everything here that holds for one must hold for the other.
+ * The two screens a resource detail is drawn as: the peek beside the list
+ * (`ResourceDetailView`) and the page a detail route fills a tab with
+ * (`ResourceTabView`). Two designs, deliberately — what is asserted here is
+ * that the list points them at one subject and gives each only the controls
+ * that are its own.
  */
 describe("the detail pane's two hosts", () => {
   it("fills the peek from a row click, and opens no tab doing it", async () => {
@@ -1005,7 +1073,7 @@ describe("the detail pane's two hosts", () => {
 
     // The same pane instance, not a fresh one: remounting per row would throw
     // away the reader's selected tab on every click, and would paper over
-    // `ResourceDetail`'s own target gate rather than honour it.
+    // `ResourceDetailView`'s own target gate rather than honour it.
     expect(peekPane()).toBe(paneNode);
 
     // The probe has to have seen something, or the assertion below is over an
@@ -1373,7 +1441,7 @@ describe("the room the peek leaves the list", () => {
   it("measures its row even when the descriptor arrives late", async () => {
     // A custom resource's descriptor waits on CRD discovery, so this screen's
     // first render is a loading state with no row in it at all —
-    // `descriptorFor` is synchronous, `customDescriptorFor` is not. An effect
+    // `descriptorFor` is synchronous, CRD discovery is not. An effect
     // keyed on a ref OBJECT never re-runs when the row finally mounts, since
     // a ref's identity never changes, and the ceiling then falls back to the
     // absolute maximum for every CRD list there is.

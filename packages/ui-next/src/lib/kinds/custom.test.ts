@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { CrdRef } from "@srelens/core";
-import { customDescriptor, customColumns, customDescriptorFor } from "./custom";
+import { customDescriptor, customColumns } from "./custom";
 
 const crd = (over: Partial<CrdRef> = {}): CrdRef => ({
   name: "widgets.example.com", group: "example.com", version: "v1", plural: "widgets",
@@ -79,15 +79,16 @@ describe("customDescriptor", () => {
   });
 });
 
-describe("customDescriptorFor", () => {
-  it("resolves a slug that matches a CRD to a descriptor for that kind", () => {
-    const descriptor = customDescriptorFor("widgets.example.com", [crd()]);
-    // The column header no longer names the kind (FIX 4) — `k8sKind` is the
-    // identity check now.
-    expect(descriptor?.k8sKind).toBe("Widget");
-  });
-
-  it("returns undefined for a slug that matches no CRD", () => {
-    expect(customDescriptorFor("gadgets.example.com", [crd()])).toBeUndefined();
+describe("customDescriptor", () => {
+  // `customDescriptorFor(slug, crds)` used to live here and wrap this in a
+  // `crds.find`. It was deleted rather than kept as a seam once `Resources`
+  // stopped calling it: that screen needs the `CrdRef` itself, not only the
+  // descriptor built from it, because the "About this kind" rail reads the
+  // kind, the scope and the versions straight off it. Two finds over the same
+  // list — one for the columns and one for the rail — is two chances for the
+  // table and the rail to describe different definitions, and an exported
+  // function whose only caller is its own test is a seam nobody is holding.
+  it("names the kind by its CRD, not by the slug that routed to it", () => {
+    expect(customDescriptor(crd()).k8sKind).toBe("Widget");
   });
 });

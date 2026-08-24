@@ -58,6 +58,35 @@ describe("listEvents", () => {
       objectName: "web-1",
     });
   });
+
+  it("carries an event's repeat count through", async () => {
+    const invoke = async () => ({
+      events: [
+        {
+          name: "web.17a",
+          type: "Warning",
+          reason: "BackOff",
+          object: "pod/web",
+          message: "m",
+          age: "12s",
+          count: 37,
+        },
+      ],
+    });
+    const out = await listEvents("ctx", "ns", undefined, invoke as never);
+    expect(out.events?.[0].count).toBe(37);
+  });
+
+  it("carries the namespace an event came from, empty for a cluster-scoped one", async () => {
+    const invoke = async () => ({
+      events: [
+        { name: "shop/web.17a", namespace: "shop", type: "Normal", reason: "Pulled", object: "pod/web", message: "m", age: "4m", count: 1 },
+        { name: "node-a.17b", namespace: "", type: "Warning", reason: "NodeNotReady", object: "node/node-a", message: "m", age: "1m", count: 1 },
+      ],
+    });
+    const out = await listEvents("ctx", null, undefined, invoke as never);
+    expect(out.events?.map((e) => e.namespace)).toEqual(["shop", ""]);
+  });
 });
 
 describe("applyManifest", () => {
