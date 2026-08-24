@@ -56,6 +56,7 @@ import { Spinner } from "../Spinner";
 import { Stat } from "../Stat";
 import { StatusBar } from "../StatusBar";
 import { StatusPill } from "../StatusPill";
+import { StatusRow } from "../StatusRow";
 import { SubHead } from "../SubHead";
 import { SurfaceToast } from "../SurfaceToast";
 import { Switch } from "../Switch";
@@ -343,6 +344,57 @@ export function Gallery() {
           <StatusPill status="Progressing" kind="warning" tinted />
           <StatusPill status="Running" kind="success" tinted />
           <StatusPill status="Unknown" tinted />
+        </div>
+      </section>
+
+      <section>
+        <h2>StatusRow</h2>
+        {/* The overview's `NOT READY` list: workloads and pods mixed in one
+            list, ordered by severity rather than by kind. Not a table — no
+            header, no sort, no selection. */}
+        <div className="flex flex-col">
+          <StatusRow
+            status="Degraded"
+            kind="danger"
+            flagged
+            name="checkout-api"
+            facts={["checkout", "9/12"]}
+            onActivate={() => {}}
+          />
+          <StatusRow
+            status="CrashLoopBackOff"
+            kind="danger"
+            flagged
+            name="checkout-api-7d9f4b8c6-x2mzp"
+            facts={["checkout", "0/1"]}
+            onActivate={() => {}}
+          />
+          <StatusRow
+            status="Progressing"
+            kind="warning"
+            flagged
+            name="payments-worker"
+            facts={["payments", "4/4"]}
+            onActivate={() => {}}
+          />
+          {/* A word longer than the verdict column pushes the name along
+              rather than being cut in half, and a name longer than its row
+              truncates rather than shoving the facts off the end. */}
+          <StatusRow
+            status="ContainerStatusUnknown"
+            kind="warning"
+            flagged
+            name="search-indexer-59c7d4f6b8-qm2xk-a-deliberately-overlong-name"
+            facts={["search", "0/1"]}
+            onActivate={() => {}}
+          />
+          {/* Healthy: a coloured dot beside a plain grey word. The asymmetry
+              is the point — a list where every row says something in colour
+              says nothing. */}
+          <StatusRow status="Running" kind="success" flagged={false} name="payments-api" facts={["payments", "3/3"]} />
+          {/* No facts and no activation: the row draws no empty facts box and
+              is not a target. */}
+          <StatusRow status="Unknown" kind="neutral" flagged={false} name="orphaned-replicaset" />
         </div>
       </section>
 

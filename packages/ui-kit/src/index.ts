@@ -56,6 +56,7 @@ export { Spinner, type SpinnerProps } from "./Spinner";
 export { Stat, type StatProps } from "./Stat";
 export { StatusBar, type StatusBarProps, type StatusSegment } from "./StatusBar";
 export { StatusPill, statusTone, type StatusKind, type StatusPillProps } from "./StatusPill";
+export { StatusRow, type StatusRowProps } from "./StatusRow";
 export { SubHead, type SubHeadProps } from "./SubHead";
 export { SurfaceToast, type SurfaceToastProps } from "./SurfaceToast";
 export { Switch, type SwitchProps } from "./Switch";

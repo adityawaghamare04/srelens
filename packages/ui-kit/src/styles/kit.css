@@ -404,6 +404,51 @@
      see it, and the extra weight is the second channel. */
   .status[data-bad="true"] { font-weight: 500; }
 
+  /* status-row: a verdict, the subject it is about, and its trailing facts —
+     one row of a list that is not a table. */
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    border-radius: 6px;
+    text-align: left;
+    font-size: 0.75rem;
+    color: var(--ink);
+  }
+  /* Only the pressable form reacts to a pointer. A plain row that lit up on
+     hover would promise something it does not do. */
+  button.status-row:hover { background: var(--field); }
+  /* A minimum, never a fixed width: it lines the names up down the list the
+     way LogLine's gutters keep a stream's messages in line, while a word
+     longer than the column (`CrashLoopBackOff`) pushes rather than clipping. */
+  .status-row-verdict {
+    flex-shrink: 0;
+    min-width: 9rem;
+  }
+  /* Takes the slack. `min-width: 0` because a flex item will not shrink below
+     its content without it, so one long pod name would shove the trailing
+     facts off the end of the row. */
+  .status-row-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .status-row-facts {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 0.75rem;
+    color: var(--ink-muted);
+  }
+  .status-row-fact {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
   .row-ask {
     opacity: 0;
     display: inline-flex;
