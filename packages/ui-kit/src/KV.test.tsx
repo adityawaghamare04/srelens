@@ -138,6 +138,34 @@ describe("the stacked row's rules", () => {
   });
 });
 
+describe("the key column's rules", () => {
+  const css = readFileSync(join(__dirname, "styles", "kit.css"), "utf8");
+  const components = css.slice(css.indexOf("@layer components {"), css.indexOf("@layer utilities {"));
+
+  it("truncates a key too long for its column instead of letting it paint over the value", () => {
+    // Found on the live cluster: the overview rail's Fleet section keys its
+    // rows on the kube CONTEXT name, and a real kubeconfig carries names like
+    // `kdev-1787048764-kubernetes-admin@cluster-...`. The key column is a
+    // `minmax(88px, 34%)` track — its max is fixed, so the track cannot grow —
+    // and a `white-space: nowrap` key with no `min-width: 0` and no overflow
+    // rule simply painted straight through the value column and out past the
+    // right edge of the 286px rail: "kind-srelens-dem30/30 running".
+    //
+    // An ellipsis rather than a wrap: every other name in this design that
+    // outgrows its space is clipped the same way — the tab strip's titles, the
+    // sidebar's cluster name — and a key that wraps to three lines pushes its
+    // own value off the row's baseline.
+    const rule = components.slice(components.indexOf("  .kv-k {"));
+    const body = rule.slice(0, rule.indexOf("}"));
+    // Without this the grid item's automatic minimum is its min-content size,
+    // which for a nowrap key is the whole string — the overflow rules below
+    // never get a chance to apply.
+    expect(body).toContain("min-width: 0");
+    expect(body).toContain("overflow: hidden");
+    expect(body).toContain("text-overflow: ellipsis");
+  });
+});
+
 describe("KVList", () => {
   const rows: Array<[string, string]> = [
     ["Kind", "Pod"],
