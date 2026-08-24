@@ -28,7 +28,17 @@ const h = vi.hoisted(() => {
       error: undefined as { title: string; detail: string; raw: string } | undefined,
       paused: false,
       pending: 0,
+      /** Per-target truth: how many are streaming, how many are down, of how
+       *  many altogether. */
+      live: 4,
+      reconnecting: 0,
+      total: 4,
+      restarts: 0,
     },
+    /** Whether the app believes it is inside the Tauri shell. */
+    tauri: true,
+    /** Every `saveTextFile` the screen has asked for. */
+    saved: vi.fn(),
     /** Every call the screen has made into the hook, in order. */
     seen: [] as {
       context: string;
@@ -73,6 +83,9 @@ vi.mock("../lib/logStream", async () => {
         error: h.state.error,
         paused: h.state.paused,
         pendingWhilePaused: h.state.pending,
+        liveTargets: h.state.live,
+        reconnectingTargets: h.state.reconnecting,
+        totalTargets: h.state.total,
         togglePause: () => {
           h.state.paused = !h.state.paused;
           h.state.pending = 0;
@@ -82,11 +95,23 @@ vi.mock("../lib/logStream", async () => {
           h.state.lines = [];
           notify();
         },
-        restartCount: 0,
+        restartCount: h.state.restarts,
       };
     },
   };
 });
+
+/**
+ * The two platform calls the Export button lands on. Mocked at the core
+ * boundary rather than at `window`, because which of the two runs is a
+ * decision the screen makes from `isTauri()` and that decision is the thing
+ * under test.
+ */
+vi.mock("@srelens/core", async (orig) => ({
+  ...(await orig<typeof import("@srelens/core")>()),
+  isTauri: () => h.tauri,
+  saveTextFile: (...a: unknown[]) => h.saved(...a),
+}));
 
 if (!("ResizeObserver" in globalThis)) {
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
@@ -97,7 +122,9 @@ if (!("ResizeObserver" in globalThis)) {
 }
 
 import type { ClusterContext, LogTarget } from "@srelens/core";
+import type { LogSubjectPod } from "../lib/logSubject";
 import { describeError } from "@srelens/core";
+import { toneColor } from "@srelens/ui-kit";
 import { Logs, logsRoute, parseLogsRoute } from "./Logs";
 import { ConsoleProvider, useConsole } from "../console";
 import { resetContexts, setContexts, setKubeconfigFiles } from "../lib/clusters";
@@ -130,6 +157,18 @@ const TARGETS: LogTarget[] = [
   { pod: "api-9", container: "api", label: "api-9/api" },
 ];
 
+/**
+ * The per-pod facts `resolveLogSubject` hands back with the targets — one
+ * entry per pod, on core's severity vocabulary, with the `pod-template-hash`
+ * where there is one.
+ */
+const PODS: LogSubjectPod[] = [
+  { name: "api-7", health: "danger", revision: "7d764666f9" },
+  { name: "api-8", health: "warning", revision: "7d764666f9" },
+  // No revision at all — a pod whose controller stamps no pod-template-hash.
+  { name: "api-9", health: "success" },
+];
+
 const ROUTE = logsRoute("Deployment", "checkout", "checkout-api");
 
 /** A stream line as the backend sends it with `timestamps: true`. */
@@ -150,8 +189,21 @@ beforeEach(() => {
   h.listeners.clear();
   h.version = 0;
   h.seen = [];
-  h.state = { lines: [], dropped: 0, status: "live", error: undefined, paused: false, pending: 0 };
-  h.resolve.mockResolvedValue({ status: "resolved", targets: TARGETS });
+  h.state = {
+    lines: [],
+    dropped: 0,
+    status: "live",
+    error: undefined,
+    paused: false,
+    pending: 0,
+    live: 4,
+    reconnecting: 0,
+    total: 4,
+    restarts: 0,
+  };
+  h.tauri = true;
+  h.saved.mockResolvedValue("/home/u/checkout-api.log");
+  h.resolve.mockResolvedValue({ status: "resolved", targets: TARGETS, pods: PODS });
 
   resetContexts();
   setContexts([CTX]);
@@ -201,6 +253,29 @@ const body = () => screen.findByRole("log", { name: /logs/i });
 /** The last options the screen asked the stream hook for. */
 const lastOptions = () => h.seen[h.seen.length - 1].options;
 
+/**
+ * Give `.logline` rows a real height, so the screen's windowing actually
+ * engages.
+ *
+ * `computeLogWindow` needs a measured row height before it will window
+ * anything, and jsdom measures nothing — which means every test that does NOT
+ * call this runs against the "render everything" bail-out, where the drawn
+ * window and the filtered buffer are the same array and nothing can tell them
+ * apart. Only `.logline` is given a height, so the measurement path under test
+ * is the real one: the screen finds the first row itself.
+ */
+function measurableRows() {
+  const proto = window.HTMLElement.prototype;
+  const original = proto.getBoundingClientRect;
+  proto.getBoundingClientRect = function (this: HTMLElement) {
+    if (this.classList.contains("logline")) return { height: 20 } as DOMRect;
+    return original.call(this);
+  };
+  return () => {
+    proto.getBoundingClientRect = original;
+  };
+}
+
 describe("the logs route", () => {
   it("round-trips a subject through the route it mints", () => {
     expect(parseLogsRoute(logsRoute("Deployment", "checkout", "checkout-api"))).toEqual({
@@ -232,22 +307,45 @@ describe("Logs", () => {
     h.resolve.mockResolvedValue({
       status: "resolved",
       targets: [{ pod: "api-7", container: "api", label: "" }],
+      pods: [{ name: "api-7", health: "success" }],
     });
     draw(logsRoute("Pod", "checkout", "api-7"));
     expect(await screen.findByText("prod-eu / checkout / api-7 · 1 pod")).toBeTruthy();
   });
 
-  it("draws each line with its time, source, severity and message", async () => {
+  it("draws each line with its time, source, LEVEL WORD and message", async () => {
     const region = await (draw(), body());
     push(...LINES);
     expect(rendered(region)).toEqual([
       // The message is the line as it was written, level word and all. A log
       // viewer that edits the text out of a line breaks the one thing a reader
       // does with it — compare it against what they grepped for elsewhere.
+      //
+      // And the level column says what the LINE said — `warn`, not the
+      // `warning` tone name, and `error`, not `danger`. A column printing the
+      // severity vocabulary reports a word that appears nowhere in the log it
+      // is describing (and `WARNING` does not fit its 44px gutter either).
       "14:07:41.208|api-7 · api|info|info starting checkout-api build=4f2a1c",
-      "14:07:42.100|api-7 · otel-sidecar|warning|warn exporter queue is full",
-      "14:07:43.900|api-8 · api|danger|error pool timeout waited=30.0s in_use=5",
+      "14:07:42.100|api-7 · otel-sidecar|warn|warn exporter queue is full",
+      "14:07:43.900|api-8 · api|error|error pool timeout waited=30.0s in_use=5",
       "14:07:44.010|api-9 · api||GET /healthz 200 1ms",
+    ]);
+  });
+
+  it("leaves the level's colour to the kit rather than pairing one itself", async () => {
+    // The kit owns level→tone (`LEVEL_TONE`) precisely so the same word is
+    // not red on one screen and grey on the next. The screen passes the word
+    // and no `tone`, so what comes out is the kit's own mapping — asserted
+    // against `toneColor`, not against a hex the screen could have written.
+    const region = await (draw(), body());
+    push(...LINES);
+    const levels = Array.from(region.querySelectorAll<HTMLElement>("[data-slot=level]"));
+    expect(levels.map((el) => el.style.color)).toEqual([
+      toneColor("info"),
+      toneColor("warn"),
+      toneColor("sev"),
+      // No level word: the kit's fallback, not a tone the screen chose.
+      toneColor("muted"),
     ]);
   });
 
@@ -259,6 +357,7 @@ describe("Logs", () => {
     h.resolve.mockResolvedValue({
       status: "resolved",
       targets: [{ pod: "api-7", container: "api", label: "" }],
+      pods: [{ name: "api-7", health: "success" }],
     });
     const region = await (draw(logsRoute("Pod", "checkout", "api-7")), body());
     push({ source: "", text: "a line with no timestamp on it" });
@@ -431,24 +530,6 @@ describe("Logs", () => {
   });
 
   describe("the window over a long buffer", () => {
-    /**
-     * `computeLogWindow` needs a measured row height before it will window
-     * anything, and jsdom measures nothing. Only `.logline` is given a height,
-     * so the measurement path under test is the real one — the screen finds
-     * the first row itself.
-     */
-    function measurableRows() {
-      const proto = window.HTMLElement.prototype;
-      const original = proto.getBoundingClientRect;
-      proto.getBoundingClientRect = function (this: HTMLElement) {
-        if (this.classList.contains("logline")) return { height: 20 } as DOMRect;
-        return original.call(this);
-      };
-      return () => {
-        proto.getBoundingClientRect = original;
-      };
-    }
-
     const many = (n: number) =>
       Array.from({ length: n }, (_, i) => line("api-7/api", "14:07:41.208000000", `line ${i}`));
 
@@ -508,7 +589,7 @@ describe("Logs", () => {
     it("says Following while it is live", async () => {
       draw();
       await screen.findByRole("log", { name: /logs/i });
-      expect(within(screen.getByRole("status")).getByText("Following")).toBeTruthy();
+      expect(signal()).toContain("Following");
     });
 
     it("says so when the connection is being retried", async () => {
@@ -518,7 +599,7 @@ describe("Logs", () => {
         h.state.status = "reconnecting";
         notify();
       });
-      expect(within(screen.getByRole("status")).getByText("Reconnecting")).toBeTruthy();
+      expect(signal()).toContain("Reconnecting");
     });
   });
 
@@ -553,5 +634,398 @@ describe("Logs", () => {
     draw();
     expect(await screen.findByText(/no cluster in focus/i)).toBeTruthy();
     expect(h.resolve).not.toHaveBeenCalled();
+  });
+});
+
+/** The connection readout's whole sentence, counts and all. */
+const signal = () =>
+  screen
+    .getAllByRole("status")
+    .map((el) => el.textContent ?? "")
+    .find((t) => /following|connecting|reconnecting|stopped|paused/i.test(t)) ?? "";
+
+/** Every Sources row in the rail, as `[pod, revision]`. */
+const railPods = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll('[data-slot="pod"]')).map(
+    (row) =>
+      [
+        row.querySelector(".status")?.textContent ?? "",
+        row.querySelector(".path")?.textContent ?? "",
+      ] as const,
+  );
+
+/** Every Top terms row in the rail, as `[term, count]`. */
+const railTerms = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll('[data-slot="term"]')).map(
+    (row) =>
+      [
+        row.querySelector(".status")?.textContent ?? "",
+        row.querySelector(".path")?.textContent ?? "",
+      ] as const,
+  );
+
+const filterField = () =>
+  within(screen.getByRole("search", { name: /filter lines/i })).getByRole("searchbox");
+
+describe("what the stream is doing, in a word AND a denominator", () => {
+  /**
+   * The aggregate flips to `reconnecting` the moment ONE target does, which is
+   * the right answer to "am I seeing everything?" and a badly misleading one
+   * on its own: on a ten-pod workload a single blip would read as a total
+   * outage. So the word never appears without the counts underneath it.
+   */
+  it("never says the connection word without its denominator", async () => {
+    for (const state of [
+      { status: "live" as const, live: 4, reconnecting: 0 },
+      { status: "reconnecting" as const, live: 3, reconnecting: 1 },
+      { status: "connecting" as const, live: 0, reconnecting: 0 },
+    ]) {
+      const view = draw();
+      await screen.findByRole("log", { name: /logs/i });
+      act(() => {
+        Object.assign(h.state, state);
+        notify();
+      });
+      expect(signal()).toMatch(/\d+ of 4 streaming/);
+      view.unmount();
+    }
+  });
+
+  it("reads one flapping pod of ten as one of ten, not as a total outage", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    act(() => {
+      h.state.status = "reconnecting";
+      h.state.live = 9;
+      h.state.reconnecting = 1;
+      h.state.total = 10;
+      notify();
+    });
+    expect(signal()).toContain("Reconnecting");
+    expect(signal()).toContain("9 of 10 streaming");
+  });
+
+  it("says how much of a big fan-out is already up while it still says connecting", async () => {
+    // `status` stays `connecting` until EVERY target has reported once, so on
+    // a wide workload lines can be scrolling while the word still says
+    // connecting. The counts are what make that honest.
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    act(() => {
+      h.state.status = "connecting";
+      h.state.live = 46;
+      h.state.reconnecting = 0;
+      h.state.total = 50;
+      notify();
+    });
+    expect(signal()).toContain("Connecting");
+    expect(signal()).toContain("46 of 50 streaming");
+  });
+
+  it("takes its words and its colours from core, never from a table of its own", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    act(() => {
+      h.state.status = "error";
+      h.state.live = 0;
+      h.state.reconnecting = 0;
+      notify();
+    });
+    // core's `logConnectionStatus` calls this state "Stream stopped", danger.
+    expect(signal()).toContain("Stream stopped");
+    expect(signal()).toContain("0 of 4 streaming");
+  });
+
+  it("says Paused for the held VIEW, and still says what the connection is doing", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    await userEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(signal()).toContain("Paused");
+    // Pausing freezes the pane, not the stream — a reader who paused and then
+    // lost half the fan-out must still be able to see that.
+    expect(signal()).toContain("4 of 4 streaming");
+  });
+});
+
+describe("the Stream rail", () => {
+  it("draws a Sources row per pod, with core's verdict and the revision", async () => {
+    const { container } = draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    expect(railPods(container)).toEqual([
+      ["api-7", "rev 7d764666f9"],
+      ["api-8", "rev 7d764666f9"],
+      // No pod-template-hash: nothing at all, not a blank `rev`.
+      ["api-9", ""],
+    ]);
+    const tones = Array.from(container.querySelectorAll('[data-slot="pod"] .status')).map((el) =>
+      el.getAttribute("data-kind"),
+    );
+    expect(tones).toEqual(["danger", "warning", "success"]);
+  });
+
+  /**
+   * THE TRAP. `tallyLogTerms` reads a leading digit as data and ends the term
+   * there, so a buffer still carrying its RFC3339 stamp tallies to nothing —
+   * silently, with no error, and an empty rail looks exactly like a quiet log.
+   */
+  it("hands the rail the STRIPPED message, so the tally is not silently empty", async () => {
+    const { container } = draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(
+      ...LINES,
+      line("api-8/api", "14:07:45.100000000", "error pool timeout waited=30.1s in_use=6"),
+      line("api-8/api", "14:07:45.900000000", "warn exporter queue is full again"),
+    );
+    // The terms are the words of the log, not the empty list a stamped buffer
+    // would produce.
+    const terms = railTerms(container);
+    expect(terms.length).toBeGreaterThan(0);
+    expect(terms.map(([term]) => term)).toContain("pool timeout");
+    // And nothing that could only come from an unstripped line.
+    expect(terms.every(([term]) => !/^\d{4}-\d{2}-\d{2}T/.test(term))).toBe(true);
+  });
+
+  it("counts what the BODY is drawing, so the badge and the terms cannot describe a different set", async () => {
+    const { container } = draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES, line("api-8/api", "14:07:45.100000000", "error pool timeout waited=30.1s in_use=6"));
+    expect(screen.getByText("2 errors")).toBeTruthy();
+
+    await userEvent.type(filterField(), "exporter");
+    // One warn line left in view, and no error lines at all — so no badge.
+    expect(screen.queryByText(/\d+ errors?/)).toBeNull();
+    expect(railTerms(container).map(([term]) => term)).not.toContain("pool timeout");
+  });
+
+  it("filters a pod's lines out of the body when its box is unticked", async () => {
+    const region = await (draw(), body());
+    push(...LINES);
+    await userEvent.click(screen.getByRole("checkbox", { name: "api-7" }));
+    expect(rendered(region).map((r) => r.split("|")[1])).toEqual(["api-8 · api", "api-9 · api"]);
+    // And back again — the box is the only way to undo itself.
+    await userEvent.click(screen.getByRole("checkbox", { name: "api-7" }));
+    expect(rendered(region)).toHaveLength(4);
+  });
+
+  it("keeps the Sources section reachable when a tick has emptied the view", async () => {
+    const region = await (draw(), body());
+    push(line("api-7/api", "14:07:41.208000000", "info only api-7 ever says anything"));
+    await userEvent.click(screen.getByRole("checkbox", { name: "api-7" }));
+    expect(rendered(region)).toHaveLength(0);
+    expect(screen.getByRole("checkbox", { name: "api-7" })).toBeTruthy();
+  });
+});
+
+describe("exporting what is on screen", () => {
+  const flatten = () => String(h.saved.mock.calls[0][1]).split("\n");
+
+  /** jsdom's Blob has no `text()`, so read it the way a browser would. */
+  const readBlob = (blob: Blob) =>
+    new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(blob);
+    });
+
+  it("writes the buffer through the desktop's save dialog, flattened as classic does", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+    await waitFor(() => expect(h.saved).toHaveBeenCalledTimes(1));
+    expect(h.saved.mock.calls[0][0]).toBe("checkout-api.log");
+    expect(flatten()).toEqual([
+      "api-7/api | 2026-08-24T14:07:41.208000000Z info starting checkout-api build=4f2a1c",
+      "api-7/otel-sidecar | 2026-08-24T14:07:42.100000000Z warn exporter queue is full",
+      "api-8/api | 2026-08-24T14:07:43.900000000Z error pool timeout waited=30.0s in_use=5",
+      "api-9/api | 2026-08-24T14:07:44.010000000Z GET /healthz 200 1ms",
+    ]);
+  });
+
+  it("exports WHAT IS ON SCREEN — every filter applied, not the whole buffer", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    await userEvent.type(filterField(), "pool");
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+    await waitFor(() => expect(h.saved).toHaveBeenCalledTimes(1));
+    expect(flatten()).toEqual([
+      "api-8/api | 2026-08-24T14:07:43.900000000Z error pool timeout waited=30.0s in_use=5",
+    ]);
+  });
+
+  /**
+   * The one above proves the export is narrowed by the FILTERS. It cannot
+   * prove it is not also narrowed by the WINDOW, because jsdom measures no row
+   * height, so `computeLogWindow` bails out to "render everything" and the
+   * drawn slice and the filtered buffer are the same array — an export of
+   * either passes. Measure the rows and the two come apart, which is the only
+   * condition under which this property is testable at all.
+   */
+  it("exports every line the filters left, not the slice the viewport had room for", async () => {
+    const restore = measurableRows();
+    try {
+      const region = await (draw(), body());
+      Object.defineProperty(region, "clientHeight", { configurable: true, get: () => 100 });
+      push(
+        ...Array.from({ length: 300 }, (_, i) =>
+          line("api-7/api", "14:07:41.208000000", `${i % 2 === 0 ? "alpha" : "beta"} line ${i}`),
+        ),
+      );
+      await userEvent.type(filterField(), "alpha");
+
+      // 150 lines match, and the window is drawing a small fraction of them —
+      // which is what makes the next assertion mean something.
+      const drawn = region.querySelectorAll(".logline").length;
+      expect(drawn).toBeGreaterThan(0);
+      expect(drawn).toBeLessThan(150);
+
+      await userEvent.click(screen.getByRole("button", { name: /export/i }));
+      await waitFor(() => expect(h.saved).toHaveBeenCalledTimes(1));
+      const written = flatten();
+      // Every matching line, not the `drawn` rows. How far someone happened to
+      // have scrolled is not a thing they chose to look at.
+      expect(written).toHaveLength(150);
+      expect(written.every((l) => l.includes("alpha line"))).toBe(true);
+      expect(written[written.length - 1]).toContain("alpha line 298");
+    } finally {
+      restore();
+    }
+  });
+
+  it("exports the held view while paused, which is what the reader is looking at", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    await userEvent.click(screen.getByRole("button", { name: "Pause" }));
+    // The hook freezes `lines` while paused and keeps counting what arrives.
+    act(() => {
+      h.state.pending = 900;
+      notify();
+    });
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+    await waitFor(() => expect(h.saved).toHaveBeenCalledTimes(1));
+    expect(flatten()).toHaveLength(4);
+  });
+
+  it("downloads in the browser, where a save dialog is not reachable", async () => {
+    h.tauri = false;
+    const urls: Blob[] = [];
+    const clicked: string[] = [];
+    const globalUrl = URL as unknown as {
+      createObjectURL: (b: Blob) => string;
+      revokeObjectURL: (u: string) => void;
+    };
+    globalUrl.createObjectURL = (b: Blob) => {
+      urls.push(b);
+      return "blob:logs";
+    };
+    globalUrl.revokeObjectURL = () => {};
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push(this.download);
+      });
+    try {
+      draw();
+      await screen.findByRole("log", { name: /logs/i });
+      push(...LINES);
+      await userEvent.click(screen.getByRole("button", { name: /export/i }));
+      await waitFor(() => expect(clicked).toEqual(["checkout-api.log"]));
+      expect(h.saved).not.toHaveBeenCalled();
+      expect(await readBlob(urls[0])).toContain("api-8/api | ");
+    } finally {
+      click.mockRestore();
+    }
+  });
+
+  it("offers nothing to export when there is nothing on screen", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    expect(screen.getByRole("button", { name: /export/i })).toHaveProperty("disabled", true);
+    push(...LINES);
+    expect(screen.getByRole("button", { name: /export/i })).toHaveProperty("disabled", false);
+  });
+
+  it("heads a failed save with the screen's own sentence, not the backend's", async () => {
+    h.saved.mockRejectedValue("save_text_file failed: Permission denied (os error 13)");
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+    const notice = await screen.findByText(/could not save this stream/i);
+    // The headline says what failed. `describeError` has nothing to classify
+    // in a local filesystem refusal, so the original is what sits underneath
+    // — once, in the body, never as the sentence the reader is handed.
+    expect(notice.textContent).toBe("Could not save this stream");
+  });
+
+  it("classifies what it can, rather than printing String(e) the way classic did", async () => {
+    h.saved.mockRejectedValue("save_text_file failed: deadline exceeded");
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+    const notice = await screen.findByText(/could not save this stream/i);
+    const alert = notice.closest("[role=status]") as HTMLElement;
+    expect(within(alert).getByText(/didn't respond in time/i)).toBeTruthy();
+    // The original is still reachable, but only folded away behind `RawError`.
+    expect(alert.querySelector("[data-slot=alert-body]")?.firstChild?.textContent).not.toContain(
+      "deadline exceeded",
+    );
+    expect(alert.querySelector("details")?.textContent).toContain("deadline exceeded");
+  });
+
+  it("puts the failure away again on the next export", async () => {
+    h.saved.mockRejectedValueOnce("save_text_file failed: Permission denied (os error 13)");
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+    await screen.findByText(/could not save this stream/i);
+
+    h.saved.mockResolvedValue("/home/u/checkout-api.log");
+    await userEvent.click(screen.getByRole("button", { name: /export/i }));
+    await waitFor(() => expect(screen.queryByText(/could not save this stream/i)).toBeNull());
+  });
+});
+
+describe("what a restart costs the reader", () => {
+  it("says nothing before the first restart", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    expect(screen.queryByText(/scrollback/i)).toBeNull();
+  });
+
+  it("says the scrollback went when a since change reopened the stream", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    push(...LINES);
+    act(() => {
+      // What the hook does on a since/container/tail change: a fresh buffer
+      // and a bumped restart count.
+      h.state.lines = [];
+      h.state.restarts = 1;
+      notify();
+    });
+    expect(screen.getByText(/scrollback/i)).toBeTruthy();
+  });
+
+  it("lets the reader put the notice away, and says it again on the NEXT restart", async () => {
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    act(() => {
+      h.state.restarts = 1;
+      notify();
+    });
+    await userEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    expect(screen.queryByText(/scrollback/i)).toBeNull();
+
+    act(() => {
+      h.state.restarts = 2;
+      notify();
+    });
+    expect(screen.getByText(/scrollback/i)).toBeTruthy();
   });
 });

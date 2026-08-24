@@ -2,9 +2,18 @@ import { describe, it, expect } from "vitest";
 import type { Invoker } from "@srelens/core";
 import { resolveLogSubject, type LogSubject } from "./logSubject";
 
-/** A pod object shaped like `k8s.getObject` returns for a Pod. */
-const podObject = (containers: string[]) => ({
+/**
+ * A pod object shaped like `k8s.getObject` returns for a Pod — the whole
+ * object, because that is what the backend sends and what the resolution
+ * reads its per-pod facts out of.
+ */
+const podObject = (
+  containers: string[],
+  extra: { labels?: Record<string, string>; status?: Record<string, unknown> } = {},
+) => ({
+  metadata: extra.labels ? { labels: extra.labels } : {},
   spec: { containers: containers.map((name) => ({ name })) },
+  status: extra.status ?? { phase: "Running", containerStatuses: [{ ready: true, restartCount: 0 }] },
 });
 
 /** A workload object shaped like `k8s.getObject` returns for a Deployment. */
@@ -207,5 +216,113 @@ describe("resolveLogSubject", () => {
     // __TAURI_INTERNALS__, so this is the web-mode copy).
     expect(result.error.title).toBe("This cluster needs OIDC sign-in");
     expect(result.error.detail).not.toContain("executable not found");
+  });
+});
+
+/**
+ * The per-pod facts the Stream rail draws its Sources rows from. They ride
+ * back on the resolution rather than costing a second round trip: the pod
+ * objects are already fetched here, for their containers.
+ */
+describe("resolveLogSubject's pods", () => {
+  const crashing = {
+    phase: "Running",
+    containerStatuses: [
+      { ready: false, restartCount: 7, state: { waiting: { reason: "CrashLoopBackOff" } } },
+    ],
+  };
+
+  it("reports a pod per pod in scope, on core's verdict rather than the phase", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        "Pod/web-abc": podObject(["app"]),
+        // Phase still says Running — the whole reason `podStatus` reads the
+        // waiting reason too. A rail keying off the phase would draw this
+        // green.
+        "Pod/web-def": podObject(["app"], { status: crashing }),
+      },
+      pods: { pods: [{ name: "web-abc" }, { name: "web-def" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.pods).toEqual([
+      { name: "web-abc", health: "success" },
+      { name: "web-def", health: "danger" },
+    ]);
+  });
+
+  it("carries the pod-template-hash when the pod has one", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        "Pod/web-abc": podObject(["app"], { labels: { "pod-template-hash": "7d764666f9" } }),
+      },
+      pods: { pods: [{ name: "web-abc" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.pods[0].revision).toBe("7d764666f9");
+  });
+
+  it("omits the revision rather than carrying a blank one", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        // A DaemonSet's or a bare pod's labels: no pod-template-hash at all,
+        // and one that is present but empty, which is the same absence.
+        "Pod/web-abc": podObject(["app"], { labels: { app: "web" } }),
+        "Pod/web-def": podObject(["app"], { labels: { "pod-template-hash": "" } }),
+      },
+      pods: { pods: [{ name: "web-abc" }, { name: "web-def" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.pods.every((p) => !("revision" in p))).toBe(true);
+  });
+
+  it("reports the one pod of a pod subject, which never touches podsForSelector", async () => {
+    const seen: string[] = [];
+    const inner = fakeInvoke({
+      objects: { "Pod/web-1": podObject(["app"], { status: crashing }) },
+    });
+    const invoke = ((id: string, input?: unknown) => {
+      seen.push(id);
+      return inner(id, input as never);
+    }) as Invoker;
+    const result = await resolveLogSubject(podSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.pods).toEqual([{ name: "web-1", health: "danger" }]);
+    expect(seen).not.toContain("k8s.podsForSelector");
+  });
+
+  it("names each pod once, however many containers it contributes", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        "Pod/web-abc": podObject(["app", "sidecar"]),
+      },
+      pods: { pods: [{ name: "web-abc" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.targets).toHaveLength(2);
+    expect(result.pods.map((p) => p.name)).toEqual(["web-abc"]);
+  });
+
+  it("leaves out a pod that contributed no target, which no line can come from", async () => {
+    const invoke = fakeInvoke({
+      objects: {
+        "Deployment/web": workloadObject({ app: "web" }),
+        "Pod/web-abc": podObject(["app"]),
+        // Init containers only: in scope, but nothing to follow, so a
+        // checkbox for it would filter nothing at all.
+        "Pod/web-def": podObject([]),
+      },
+      pods: { pods: [{ name: "web-abc" }, { name: "web-def" }] },
+    });
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.pods.map((p) => p.name)).toEqual(["web-abc"]);
   });
 });

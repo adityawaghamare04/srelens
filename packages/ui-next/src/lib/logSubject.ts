@@ -4,8 +4,11 @@ import {
   getObject,
   podContainerChoices,
   podsForSelector,
+  resourceStatusLine,
   type FriendlyError,
+  type HealthKind,
   type Invoker,
+  type K8sObject,
   type LogTarget,
 } from "@srelens/core";
 
@@ -70,9 +73,60 @@ export type LogSubject = PodSubject | WorkloadSubject;
  * second error path.
  */
 export type LogSubjectResolution =
-  | { status: "resolved"; targets: LogTarget[] }
+  | { status: "resolved"; targets: LogTarget[]; pods: LogSubjectPod[] }
   | { status: "empty"; detail: string }
   | { status: "error"; error: FriendlyError };
+
+/**
+ * One pod behind a resolved subject, as the screen's Stream rail draws it.
+ *
+ * **These ride back on the resolution rather than being fetched again.** The
+ * pod objects are already on the wire here — every one of them is fetched for
+ * its containers, and a `getObject` on a Pod carries its `metadata.labels` and
+ * its whole `status` — so a screen that wanted a dot beside each pod name
+ * would otherwise issue a second round trip for facts it has already paid
+ * for. One pod per name, in the order the targets were built, and only for
+ * pods that actually contributed a target: a checkbox for a pod no line can
+ * come from filters nothing.
+ */
+export interface LogSubjectPod {
+  /** The pod's name — the same string a stream line's source is built from. */
+  name: string;
+  /**
+   * How the pod is doing, on core's one severity vocabulary, decided HERE and
+   * once.
+   *
+   * Through `resourceStatusLine("Pod", …)`, which is `podStatus` reading the
+   * whole object: the phase alone draws a `CrashLoopBackOff` pod green,
+   * because a container in a back-off loop still reports phase `Running`.
+   * That is core's rule and this module does not restate it — the plan's
+   * "every status word and tone comes from core" is exactly what a rail-side
+   * phase check would break.
+   *
+   * The object path rather than `podsForSelector`'s `PodSummary`: the summary
+   * exists only on the workload branch — a pod subject never calls
+   * `podsForSelector` at all — so reading the object covers both branches with
+   * one rule instead of two, and costs nothing extra either way.
+   */
+  health: HealthKind;
+  /**
+   * The pod's `pod-template-hash`, when it carries one, and absent otherwise.
+   * The bare value, not a phrase: what to call it on screen is the screen's
+   * copy, not this module's.
+   *
+   * Only the Deployment/ReplicaSet label. A DaemonSet or StatefulSet pod
+   * carries `controller-revision-hash` instead and simply has no revision
+   * here, which the rail renders as nothing at all rather than as a blank.
+   */
+  revision?: string;
+}
+
+/** A pod's `pod-template-hash`, or undefined — an empty label is an absence,
+ *  not a revision, and must never reach the rail as a blank figure. */
+function revisionOf(object: K8sObject | undefined): string | undefined {
+  const hash = asRecord(asRecord(asRecord(object).metadata).labels)["pod-template-hash"];
+  return typeof hash === "string" && hash !== "" ? hash : undefined;
+}
 
 /** The label a matchLabels selector would carry on a workload's spec, read
  *  loosely so a spec that doesn't have one just yields no pods. */
@@ -172,5 +226,17 @@ export async function resolveLogSubject(
     label: !label ? "" : singleContainerName ? pod : `${pod}/${container}`,
   }));
 
-  return { status: "resolved", targets };
+  // Built from the objects already in hand — see {@link LogSubjectPod}. Only
+  // pods that contributed a target: `raw` is what the stream will actually
+  // follow, and a pod outside it can never be the source of a line.
+  const following = new Set(raw.map((r) => r.pod));
+  const pods: LogSubjectPod[] = scope.pods.flatMap((pod, i) => {
+    if (!following.has(pod)) return [];
+    const object = objects[i].object;
+    const health = (object === undefined ? null : resourceStatusLine("Pod", object))?.health;
+    const revision = revisionOf(object);
+    return [{ name: pod, health: health ?? "neutral", ...(revision === undefined ? {} : { revision }) }];
+  });
+
+  return { status: "resolved", targets, pods };
 }
