@@ -146,7 +146,17 @@ if (!flags["no-build"] && (flags.build || stale)) {
   console.error("· building the frontend…");
   run("pnpm", ["--filter", "@srelens/desktop", "build"]);
 }
-if (!existsSync(SERVER_BIN)) {
+// The BACKEND goes stale the same way the frontend does, and far more quietly.
+// Existence alone is not enough: a binary built before a new capability was
+// registered answers `capability not found` for it, and the screen photographs
+// as a page of errors and NaNs that look exactly like a bug in the screen. That
+// happened — a whole overview shot with `k8s.clusterFacts` missing and every
+// meter reading NaN%, against code where all of it worked. Cargo would no-op a
+// fresh build in seconds, so the mtime check only saves the link step.
+const serverStale =
+  !existsSync(SERVER_BIN) ||
+  newestMtime(path.join(ROOT, "crates")) > statSync(SERVER_BIN).mtimeMs;
+if (serverStale) {
   // Debug build on purpose: rust-embed reads apps/desktop/dist from disk in a
   // debug build and bakes it into the binary in a release one, so a debug
   // server picks up a frontend rebuild with no recompile.
