@@ -207,6 +207,10 @@ export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [
   // `/events` has its own chrome — the by-reason rail and the type filter —
   // and `/k/events` resolves to it too.
   { route: "/events", name: "Events" },
+  // The sidebar's first cluster node. Not one of the `/k` lists and not the
+  // control room: it is the cluster's own front page — the capacity strip, the
+  // nodes table, the unhealthy list and the At a glance rail.
+  { route: "/overview", name: "Cluster overview" },
 ];
 
 /**

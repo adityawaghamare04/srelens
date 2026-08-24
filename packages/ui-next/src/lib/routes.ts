@@ -3,6 +3,7 @@ import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { parseDetailRoute } from "./detailRoute";
 import { AppLog } from "../screens/AppLog";
 import { Events } from "../screens/Events";
+import { Overview } from "../screens/Overview";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
@@ -121,6 +122,7 @@ const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(nul
   "/notes": ReleaseNotes,
   "/resources": Workloads,
   "/events": Events,
+  "/overview": Overview,
 });
 
 /**
