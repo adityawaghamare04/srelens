@@ -219,6 +219,7 @@ describe("node columns", () => {
     const memory = nodeColumns.find((c) => c.key === "memory")!;
     const node = {
       name: "n1", status: "Ready", roles: "worker", version: "1.30", age: "9d", taints: 0, unschedulable: false,
+      allocatableCpuMillicores: 4000, allocatableMemoryMiB: 8192, allocatablePods: 110,
     };
     const withCpu = { ...node, cpu: 2410 };
     const withMemory = { ...node, memory: 3174 };
@@ -239,7 +240,9 @@ describe("node columns", () => {
 describe("a node's pill and its unhealthy dot are one verdict", () => {
   const node = (over: Partial<NodeRow>): NodeRow => ({
     name: "n1", status: "Ready", roles: "worker", version: "1.30", age: "9d",
-    taints: 0, unschedulable: false, ...over,
+    taints: 0, unschedulable: false,
+    allocatableCpuMillicores: 4000, allocatableMemoryMiB: 8192, allocatablePods: 110,
+    ...over,
   });
   const statusColumn = nodeColumns.find((c) => c.key === "status")!;
   const pill = (n: NodeRow) => {
@@ -337,7 +340,10 @@ describe("flagged rows — the design's unhealthy dot, per kind", () => {
   // node asked "what is it using?" from its row and "why is it unhealthy?"
   // from its own pane. Both now read core's `nodeStatus`.
   it("flags a Node that is NotReady or cordoned, and neither when it is healthy and schedulable", () => {
-    const base = { name: "n1", roles: "worker", version: "1.30", age: "9d", taints: 0 };
+    const base = {
+      name: "n1", roles: "worker", version: "1.30", age: "9d", taints: 0,
+      allocatableCpuMillicores: 4000, allocatableMemoryMiB: 8192, allocatablePods: 110,
+    };
     expect(nodeFlagged({ ...base, status: "Ready", unschedulable: false })).toBe(false);
     expect(nodeFlagged({ ...base, status: "NotReady", unschedulable: false })).toBe(true);
     expect(nodeFlagged({ ...base, status: "Ready", unschedulable: true })).toBe(true);

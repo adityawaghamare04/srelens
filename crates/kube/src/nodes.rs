@@ -29,6 +29,15 @@ pub struct NodeSummary {
     pub version: String,
     pub roles: String,
     pub age: String,
+    /// `status.allocatable.cpu`, converted to millicores — the unit metrics-server uses.
+    #[serde(rename = "allocatableCpuMillicores")]
+    pub allocatable_cpu_millicores: i64,
+    /// `status.allocatable.memory`, converted to MiB — the unit metrics-server uses.
+    #[serde(rename = "allocatableMemoryMiB")]
+    pub allocatable_memory_mib: i64,
+    /// `status.allocatable.pods`.
+    #[serde(rename = "allocatablePods")]
+    pub allocatable_pods: i64,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -83,6 +92,22 @@ fn summarise(node: Node) -> NodeSummary {
                 .count() as u32
         })
         .unwrap_or(0);
+    // A node that reports no allocatable at all reports zero, not a guess —
+    // the consumer downstream (packages/core/src/lib/k8sCapacity.ts) is what
+    // turns a zero denominator into "no reading".
+    let allocatable = node.status.as_ref().and_then(|s| s.allocatable.as_ref());
+    let allocatable_cpu_millicores = allocatable
+        .and_then(|a| a.get("cpu"))
+        .map(|q| crate::metrics::cpu_millicores(&q.0))
+        .unwrap_or(0);
+    let allocatable_memory_mib = allocatable
+        .and_then(|a| a.get("memory"))
+        .map(|q| crate::metrics::mem_mib(&q.0))
+        .unwrap_or(0);
+    let allocatable_pods = allocatable
+        .and_then(|a| a.get("pods"))
+        .map(|q| q.0.trim().parse::<f64>().unwrap_or(0.0) as i64)
+        .unwrap_or(0);
     NodeSummary {
         name,
         status,
@@ -91,6 +116,9 @@ fn summarise(node: Node) -> NodeSummary {
         version,
         roles,
         age: crate::humanize_age(node.metadata.creation_timestamp.as_ref()),
+        allocatable_cpu_millicores,
+        allocatable_memory_mib,
+        allocatable_pods,
     }
 }
 
@@ -163,6 +191,56 @@ mod tests {
         assert_eq!(s.roles, "control-plane");
         assert!(!s.unschedulable);
         assert_eq!(s.taints, 0);
+    }
+
+    fn node_with_allocatable(cpu: &str, memory: &str, pods: &str) -> Node {
+        use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+        let mut allocatable = BTreeMap::new();
+        allocatable.insert("cpu".to_string(), Quantity(cpu.to_string()));
+        allocatable.insert("memory".to_string(), Quantity(memory.to_string()));
+        allocatable.insert("pods".to_string(), Quantity(pods.to_string()));
+        Node {
+            metadata: kube::core::ObjectMeta {
+                name: Some("n1".into()),
+                ..Default::default()
+            },
+            status: Some(NodeStatus {
+                allocatable: Some(allocatable),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn node_with_no_status() -> Node {
+        Node {
+            metadata: kube::core::ObjectMeta {
+                name: Some("n1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reads_allocatable_in_the_units_the_metrics_use() {
+        let node = node_with_allocatable("3800m", "16344820Ki", "110");
+        let s = summarise(node);
+        assert_eq!(s.allocatable_cpu_millicores, 3800);
+        assert_eq!(s.allocatable_memory_mib, 15961);
+        assert_eq!(s.allocatable_pods, 110);
+    }
+
+    #[test]
+    fn reads_a_whole_core_as_millicores() {
+        assert_eq!(summarise(node_with_allocatable("4", "0", "0")).allocatable_cpu_millicores, 4000);
+    }
+
+    #[test]
+    fn a_node_that_reports_no_allocatable_reports_zero_not_a_guess() {
+        assert_eq!(summarise(node_with_no_status()).allocatable_cpu_millicores, 0);
+        assert_eq!(summarise(node_with_no_status()).allocatable_memory_mib, 0);
+        assert_eq!(summarise(node_with_no_status()).allocatable_pods, 0);
     }
 
     #[test]

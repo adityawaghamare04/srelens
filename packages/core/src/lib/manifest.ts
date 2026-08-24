@@ -12,6 +12,12 @@ export interface NodeSummary {
   version: string;
   roles: string;
   age: string;
+  /** `status.allocatable.cpu`, in millicores — the unit metrics-server uses. */
+  allocatableCpuMillicores: number;
+  /** `status.allocatable.memory`, in MiB — the unit metrics-server uses. */
+  allocatableMemoryMiB: number;
+  /** `status.allocatable.pods`. */
+  allocatablePods: number;
 }
 
 /** Dynamic GVK + plural for a custom resource (CRD-backed kinds). */
