@@ -43,6 +43,7 @@ export { Panel, type PanelProps } from "./Panel";
 export { Popover, type PopoverProps } from "./Popover";
 export { Progress, type ProgressProps } from "./Progress";
 export { Radio, type RadioProps } from "./Radio";
+export { RawError, type RawErrorProps } from "./RawError";
 export { ResizeHandle, type ResizeEdge, type ResizeHandleProps } from "./ResizeHandle";
 export { type ResourceNode, ResourceTree, type ResourceTreeProps, filterResourceNodes, useFolds } from "./ResourceTree";
 export { Screen, type ScreenProps } from "./Screen";

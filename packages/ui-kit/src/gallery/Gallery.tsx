@@ -43,6 +43,7 @@ import { Panel } from "../Panel";
 import { Popover } from "../Popover";
 import { Progress } from "../Progress";
 import { Radio } from "../Radio";
+import { RawError } from "../RawError";
 import { ResizeHandle } from "../ResizeHandle";
 import { ResourceTree, type ResourceNode } from "../ResourceTree";
 import { Screen } from "../Screen";
@@ -73,6 +74,17 @@ import { WorkspaceTree } from "../WorkspaceTree";
 import type { Tone } from "../tone";
 
 const TONES: Tone[] = ["muted", "ok", "info", "accent", "warn", "sev"];
+
+/**
+ * What a cluster's refusal actually looks like on the wire — kube-rs's
+ * `ApiError` Display, as `podCount` hands it to the overview. Written out in
+ * full because the catalogue's job is to show the states that break on a real
+ * cluster, and this is the one that used to be printed at the reader.
+ */
+const API_ERROR =
+  'ApiError: Unauthorized: Unauthorized (Status { status: Some("Failure"), metadata: ' +
+  "Some(ListMeta { continue_: None, remaining_item_count: None, resource_version: None, " +
+  'self_link: None }), reason: Some("Unauthorized"), code: Some(401), message: Some("Unauthorized") })';
 
 /**
  * A stand-in for a real icon. The kit does not depend on an icon set — callers
@@ -654,6 +666,22 @@ export function Gallery() {
           onRetry={() => {}}
           action={{ label: "Diagnose in Toolbox", onClick: () => {} }}
         />
+        {/* The shape a classified failure takes: a sentence the reader can act
+            on, with what the cluster actually said folded away under it. */}
+        <ErrorState
+          title="Could not list pods on prod-eu"
+          detail="The cluster rejected your credentials. Your token or client certificate may have expired — refresh your kubeconfig credentials and try again."
+          raw={API_ERROR}
+          onRetry={() => {}}
+        />
+      </section>
+
+      <section>
+        <h2>RawError</h2>
+        {/* Standing on its own, for a surface too narrow for a paragraph: the
+            overview's Fleet rows are 286px and say one word plus this. */}
+        <RawError text={API_ERROR} />
+        <RawError text={API_ERROR} label="What the cluster said" />
       </section>
 
       <section>

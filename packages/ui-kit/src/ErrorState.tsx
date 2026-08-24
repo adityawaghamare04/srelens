@@ -1,11 +1,23 @@
 import type { ReactNode } from "react";
 import { Button } from "./Button";
 import { cx } from "./cx";
+import { RawError } from "./RawError";
 import { filled } from "./slot";
 
 export interface ErrorStateProps {
   title: ReactNode;
   detail?: ReactNode;
+  /**
+   * The message the backend actually sent, when `detail` is a rewriting of it
+   * rather than the thing itself — folded away behind a word, see
+   * {@link RawError}.
+   *
+   * Separate from `detail` rather than appended to it because they are for
+   * different readers: the detail is what to do about the failure, and this is
+   * what to paste into a bug report. A caller whose detail IS the original
+   * message passes nothing here — the same string twice reads as two problems.
+   */
+  raw?: string;
   onRetry?: () => void;
   retryLabel?: string;
   /** An optional secondary action (e.g. "Diagnose in Toolbox"). */
@@ -31,6 +43,7 @@ export interface ErrorStateProps {
 export function ErrorState({
   title,
   detail,
+  raw,
   onRetry,
   retryLabel = "Retry",
   action,
@@ -68,6 +81,10 @@ export function ErrorState({
           {detail}
         </p>
       )}
+      {/* Unconditional: `RawError` renders nothing for an empty string, so
+          there is one place that decides what "no original to show" looks
+          like rather than two that can disagree. */}
+      <RawError text={raw ?? ""} className="w-full" />
       {(onRetry || action) && (
         <div data-slot="actions" className="flex flex-wrap justify-center gap-2">
           {/* `Button` deliberately leaves `type` alone, so a bare one submits
