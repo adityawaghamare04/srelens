@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   ClusterFacts,
+  PodOverview,
   DaemonSetSummary,
   DeploymentSummary,
   NodeSummary,
@@ -16,7 +17,7 @@ import type {
 const core = vi.hoisted(() => ({
   listNodes: vi.fn(),
   nodeMetrics: vi.fn(),
-  listPods: vi.fn(),
+  podOverview: vi.fn(),
   listNamespaces: vi.fn(),
   listResource: vi.fn(),
   listDeployments: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock("@srelens/core", async (orig) => ({
   ...core,
 }));
 
+import { clearResourceCache } from "./cachedResource";
 import {
   OVERVIEW_KINDS,
   useClusterFacts,
@@ -70,6 +72,31 @@ function aPod(name: string, node: string, over: Partial<PodSummary> = {}): PodSu
   };
 }
 
+/**
+ * A `podOverview` answer built from a list of pods — the counts grouped the
+ * way the backend groups them, so a fixture reads as a cluster rather than as
+ * three hand-written numbers that can drift from each other.
+ *
+ * `unsettled` is every pod that is not simply running, which is what the
+ * backend sends: a superset core then judges.
+ */
+function anOverview(pods: PodSummary[], over: Partial<PodOverview> = {}): PodOverview {
+  const byNode = new Map<string, number>();
+  for (const pod of pods) if (pod.node) byNode.set(pod.node, (byNode.get(pod.node) ?? 0) + 1);
+  return {
+    total: pods.length,
+    byNode: [...byNode].map(([node, count]) => ({ node, pods: count })),
+    unsettled: pods.filter((p) => p.phase !== "Running" || p.waitingReason),
+    truncated: false,
+    ...over,
+  };
+}
+
+/** The per-node map `useOverviewNodes` takes, from a list of pods. */
+function podsPerNode(pods: PodSummary[]): Map<string, number> {
+  return new Map(anOverview(pods).byNode.map((n) => [n.node, n.pods]));
+}
+
 function aDeployment(name: string, ready: string): DeploymentSummary {
   return { name, namespace: "checkout", ready, upToDate: 1, available: 1, age: "8d" };
 }
@@ -98,11 +125,19 @@ const NO_FACTS: ClusterFacts = {
   metricsServer: { state: "unknown", version: "" },
 };
 
+/**
+ * The loaders keep their last good answer in a module-level cache, so a test
+ * that did not clear it would be handed the previous test's cluster.
+ */
+beforeEach(() => {
+  clearResourceCache();
+});
+
 /** Every loader answers something harmless; each test overrides what it cares about. */
 function allQuiet() {
   core.listNodes.mockResolvedValue({ nodes: [] });
   core.nodeMetrics.mockResolvedValue({ metrics: [] });
-  core.listPods.mockResolvedValue({ pods: [] });
+  core.podOverview.mockResolvedValue({ pods: anOverview([]) });
   core.listNamespaces.mockResolvedValue({ namespaces: [] });
   core.listResource.mockResolvedValue({ items: [] });
   core.listDeployments.mockResolvedValue({ deployments: [] });
@@ -173,18 +208,20 @@ describe("useOverviewNodes", () => {
     core.listNodes.mockResolvedValue({ nodes: [aNode("a1"), aNode("b2")] });
     const pods = [aPod("p1", "a1"), aPod("p2", "a1"), aPod("p3", "b2")];
 
-    const { result } = renderHook(() => useOverviewNodes("prod", pods));
+    const { result } = renderHook(() => useOverviewNodes("prod", podsPerNode(pods)));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     expect(result.current.nodes[0].usage.pods).toEqual({ used: 2, allocatable: 50 });
     expect(result.current.nodes[1].usage.pods).toEqual({ used: 1, allocatable: 50 });
 
-    const empty = renderHook(() => useOverviewNodes("prod", [aPod("p1", "a1")]));
+    // A node the grouping does not mention genuinely runs none: the map is
+    // complete, so its absence is a reading rather than a gap.
+    const empty = renderHook(() => useOverviewNodes("prod", podsPerNode([aPod("p1", "a1")])));
     await waitFor(() => expect(empty.result.current.status).toBe("ready"));
     expect(empty.result.current.nodes[1].usage.pods).toEqual({ used: 0, allocatable: 50 });
   });
 
-  it("reads no pod count at all while the pod list is unknown", async () => {
+  it("reads no pod count at all while the grouping is unknown", async () => {
     core.listNodes.mockResolvedValue({ nodes: [aNode("a1")] });
 
     const { result } = renderHook(() => useOverviewNodes("prod", undefined));
@@ -197,7 +234,9 @@ describe("useOverviewNodes", () => {
   it("passes through a node that reports no allocatable pods rather than papering over it", async () => {
     core.listNodes.mockResolvedValue({ nodes: [aNode("a1", { allocatablePods: 0 })] });
 
-    const { result } = renderHook(() => useOverviewNodes("prod", [aPod("p1", "a1"), aPod("p2", "a1")]));
+    const { result } = renderHook(() =>
+      useOverviewNodes("prod", podsPerNode([aPod("p1", "a1"), aPod("p2", "a1")])),
+    );
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     expect(result.current.nodes[0].usage.pods).toEqual({ used: 2, allocatable: 0 });
@@ -241,27 +280,68 @@ describe("useOverviewPods", () => {
     allQuiet();
   });
 
-  it("lists every namespace's pods, and holds `undefined` until it knows", async () => {
-    core.listPods.mockResolvedValue({ pods: [aPod("p1", "a1")] });
+  it("counts the cluster's pods rather than listing them", async () => {
+    core.podOverview.mockResolvedValue({
+      pods: anOverview([aPod("p1", "a1"), aPod("p2", "b2"), aPod("p3", "b2")]),
+    });
 
     const { result } = renderHook(() => useOverviewPods("prod"));
     expect(result.current.status).toBe("loading");
-    // Not `[]` while loading: an empty list would count as "no pods" to every
-    // consumer, which is the null-is-not-zero mistake one level up.
-    expect(result.current.pods).toBeUndefined();
+    // Not `0` while loading: a zero would count as "this cluster has no pods"
+    // to every consumer, which is the null-is-not-zero mistake one level up.
+    expect(result.current.total).toBeNull();
+    expect(result.current.byNode).toBeUndefined();
 
     await waitFor(() => expect(result.current.status).toBe("ready"));
-    expect(core.listPods).toHaveBeenCalledWith("prod", "");
-    expect(result.current.pods).toHaveLength(1);
+    expect(core.podOverview).toHaveBeenCalledWith("prod");
+    expect(result.current.total).toBe(3);
+    expect([...(result.current.byNode ?? [])]).toEqual([
+      ["a1", 1],
+      ["b2", 2],
+    ]);
+  });
+
+  it("carries only the pods that are not simply running", async () => {
+    const sick = aPod("crash", "a1", { waitingReason: "CrashLoopBackOff", ready: "0/1" });
+    core.podOverview.mockResolvedValue({ pods: anOverview([aPod("ok", "a1"), sick]) });
+
+    const { result } = renderHook(() => useOverviewPods("prod"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    // The total counts every pod; `unsettled` is the handful worth reading.
+    expect(result.current.total).toBe(2);
+    expect(result.current.unsettled?.map((p) => p.name)).toEqual(["crash"]);
   });
 
   it("reports a refusal without inventing an empty cluster", async () => {
-    core.listPods.mockResolvedValue({ error: "pods is forbidden" });
+    core.podOverview.mockResolvedValue({ error: "pods is forbidden" });
 
     const { result } = renderHook(() => useOverviewPods("prod"));
     await waitFor(() => expect(result.current.status).toBe("error"));
-    expect(result.current.pods).toBeUndefined();
+    // A cluster that did not answer has not told us it has no pods.
+    expect(result.current.total).toBeNull();
+    expect(result.current.byNode).toBeUndefined();
     expect(result.current.error).toContain("forbidden");
+  });
+
+  it("reads a cluster with no pods as an answer rather than an empty section", async () => {
+    core.podOverview.mockResolvedValue({ pods: anOverview([]) });
+
+    const { result } = renderHook(() => useOverviewPods("prod"));
+    await waitFor(() => expect(result.current.total).toBe(0));
+    // "empty" is a state the screen draws an EmptyState for; a cluster that
+    // answered zero has answered, and its tile shows the zero.
+    expect(result.current.status).toBe("ready");
+  });
+
+  it("carries the backend's cap rather than presenting a short list as whole", async () => {
+    core.podOverview.mockResolvedValue({
+      pods: anOverview([aPod("p1", "a1", { phase: "Failed" })], { truncated: true }),
+    });
+
+    const { result } = renderHook(() => useOverviewPods("prod"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.truncated).toBe(true);
   });
 });
 
@@ -315,7 +395,7 @@ describe("useObjectCounts", () => {
     core.listDeployments.mockResolvedValue({ deployments: [aDeployment("a", "1/1")] });
     core.listStatefulSets.mockResolvedValue({ statefulsets: [aStatefulSet("b", "1/1")] });
     core.listDaemonSets.mockResolvedValue({ daemonsets: [aDaemonSet("c", 1, 1)] });
-    core.listPods.mockResolvedValue({ pods: [aPod("p1", "n1"), aPod("p2", "n1")] });
+    core.podOverview.mockResolvedValue({ pods: anOverview([aPod("p1", "n1"), aPod("p2", "n1")]) });
     core.listResource.mockResolvedValue({ items: [{ name: "x" }] });
 
     const { result } = renderHook(() => useOverview("prod"));
@@ -330,11 +410,12 @@ describe("useObjectCounts", () => {
     expect(count("jobs")).toBe(1);
 
     // The collapse: four of the six kinds were already fetched, so the generic
-    // list goes out twice rather than six times — and the pod list, the
-    // largest of them, is fetched once for the whole screen.
+    // list goes out twice rather than six times — and the pod count, the one
+    // that used to cost a whole cluster's pod bodies, is a count the backend
+    // made and this screen asked for once.
     expect(core.listResource).toHaveBeenCalledTimes(2);
     expect(core.listResource.mock.calls.map((c: unknown[]) => c[1])).toEqual(["CronJob", "Job"]);
-    expect(core.listPods).toHaveBeenCalledTimes(1);
+    expect(core.podOverview).toHaveBeenCalledTimes(1);
     expect(core.listDeployments).toHaveBeenCalledTimes(1);
   });
 
@@ -358,7 +439,7 @@ describe("useObjectCounts", () => {
 
   it("carries a refused kind's own reason onto that kind's row alone", async () => {
     core.listDeployments.mockResolvedValue({ error: 'deployments is forbidden: User "dev" cannot list' });
-    core.listPods.mockResolvedValue({ error: "pods is forbidden" });
+    core.podOverview.mockResolvedValue({ error: "pods is forbidden" });
 
     const { result } = renderHook(() => useOverview("prod"));
     await waitFor(() => expect(result.current.objects.status).toBe("ready"));
@@ -462,7 +543,7 @@ describe("useOverview", () => {
   // the entire dashboard.
   it("leaves every other section's data on screen when one loader fails", async () => {
     core.listNodes.mockResolvedValue({ error: 'nodes is forbidden: User "dev" cannot list resource "nodes"' });
-    core.listPods.mockResolvedValue({ pods: [aPod("p1", "a1"), aPod("p2", "b2")] });
+    core.podOverview.mockResolvedValue({ pods: anOverview([aPod("p1", "a1"), aPod("p2", "b2")]) });
     core.listNamespaces.mockResolvedValue({ namespaces: ["default", "checkout"] });
     core.listResource.mockResolvedValue({ items: [{ name: "a" }, { name: "b" }, { name: "c" }] });
     core.clusterFacts.mockResolvedValue({
@@ -479,10 +560,10 @@ describe("useOverview", () => {
     expect(result.current.nodes.nodes).toEqual([]);
     expect(result.current.nodes.error).toContain("forbidden");
 
-    expect(result.current.pods.pods).toHaveLength(2);
+    expect(result.current.pods.total).toBe(2);
     expect(result.current.namespaces.count).toBe(2);
     // The two kinds the rail lists for itself answered 3; the pod count came
-    // off the pod list this same render already has.
+    // off the pod facts this same render already has.
     const count = (slug: string) => result.current.objects.counts.find((c) => c.slug === slug)?.count;
     expect(count("cronjobs")).toBe(3);
     expect(count("jobs")).toBe(3);
@@ -491,15 +572,67 @@ describe("useOverview", () => {
     expect(result.current.workloads.status).toBe("ready");
   });
 
-  it("feeds the pod list into the nodes' pod counts without a second list call", async () => {
+  it("feeds the backend's grouping into the nodes' pod counts, with one call", async () => {
     core.listNodes.mockResolvedValue({ nodes: [aNode("a1"), aNode("b2")] });
-    core.listPods.mockResolvedValue({ pods: [aPod("p1", "a1"), aPod("p2", "a1"), aPod("p3", "b2")] });
+    core.podOverview.mockResolvedValue({
+      pods: anOverview([aPod("p1", "a1"), aPod("p2", "a1"), aPod("p3", "b2")]),
+    });
 
     const { result } = renderHook(() => useOverview("prod"));
     await waitFor(() => expect(result.current.nodes.nodes[0]?.usage.pods).toEqual({ used: 2, allocatable: 50 }));
 
     expect(result.current.nodes.nodes[1].usage.pods).toEqual({ used: 1, allocatable: 50 });
-    expect(core.listPods).toHaveBeenCalledTimes(1);
+    // The Pods tile, the per-node column and the `Not ready` list, from one
+    // call that never listed a pod.
+    expect(core.podOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it("paints the whole screen from cache when the reader comes back to it", async () => {
+    core.listNodes.mockResolvedValue({ nodes: [aNode("a1")] });
+    core.podOverview.mockResolvedValue({ pods: anOverview([aPod("p1", "a1")]) });
+
+    const first = renderHook(() => useOverview("prod"));
+    await waitFor(() => expect(first.result.current.nodes.status).toBe("ready"));
+    first.unmount();
+
+    const again = renderHook(() => useOverview("prod"));
+    // No loading state anywhere and not one extra request: this is what
+    // makes returning to the tab instant.
+    expect(again.result.current.nodes.status).toBe("ready");
+    expect(again.result.current.pods.total).toBe(1);
+    expect(core.listNodes).toHaveBeenCalledTimes(1);
+    expect(core.podOverview).toHaveBeenCalledTimes(1);
+    expect(core.clusterFacts).toHaveBeenCalledTimes(1);
+  });
+
+  it("never serves one cluster's cached answer for another", async () => {
+    core.listNodes.mockImplementation((context: string) =>
+      Promise.resolve({ nodes: [aNode(`${context}-1`)] }),
+    );
+
+    const prod = renderHook(() => useOverview("prod"));
+    await waitFor(() => expect(prod.result.current.nodes.nodes[0]?.node.name).toBe("prod-1"));
+
+    const staging = renderHook(() => useOverview("staging"));
+    await waitFor(() => expect(staging.result.current.nodes.nodes[0]?.node.name).toBe("staging-1"));
+    expect(prod.result.current.nodes.nodes[0].node.name).toBe("prod-1");
+  });
+
+  it("keeps the figures on screen when a refresh fails, and says they are stale", async () => {
+    core.listNodes.mockResolvedValueOnce({ nodes: [aNode("a1")] });
+    core.listNodes.mockResolvedValue({ error: 'nodes is forbidden: User "dev" cannot list' });
+
+    const { result } = renderHook(() => useOverview("prod"));
+    await waitFor(() => expect(result.current.nodes.nodes).toHaveLength(1));
+
+    act(() => result.current.reload());
+    await waitFor(() => expect(result.current.nodes.stale).toBe(true));
+
+    // The rows the reader can see are still real, and the screen is told
+    // they stopped refreshing rather than being left to present them as
+    // current.
+    expect(result.current.nodes.nodes.map((n) => n.node.name)).toEqual(["a1"]);
+    expect(result.current.staleReasons.join(" ")).toContain("forbidden");
   });
 
   it("reloads every section at once", async () => {
@@ -508,7 +641,7 @@ describe("useOverview", () => {
 
     act(() => result.current.reload());
     await waitFor(() => expect(core.listNodes).toHaveBeenCalledTimes(2));
-    expect(core.listPods).toHaveBeenCalledTimes(2);
+    expect(core.podOverview).toHaveBeenCalledTimes(2);
     expect(core.listNamespaces).toHaveBeenCalledTimes(2);
     expect(core.listDeployments).toHaveBeenCalledTimes(2);
     expect(core.clusterFacts).toHaveBeenCalledTimes(2);

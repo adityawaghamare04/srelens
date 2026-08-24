@@ -7,11 +7,11 @@ import {
   listDeployments,
   listNamespaces,
   listNodes,
-  listPods,
   listResource,
   listStatefulSets,
   nodeMetrics,
   nodeUsage,
+  podOverview,
   type ClusterCapacity,
   type ClusterFacts,
   type DaemonSetSummary,
@@ -22,7 +22,8 @@ import {
   type ResourceKind,
   type StatefulSetSummary,
 } from "@srelens/core";
-import { useResource, type ResourceStatus } from "./useResource";
+import { useCachedResource } from "./cachedResource";
+import type { ResourceStatus } from "./useResource";
 
 /**
  * The cluster overview's data layer: one loader per independent fact.
@@ -36,8 +37,8 @@ import { useResource, type ResourceStatus } from "./useResource";
  * A screen made of independent facts fails in independent pieces: a refused
  * `listNodes` empties the nodes table and says so, while the namespace count,
  * the object counts, the control-plane facts and Fleet stay on screen. Every
- * hook below therefore owns its own `useResource`, and nothing here ever
- * awaits two capabilities in a way that lets one fail the other.
+ * hook below therefore owns its own loader, and nothing here ever awaits two
+ * capabilities in a way that lets one fail the other.
  *
  * The second rule, running through all of it: **`null` is not zero.** A
  * percentage of `null` means "no reading" — metrics-server absent, or a node
@@ -50,13 +51,32 @@ import { useResource, type ResourceStatus } from "./useResource";
  * uncapped. `Meter` clamps the bar it draws while keeping `aria-valuetext`
  * truthful; clamping in between would make a node at 140% indistinguishable
  * from one exactly at its limit, hiding the case a reader most needs to see.
+ *
+ * ## Every loader is cached
+ *
+ * `useCachedResource`, not `useResource`: coming back to this tab paints the
+ * last good answer immediately and refreshes behind it, instead of spending a
+ * whole cluster's round trips to arrive at the same numbers. The cache keys
+ * below all carry the CONTEXT, because that is the one thing a cached cluster
+ * answer must never be shown for the wrong one of.
+ *
+ * The rule the cache does not get to break is the module's first one: a
+ * refresh that fails over rows already on screen leaves those rows there and
+ * reports `stale`, and every loader carries that flag up to the screen, which
+ * says so. Quietly serving figures that stopped refreshing is the same lie as
+ * a `0` in place of "no reading".
  */
 
-/** An outcome-shaped core call, turned into the rejection `useResource` reads. */
+/** An outcome-shaped core call, turned into the rejection the loader reads. */
 function unwrap<T>(value: T | undefined, error: string | undefined, what: string): T {
   if (error) throw new Error(error);
   if (value === undefined) throw new Error(`${what} returned no data`);
   return value;
+}
+
+/** The cache identity of one loader's answer for one cluster. */
+function key(what: string, context: string): string {
+  return `overview:${what}|${context}`;
 }
 
 /** One node, paired with its usage against its own allocatable capacity. */
@@ -78,6 +98,8 @@ export interface OverviewNodes {
    * the rail states the absence once rather than every column announcing it.
    */
   metricsError?: string;
+  /** These rows are the last good ones and are no longer refreshing. */
+  stale: boolean;
   reload(): void;
 }
 
@@ -90,44 +112,38 @@ export interface OverviewNodes {
  * losing the node list to that would be the exact all-or-nothing failure this
  * module is written against.
  *
- * @param pods - Every pod in the cluster, or `undefined` while that list is
- *   unknown or was refused. Passed in rather than listed here so the screen
- *   makes one `listPods` call for the pod tile, the unhealthy list and these
+ * @param byNode - How many pods each node is running, or `undefined` while
+ *   that is unknown or was refused. Passed in rather than derived here so the
+ *   screen makes one pod call for the Pods tile, the unhealthy list and these
  *   per-node counts, instead of three.
  */
-export function useOverviewNodes(context: string, pods: PodSummary[] | undefined): OverviewNodes {
-  const nodes = useResource(
-    () => listNodes(context).then((o) => unwrap(o.nodes, o.error, "listNodes")),
-    [context],
+export function useOverviewNodes(
+  context: string,
+  byNode: Map<string, number> | undefined,
+): OverviewNodes {
+  const nodes = useCachedResource(key("nodes", context), () =>
+    listNodes(context).then((o) => unwrap(o.nodes, o.error, "listNodes")),
   );
-  const metrics = useResource(
-    () => nodeMetrics(context).then((o) => unwrap(o.metrics, o.error, "nodeMetrics")),
-    [context],
+  const metrics = useCachedResource(key("nodeMetrics", context), () =>
+    nodeMetrics(context).then((o) => unwrap(o.metrics, o.error, "nodeMetrics")),
   );
 
   const list = nodes.data;
   const readings = metrics.data;
-
-  const podsByNode = useMemo(() => {
-    if (!pods) return undefined;
-    const counts = new Map<string, number>();
-    for (const pod of pods) counts.set(pod.node, (counts.get(pod.node) ?? 0) + 1);
-    return counts;
-  }, [pods]);
 
   const rows = useMemo<OverviewNode[]>(() => {
     if (!list) return [];
     const byName = new Map((readings ?? []).map((m) => [m.name, m]));
     return list.map((node) => ({
       node,
-      // The one place a `0` is legitimate: when `podsByNode` exists the pod
-      // list is KNOWN, and a node missing from it genuinely has no pods on it.
-      // When the map is `undefined` the count is unknown, and `undefined` is
-      // what `nodeUsage` turns into a `pods` of `null` — never `{ used: 0 }`,
-      // which would claim an empty node nobody counted.
-      usage: nodeUsage(node, byName.get(node.name), podsByNode ? (podsByNode.get(node.name) ?? 0) : undefined),
+      // The one place a `0` is legitimate: when `byNode` exists the grouping
+      // is KNOWN and complete, so a node missing from it genuinely has no pods
+      // on it. When the map is `undefined` the count is unknown, and
+      // `undefined` is what `nodeUsage` turns into a `pods` of `null` — never
+      // `{ used: 0 }`, which would claim an empty node nobody counted.
+      usage: nodeUsage(node, byName.get(node.name), byNode ? (byNode.get(node.name) ?? 0) : undefined),
     }));
-  }, [list, readings, podsByNode]);
+  }, [list, readings, byNode]);
 
   // Sums only over nodes that reported; `clusterCapacity` carries
   // `nodesReporting`/`nodesTotal` so the screen cannot show a partial total as
@@ -147,6 +163,7 @@ export function useOverviewNodes(context: string, pods: PodSummary[] | undefined
     capacity,
     error: nodes.error,
     metricsError: metrics.error,
+    stale: nodes.stale || metrics.stale,
     reload,
   };
 }
@@ -154,34 +171,71 @@ export function useOverviewNodes(context: string, pods: PodSummary[] | undefined
 export interface OverviewPods {
   status: ResourceStatus;
   /**
-   * Every pod in the cluster, or `undefined` when that is not known — loading,
-   * or refused. Deliberately not defaulted to `[]`: an empty array is the
-   * answer "this cluster has no pods", which would zero the pod tile and every
-   * node's pod column on a cluster that simply has not answered yet.
+   * Every pod in the cluster, or `null` when that is not known — loading, or
+   * refused. Deliberately not defaulted to `0`: a zero is the answer "this
+   * cluster has no pods", which is what a 113-node cluster's Pods tile used to
+   * be one coalesce away from claiming.
    */
-  pods?: PodSummary[];
+  total: number | null;
+  /**
+   * How many pods each node is running, or `undefined` when unknown.
+   *
+   * When it is present it is COMPLETE: a node absent from the map runs no
+   * pods, and that is a reading rather than a gap. That completeness is what
+   * lets a node's Pods column show a truthful `0`.
+   */
+  byNode?: Map<string, number>;
+  /**
+   * Every pod that is not simply running — a superset of the unhealthy ones,
+   * for core to judge. `undefined` when the cluster has not answered.
+   */
+  unsettled?: PodSummary[];
+  /** Whether {@link unsettled} is shorter than the truth — see `podOverview`. */
+  truncated: boolean;
   error?: string;
+  stale: boolean;
   reload(): void;
 }
 
 /**
- * The cluster's pods, listed once and shared.
+ * The cluster's pod facts, from one call that never lists its pods.
  *
  * Three sections need them — the Pods tile, the per-node `31/50` column and
- * the `NOT READY` list — and this is the call that serves all three. Counting
- * a pod list by `spec.nodeName` (`PodSummary.node`) is how pods-per-node is
- * derived; there is no cheaper source for it, and the list is being fetched
- * for the unhealthy section regardless, so it costs nothing extra here.
+ * the `NOT READY` list — and `k8s.podOverview` is the one call that serves all
+ * three: a server-printed table for the counts and the per-node grouping, and
+ * pod bodies only for the handful that are not simply running. `listPods` with
+ * an empty namespace used to serve them, and on a 113-node cluster that is
+ * 5 416 pods and 114 MB, which does not come back inside the request budget —
+ * so all three read "No reading" on the one cluster where they matter most.
+ * See `crates/kube/src/pod_overview.rs` for what replaced it and why.
  *
- * Fleet is the case that cannot afford this, which is why it counts through
- * the `podCount` capability per cluster instead of listing ten pod lists.
+ * Fleet counts through `podCount` per cluster for the same reason: neither
+ * screen can afford a pod list, and neither takes one.
  */
 export function useOverviewPods(context: string): OverviewPods {
-  const pods = useResource(
-    () => listPods(context, "").then((o) => unwrap(o.pods, o.error, "listPods")),
-    [context],
+  const pods = useCachedResource(
+    key("pods", context),
+    () => podOverview(context).then((o) => unwrap(o.pods, o.error, "podOverview")),
+    // A cluster with no pods at all has answered; it is not an empty section.
+    () => false,
   );
-  return { status: pods.status, pods: pods.data, error: pods.error, reload: pods.reload };
+
+  const data = pods.data;
+  const byNode = useMemo(() => {
+    if (!data) return undefined;
+    return new Map(data.byNode.map((n) => [n.node, n.pods]));
+  }, [data]);
+
+  return {
+    status: pods.status,
+    total: data ? data.total : null,
+    byNode,
+    unsettled: data?.unsettled,
+    truncated: data?.truncated ?? false,
+    error: pods.error,
+    stale: pods.stale,
+    reload: pods.reload,
+  };
 }
 
 export interface NamespaceCount {
@@ -189,19 +243,20 @@ export interface NamespaceCount {
   /** `null` when unknown — loading, or refused. Never `0` for either. */
   count: number | null;
   error?: string;
+  stale: boolean;
   reload(): void;
 }
 
 /** The Namespaces tile's number, and nothing else — the tile has no caption. */
 export function useNamespaceCount(context: string): NamespaceCount {
-  const namespaces = useResource(
-    () => listNamespaces(context).then((o) => unwrap(o.namespaces, o.error, "listNamespaces")),
-    [context],
+  const namespaces = useCachedResource(key("namespaces", context), () =>
+    listNamespaces(context).then((o) => unwrap(o.namespaces, o.error, "listNamespaces")),
   );
   return {
     status: namespaces.status,
     count: namespaces.data === undefined ? null : namespaces.data.length,
     error: namespaces.error,
+    stale: namespaces.stale,
     reload: namespaces.reload,
   };
 }
@@ -226,12 +281,12 @@ export const OVERVIEW_KINDS: ResourceKind[] = [
  *
  * The other four of `OVERVIEW_KINDS` are already on screen: Deployments,
  * StatefulSets and DaemonSets are the rows the `Not ready` list reads, and
- * Pods is the list the Pods tile, the per-node counts and that same list all
- * share. Counting them through `listResource` as well would be four extra
- * whole-cluster list calls to produce four numbers the screen has already
- * fetched — and on a cluster with 1 284 pods, the pod one is not a small
- * request. So the counts are taken off the loaders that own those kinds, and
- * only CronJobs and Jobs are listed here.
+ * Pods is the count `podOverview` already made. Counting them through
+ * `listResource` as well would be four extra whole-cluster list calls to
+ * produce four numbers the screen has already fetched — and on a cluster with
+ * 5 416 pods, the pod one is not a small request at all. So the counts are
+ * taken off the loaders that own those kinds, and only CronJobs and Jobs are
+ * listed here.
  *
  * The rail's ORDER is still `OVERVIEW_KINDS`; this is only about where each
  * number comes from.
@@ -250,6 +305,7 @@ export interface ObjectCounts {
   status: ResourceStatus;
   counts: KindCount[];
   error?: string;
+  stale: boolean;
   reload(): void;
 }
 
@@ -272,20 +328,20 @@ export function useObjectCounts(
   workloads: OverviewWorkloads,
   pods: OverviewPods,
 ): ObjectCounts {
-  const listed = useResource(
-    () =>
-      Promise.all(
-        COUNTED_BY_LISTING.map((slug) =>
-          listResource(context, K8S_KIND[slug], "").then<KindCount>((o) =>
-            o.error ? { slug, count: null, error: o.error } : { slug, count: (o.items ?? []).length },
-          ),
+  const listed = useCachedResource(key("objectCounts", context), () =>
+    Promise.all(
+      COUNTED_BY_LISTING.map((slug) =>
+        listResource(context, K8S_KIND[slug], "").then<KindCount>((o) =>
+          o.error ? { slug, count: null, error: o.error } : { slug, count: (o.items ?? []).length },
         ),
       ),
-    [context],
+    ),
   );
 
   const data = listed.data;
   const listedError = listed.error;
+  const podTotal = pods.total;
+  const podError = pods.error;
   const counts = useMemo<KindCount[]>(() => {
     /** A count off a list the screen already has, or the reason it has none. */
     const shared = (slug: ResourceKind, rows: unknown[] | undefined, error?: string): KindCount => ({
@@ -298,7 +354,9 @@ export function useObjectCounts(
       ["deployments", shared("deployments", workloads.deployments, workloads.refusals.deployments ?? workloads.error)],
       ["statefulsets", shared("statefulsets", workloads.statefulSets, workloads.refusals.statefulsets ?? workloads.error)],
       ["daemonsets", shared("daemonsets", workloads.daemonSets, workloads.refusals.daemonsets ?? workloads.error)],
-      ["pods", shared("pods", pods.pods, pods.error)],
+      // Counted, never listed — the whole point of `podOverview`. `null` is
+      // the refusal; `0` would be the claim that the cluster runs no pods.
+      ["pods", { slug: "pods", count: podTotal, error: podTotal === null ? podError : undefined }],
     ]);
     const byList = new Map((data ?? []).map((c) => [c.slug, c]));
 
@@ -311,13 +369,19 @@ export function useObjectCounts(
     workloads.daemonSets,
     workloads.refusals,
     workloads.error,
-    pods.pods,
-    pods.error,
+    podTotal,
+    podError,
     data,
     listedError,
   ]);
 
-  return { status: listed.status, counts, error: listedError, reload: listed.reload };
+  return {
+    status: listed.status,
+    counts,
+    error: listedError,
+    stale: listed.stale,
+    reload: listed.reload,
+  };
 }
 
 export interface OverviewWorkloads {
@@ -343,6 +407,7 @@ export interface OverviewWorkloads {
    */
   refusals: Partial<Record<ResourceKind, string>>;
   error?: string;
+  stale: boolean;
   reload(): void;
 }
 
@@ -355,32 +420,30 @@ export interface OverviewWorkloads {
  * the Jobs it spawns), and a failed Job's pods are already in the pod list as
  * Pods, with the phase that says what went wrong.
  *
- * One `useResource` over three calls that cannot reject — every `list*`
- * wrapper returns its error rather than throwing — so the fan-out is safe in
- * the way classic's `Promise.all` was not: no branch can cancel the others.
+ * One loader over three calls that cannot reject — every `list*` wrapper
+ * returns its error rather than throwing — so the fan-out is safe in the way
+ * classic's `Promise.all` was not: no branch can cancel the others.
  */
 export function useOverviewWorkloads(context: string): OverviewWorkloads {
-  const loaded = useResource(
-    () =>
-      Promise.all([
-        // The empty namespace is every namespace: the overview is a whole
-        // cluster's view, and so is the list beneath it.
-        listDeployments(context, ""),
-        listStatefulSets(context, ""),
-        listDaemonSets(context, ""),
-      ]).then(([deployments, statefulSets, daemonSets]) => {
-        const refusals: Partial<Record<ResourceKind, string>> = {};
-        if (deployments.error) refusals.deployments = deployments.error;
-        if (statefulSets.error) refusals.statefulsets = statefulSets.error;
-        if (daemonSets.error) refusals.daemonsets = daemonSets.error;
-        return {
-          deployments: deployments.deployments,
-          statefulSets: statefulSets.statefulsets,
-          daemonSets: daemonSets.daemonsets,
-          refusals,
-        };
-      }),
-    [context],
+  const loaded = useCachedResource(key("workloads", context), () =>
+    Promise.all([
+      // The empty namespace is every namespace: the overview is a whole
+      // cluster's view, and so is the list beneath it.
+      listDeployments(context, ""),
+      listStatefulSets(context, ""),
+      listDaemonSets(context, ""),
+    ]).then(([deployments, statefulSets, daemonSets]) => {
+      const refusals: Partial<Record<ResourceKind, string>> = {};
+      if (deployments.error) refusals.deployments = deployments.error;
+      if (statefulSets.error) refusals.statefulsets = statefulSets.error;
+      if (daemonSets.error) refusals.daemonsets = daemonSets.error;
+      return {
+        deployments: deployments.deployments,
+        statefulSets: statefulSets.statefulsets,
+        daemonSets: daemonSets.daemonsets,
+        refusals,
+      };
+    }),
   );
 
   return {
@@ -390,6 +453,7 @@ export function useOverviewWorkloads(context: string): OverviewWorkloads {
     daemonSets: loaded.data?.daemonSets,
     refusals: loaded.data?.refusals ?? EMPTY_REFUSALS,
     error: loaded.error,
+    stale: loaded.stale,
     reload: loaded.reload,
   };
 }
@@ -410,6 +474,7 @@ export interface OverviewFacts {
    */
   facts?: ClusterFacts;
   error?: string;
+  stale: boolean;
   reload(): void;
 }
 
@@ -422,12 +487,13 @@ export interface OverviewFacts {
  * being handed to the rail as six silently omitted rows.
  */
 export function useClusterFacts(context: string): OverviewFacts {
-  const facts = useResource(() => clusterFacts(context), [context]);
+  const facts = useCachedResource(key("facts", context), () => clusterFacts(context));
   const carried = facts.data?.error;
   return {
     status: carried ? "error" : facts.status,
     facts: facts.data,
     error: carried ?? facts.error,
+    stale: facts.stale,
     reload: facts.reload,
   };
 }
@@ -439,6 +505,16 @@ export interface Overview {
   namespaces: NamespaceCount;
   objects: ObjectCounts;
   facts: OverviewFacts;
+  /**
+   * Why some of the figures on screen are the last good ones rather than
+   * current ones — empty when everything on screen refreshed.
+   *
+   * The screen states this ONCE, at the top, rather than every band that could
+   * not refresh saying it: five tiles and two columns each announcing the same
+   * outage has said it seven times and explained it nowhere. That is the same
+   * rule the metrics-server absence follows.
+   */
+  staleReasons: string[];
   /** Retry every section. Each still succeeds or fails on its own. */
   reload(): void;
 }
@@ -453,12 +529,40 @@ export interface Overview {
  */
 export function useOverview(context: string): Overview {
   const pods = useOverviewPods(context);
-  const nodes = useOverviewNodes(context, pods.pods);
+  const nodes = useOverviewNodes(context, pods.byNode);
   const workloads = useOverviewWorkloads(context);
   const namespaces = useNamespaceCount(context);
   // Fed the two loaders whose kinds it would otherwise list a second time.
   const objects = useObjectCounts(context, workloads, pods);
   const facts = useClusterFacts(context);
+
+  const staleReasons = useMemo(
+    () =>
+      [
+        nodes.stale ? nodes.error : undefined,
+        nodes.stale ? nodes.metricsError : undefined,
+        pods.stale ? pods.error : undefined,
+        workloads.stale ? workloads.error : undefined,
+        namespaces.stale ? namespaces.error : undefined,
+        objects.stale ? objects.error : undefined,
+        facts.stale ? facts.error : undefined,
+      ].filter((reason): reason is string => reason !== undefined && reason !== ""),
+    [
+      nodes.stale,
+      nodes.error,
+      nodes.metricsError,
+      pods.stale,
+      pods.error,
+      workloads.stale,
+      workloads.error,
+      namespaces.stale,
+      namespaces.error,
+      objects.stale,
+      objects.error,
+      facts.stale,
+      facts.error,
+    ],
+  );
 
   const reloadNodes = nodes.reload;
   const reloadPods = pods.reload;
@@ -475,5 +579,5 @@ export function useOverview(context: string): Overview {
     reloadFacts();
   }, [reloadNodes, reloadPods, reloadWorkloads, reloadNamespaces, reloadObjects, reloadFacts]);
 
-  return { nodes, pods, workloads, namespaces, objects, facts, reload };
+  return { nodes, pods, workloads, namespaces, objects, facts, staleReasons, reload };
 }

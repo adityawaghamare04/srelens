@@ -60,6 +60,7 @@ import {
   type Overview as OverviewData,
   type OverviewFacts,
   type OverviewNodes,
+  type OverviewPods,
   type OverviewWorkloads,
 } from "../lib/overview";
 import { useInfo } from "../lib/probe";
@@ -216,12 +217,44 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
             one hairline, and a pad would inset every band inside a second
             margin the rail beside it does not have. */}
         <div className="scroll flex min-h-0 flex-1 flex-col">
+          <Stale overview={overview} />
           <Capacity overview={overview} />
           <Nodes context={name} nodes={overview.nodes} />
           <NotReady context={name} overview={overview} />
         </div>
       </SideRail>
     </Screen>
+  );
+}
+
+/**
+ * The one line that says the figures below it have stopped refreshing.
+ *
+ * Every loader on this screen keeps its last good answer in memory, so coming
+ * back to the tab paints the cluster instantly instead of spending a whole
+ * round of requests to arrive at the same numbers. The cost of that is a state
+ * the screen did not have before: **real rows, no longer being updated.**
+ *
+ * That state is not an error — throwing away the last good answer loses
+ * information nobody asked to lose, and an `ErrorState` where a cluster used
+ * to be is worse than the cluster as it was a minute ago. It is not health
+ * either. So it gets a sentence, and the sentence is the whole point: figures
+ * that quietly stopped refreshing are the same lie as a `0` in place of "no
+ * reading", and this screen already refuses that one.
+ *
+ * **Said once, at the top.** A stale nodes list and a stale namespace count
+ * are one outage, and five bands each announcing it has said it five times and
+ * explained it nowhere — the rule `metricsServerRow` follows for a missing
+ * metrics-server, applied to the same problem.
+ */
+function Stale({ overview }: { overview: OverviewData }) {
+  if (overview.staleReasons.length === 0) return null;
+  return (
+    <div className="p-3 pb-0">
+      <Alert tone="warn" title="Showing the last reading — this is no longer refreshing">
+        {overview.staleReasons.join(" · ")}
+      </Alert>
+    </div>
   );
 }
 
@@ -449,7 +482,7 @@ interface Tile {
  */
 function Capacity({ overview }: { overview: OverviewData }) {
   const nodes = nodesTile(overview.nodes);
-  const pods = podsTile(overview.pods.pods);
+  const pods = podsTile(overview.pods);
   const namespaces = overview.namespaces.count;
   const cpu = cpuTile(overview.nodes.capacity);
   const memory = memoryTile(overview.nodes.capacity);
@@ -487,7 +520,13 @@ function Capacity({ overview }: { overview: OverviewData }) {
  * exported precisely so nobody keeps a private copy of that map.
  */
 function nodesTile(nodes: OverviewNodes): Tile {
-  if (nodes.status === "loading" || nodes.error) return { value: NO_READING };
+  // No rows AND no answer is no reading. Rows plus a failed refresh is the
+  // last good reading, and `Stale` says at the top that it stopped
+  // refreshing — blanking a real figure here would lose it and explain
+  // nothing. An answer of no nodes at all is still an answer, and reads `0`.
+  if (nodes.nodes.length === 0 && (nodes.status === "loading" || nodes.error)) {
+    return { value: NO_READING };
+  }
 
   const verdicts = nodes.nodes.map((row) => nodeVerdict(row.node));
   if (verdicts.length === 0) return { value: "0" };
@@ -505,19 +544,32 @@ function nodesTile(nodes: OverviewNodes): Tile {
 /**
  * How many pods there are, and how many need a second look.
  *
+ * The figure is a COUNT the backend made server-side, not the length of a list
+ * this screen fetched — `podOverview` counts 5 416 pods without shipping one of
+ * them. A `total` of `null` means nobody counted, which is not an empty
+ * cluster; `0` here is the cluster's own answer.
+ *
  * `podFlagged` is core's `podStatus` — the same reading the pod list's dot and
  * the pod detail's header take, so a pod counted here as unhealthy is the one
- * the `Not ready` list will name. `undefined` pods means the list has not
- * answered (or was refused), which is not an empty cluster.
+ * the `Not ready` list will name. It reads `unsettled`, which holds every pod
+ * that is not simply running, so nothing core would flag is missing from it.
+ *
+ * **Unless the backend capped it.** A capped list can only say how many it
+ * FOUND, so the caption says "at least" — and "all ready" is withheld
+ * entirely, because a clean bill of health is a claim about every pod and a
+ * capped list has not seen every pod.
  */
-function podsTile(pods: PodSummary[] | undefined): Tile {
-  if (!pods) return { value: NO_READING };
-  const value = String(pods.length);
-  if (pods.length === 0) return { value };
+function podsTile(pods: OverviewPods): Tile {
+  if (pods.total === null) return { value: NO_READING };
+  const value = String(pods.total);
+  if (pods.total === 0) return { value };
 
-  const flagged = pods.filter(podFlagged);
-  if (flagged.length === 0) return { value, caption: "all ready", tone: statusTone("success") };
-  return { value, caption: `${flagged.length} not ready`, tone: statusTone(worst(flagged)) };
+  const flagged = (pods.unsettled ?? []).filter(podFlagged);
+  if (flagged.length === 0) {
+    return pods.truncated ? { value } : { value, caption: "all ready", tone: statusTone("success") };
+  }
+  const count = pods.truncated ? `at least ${flagged.length}` : String(flagged.length);
+  return { value, caption: `${count} not ready`, tone: statusTone(worst(flagged)) };
 }
 
 /**
@@ -697,12 +749,17 @@ function Nodes({ context, nodes }: { context: string; nodes: OverviewNodes }) {
 
   return (
     <Section title="Nodes" smallCaps padded={false}>
-      {nodes.status === "loading" ? (
+      {nodes.status === "loading" && all.length === 0 ? (
         <LoadingState label="Loading nodes" />
-      ) : nodes.error ? (
+      ) : nodes.error && all.length === 0 ? (
         // The node list, and only it. A missing metrics-server is held apart
         // by the loader (`metricsError`) precisely so it cannot empty this
         // table; those rows keep their columns and read as no reading.
+        //
+        // And only when there is nothing to show. A refused REFRESH over rows
+        // already on screen keeps the rows: the screen says once, at the top,
+        // that they stopped refreshing, and an `ErrorState` where a cluster
+        // used to be tells the reader strictly less.
         <ErrorState
           title={`Could not list nodes on ${context}`}
           detail={nodes.error}
@@ -1015,7 +1072,7 @@ function facts(row: NotReadyRow): string[] {
  * independently, so concatenation order is not stable between renders, and a
  * list that reshuffled itself under the reader's cursor would be its own bug.
  */
-function notReadyRows(workloads: OverviewWorkloads, pods: PodSummary[] | undefined): NotReadyRow[] {
+function notReadyRows(workloads: OverviewWorkloads, unsettled: PodSummary[] | undefined): NotReadyRow[] {
   const rows: NotReadyRow[] = [];
 
   for (const row of workloads.deployments ?? []) {
@@ -1046,7 +1103,10 @@ function notReadyRows(workloads: OverviewWorkloads, pods: PodSummary[] | undefin
       ratio: `${row.ready}/${row.desired}`,
     });
   }
-  for (const row of pods ?? []) {
+  // Every pod that is not simply running — `Succeeded` ones included, which
+  // core then leaves unflagged. The filter below is the only thing that
+  // decides, and it is core's.
+  for (const row of unsettled ?? []) {
     rows.push({
       kind: "Pod",
       name: row.name,
@@ -1079,13 +1139,21 @@ function notReadyRows(workloads: OverviewWorkloads, pods: PodSummary[] | undefin
  */
 function NotReady({ context, overview }: { context: string; overview: OverviewData }) {
   const { workloads, pods } = overview;
-  const rows = notReadyRows(workloads, pods.pods);
+  const rows = notReadyRows(workloads, pods.unsettled);
 
   // `workloads.error` is the whole fan-out failing; `workloads.refusals` is
   // one kind of it. Both are reasons this list may be shorter than the truth.
-  const failures = [pods.error, workloads.error, ...Object.values(workloads.refusals)].filter(
-    (reason): reason is string => reason !== undefined && reason !== "",
-  );
+  //
+  // A reason belongs here only when the thing it explains is ACTUALLY MISSING.
+  // A failed refresh over rows this section already has is a different fact —
+  // the rows are real, they are just not current — and `Stale` states that
+  // once at the top of the screen. Repeating it here would be the same outage
+  // announced twice and explained neither time.
+  const failures = [
+    pods.unsettled === undefined ? pods.error : undefined,
+    workloads.deployments === undefined ? workloads.error : undefined,
+    ...Object.values(workloads.refusals),
+  ].filter((reason): reason is string => reason !== undefined && reason !== "");
 
   const reload = () => {
     workloads.reload();
@@ -1109,7 +1177,18 @@ function NotReady({ context, overview }: { context: string; overview: OverviewDa
               {failures.join(" · ")}
             </Alert>
           )}
-          {rows.length === 0 ? (
+          {/* A cap is not a failure, so it is not in `failures` — but it is
+              the same kind of fact: the list is short, and a short list that
+              does not say so is read as the whole truth. The backend stops
+              fetching pod bodies past its cap rather than rebuilding the
+              whole-cluster list this screen was rewritten to stop making. */}
+          {pods.truncated && (
+            <Alert tone="warn" title="More pods need a look than this list shows">
+              This band is a summary, and it stops before the whole list. The pod list has all of
+              them.
+            </Alert>
+          )}
+          {rows.length === 0 && pods.truncated ? null : rows.length === 0 ? (
             <EmptyState
               title="Nothing is unhealthy"
               hint={`Every workload and pod in ${context} is where it should be.`}

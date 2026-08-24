@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 const core = vi.hoisted(() => ({
   listNodes: vi.fn(),
   nodeMetrics: vi.fn(),
-  listPods: vi.fn(),
+  podOverview: vi.fn(),
   listNamespaces: vi.fn(),
   listResource: vi.fn(),
   listDeployments: vi.fn(),
@@ -50,11 +50,13 @@ import {
   type DeploymentSummary,
   type K8sObject,
   type NodeSummary,
+  type PodOverview,
   type PodSummary,
   type ResourceKind,
   type StatefulSetSummary,
 } from "@srelens/core";
 import { Overview } from "./Overview";
+import { CACHE_TTL_MS, clearResourceCache } from "../lib/cachedResource";
 import { ConsoleProvider } from "../console";
 import { defaultState } from "../lib/tabs";
 import * as store from "../lib/tabsStore";
@@ -103,6 +105,27 @@ function aPod(name: string, node: string, over: Partial<PodSummary> = {}): PodSu
   };
 }
 
+/**
+ * A `podOverview` answer built from a list of pods.
+ *
+ * The screen never sees a pod list any more — the backend counts the cluster's
+ * pods and groups them by node server-side, and sends bodies only for the ones
+ * that are not simply running. A fixture that starts from pods and derives all
+ * three keeps the numbers in a test consistent with each other the way the
+ * backend keeps them consistent on a real cluster.
+ */
+function anOverview(pods: PodSummary[], over: Partial<PodOverview> = {}): PodOverview {
+  const byNode = new Map<string, number>();
+  for (const pod of pods) if (pod.node) byNode.set(pod.node, (byNode.get(pod.node) ?? 0) + 1);
+  return {
+    total: pods.length,
+    byNode: [...byNode].map(([node, count]) => ({ node, pods: count })),
+    unsettled: pods.filter((p) => p.phase !== "Running" || p.waitingReason),
+    truncated: false,
+    ...over,
+  };
+}
+
 /** The three-node cluster every test starts from: all Ready, all reporting. */
 const NODES = [aNode("n1"), aNode("n2"), aNode("n3")];
 const METRICS = NODES.map((n) => ({ name: n.name, cpuMillicores: 2800, memoryMiB: 12000 }));
@@ -146,7 +169,7 @@ const NO_FACTS: ClusterFacts = {
 function quiet() {
   core.listNodes.mockResolvedValue({ nodes: NODES });
   core.nodeMetrics.mockResolvedValue({ metrics: METRICS });
-  core.listPods.mockResolvedValue({ pods: PODS });
+  core.podOverview.mockResolvedValue({ pods: anOverview(PODS) });
   core.listNamespaces.mockResolvedValue({ namespaces: ["default", "kube-system", "prod", "obs"] });
   core.listResource.mockResolvedValue({ items: [] });
   core.listDeployments.mockResolvedValue({ deployments: [] });
@@ -160,6 +183,9 @@ function quiet() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The loaders remember their last good answer, so a test that did not clear
+  // the cache would be handed the previous test's cluster.
+  clearResourceCache();
   quiet();
   resetContexts();
   setContexts([CTX]);
@@ -424,18 +450,46 @@ describe("Overview — the nodes table", () => {
     expect(pool).not.toContain("worker");
   });
 
-  it("keeps the table when the metrics fail, and empties it only when the node list does", async () => {
+  it("keeps the table when the metrics fail", async () => {
     core.nodeMetrics.mockResolvedValue({ error: "metrics API unavailable" });
-    const { unmount } = open();
+    open();
     await waitFor(() => expect(rowFor("n1")).toBeTruthy());
     expect(cells(rowFor("n1"))[3]).toBe("No reading");
-    unmount();
+  });
 
+  it("empties the table and says why when the node list is refused", async () => {
     core.listNodes.mockResolvedValue({ error: "nodes is forbidden" });
     open();
     await waitFor(() => expect(screen.getByText(/nodes is forbidden/)).toBeTruthy());
     // One refused list is one empty section: the namespace count is untouched.
     expect(value("Namespaces")).toBe("4");
+  });
+
+  /**
+   * The case the cache creates, and the one it must not get wrong: the reader
+   * has rows on screen from a minute ago and the refresh behind them just
+   * failed. Throwing the rows away would lose a real reading nobody asked to
+   * lose; keeping them silently would present a stale cluster as a live one.
+   */
+  it("keeps the last good rows when a refresh is refused, and says they stopped refreshing", async () => {
+    const { unmount } = open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+    unmount();
+
+    // Past the cache's TTL, so the next mount paints the cached rows AND
+    // refreshes behind them — inside it there is no refresh to fail.
+    const clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(Date.now() + CACHE_TTL_MS + 1);
+    core.listNodes.mockResolvedValue({ error: "nodes is forbidden" });
+    open();
+    // The rows are still the ones the cluster last gave, not an error state.
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+    expect(value("Nodes")).toBe("3");
+    // And the screen says so, once, with what the cluster actually said.
+    const notice = await waitFor(() => screen.getByText(/no longer refreshing/i));
+    expect(notice).toBeTruthy();
+    expect(screen.getByText(/nodes is forbidden/)).toBeTruthy();
+    clock.mockRestore();
   });
 });
 
@@ -536,7 +590,7 @@ function sick() {
   core.listDeployments.mockResolvedValue({ deployments: SICK_DEPLOYMENTS });
   core.listStatefulSets.mockResolvedValue({ statefulsets: SICK_STATEFULSETS });
   core.listDaemonSets.mockResolvedValue({ daemonsets: SICK_DAEMONSETS });
-  core.listPods.mockResolvedValue({ pods: SICK_PODS });
+  core.podOverview.mockResolvedValue({ pods: anOverview(SICK_PODS) });
 }
 
 function notReady(): HTMLElement {
@@ -702,7 +756,7 @@ describe("Overview — the not-ready list", () => {
 
   it("says that nothing is unhealthy rather than leaving a blank", async () => {
     // The default fixture's one crash-looping pod, taken away.
-    core.listPods.mockResolvedValue({ pods: PODS.filter((p) => !p.waitingReason) });
+    core.podOverview.mockResolvedValue({ pods: anOverview(PODS.filter((p) => !p.waitingReason)) });
     open();
     await waitFor(() => expect(within(notReady()).getByText("Nothing is unhealthy")).toBeTruthy());
 
@@ -711,7 +765,7 @@ describe("Overview — the not-ready list", () => {
   });
 
   it("does not read a refused list as a healthy cluster", async () => {
-    core.listPods.mockResolvedValue({ pods: [] });
+    core.podOverview.mockResolvedValue({ pods: anOverview([]) });
     core.listDeployments.mockResolvedValue({ error: 'deployments is forbidden: User "dev" cannot list' });
     open();
 
@@ -721,7 +775,7 @@ describe("Overview — the not-ready list", () => {
   });
 
   it("keeps the rows it does have when one kind is refused, and says which", async () => {
-    core.listPods.mockResolvedValue({ pods: SICK_PODS });
+    core.podOverview.mockResolvedValue({ pods: anOverview(SICK_PODS) });
     core.listStatefulSets.mockResolvedValue({ error: 'statefulsets is forbidden: User "dev" cannot list' });
     open();
 
@@ -921,14 +975,15 @@ describe("Overview — the rail's object counts", () => {
 
     await waitFor(() => expect(countRow("Deployment").textContent).toContain("2"));
     expect(countRow("StatefulSet").textContent).toContain("1");
-    // Four pods in the fixture, from the one `listPods` the screen makes.
+    // Four pods in the fixture — a count the backend made, not the length of
+    // a list this screen fetched.
     expect(countRow("Pod").textContent).toContain("4");
 
     // The collapse: Deployments, StatefulSets, DaemonSets and Pods are all
     // already on screen, so the generic list is called only for the two kinds
     // nothing else loads.
     expect(core.listDeployments).toHaveBeenCalledTimes(1);
-    expect(core.listPods).toHaveBeenCalledTimes(1);
+    expect(core.podOverview).toHaveBeenCalledTimes(1);
     expect(core.listResource).toHaveBeenCalledTimes(2);
     expect(core.listResource.mock.calls.map((c: unknown[]) => c[1])).toEqual(["CronJob", "Job"]);
   });
@@ -1322,5 +1377,153 @@ describe("Overview — a nodes band that stays a summary", () => {
     }
     // The words still say what the buttons do; the glyph is a second channel.
     expect(within(rowFor("n1")).getByRole("button", { name: "Drain" }).textContent).toBe("Drain");
+  });
+});
+
+/**
+ * The failure this whole change exists to end.
+ *
+ * On the user's 113-node cluster the screen asked for every pod in the
+ * cluster — 5 416 of them, 114 MB — for three figures, and the request did not
+ * come back inside its budget. The Pods tile, every node's Pods column and the
+ * rail's Pods count all read "No reading", which was HONEST and useless.
+ *
+ * Nothing downstream of the backend changed its mind about honesty: every
+ * assertion below that says "no reading" still has to hold. What changed is
+ * that on a cluster this size there is now a reading to show.
+ */
+describe("Overview — a cluster too big to list", () => {
+  /** 113 nodes and 5 416 pods, counted the way the backend counts them. */
+  const BIG_NODES = Array.from({ length: 113 }, (_, i) => aNode(`worker-${String(i).padStart(3, "0")}`));
+  const BIG_COUNTS: PodOverview = {
+    total: 5416,
+    byNode: BIG_NODES.map((n, i) => ({ node: n.name, pods: 40 + (i % 11) })),
+    unsettled: [
+      aPod("crash-0", "worker-000", { namespace: "checkout", ready: "0/1", waitingReason: "CrashLoopBackOff" }),
+      aPod("done-0", "worker-001", { namespace: "ops", phase: "Succeeded", ready: "0/1" }),
+    ],
+    truncated: false,
+  };
+
+  function big(over: Partial<PodOverview> = {}) {
+    core.listNodes.mockResolvedValue({ nodes: BIG_NODES });
+    core.nodeMetrics.mockResolvedValue({ metrics: [] });
+    core.podOverview.mockResolvedValue({ pods: { ...BIG_COUNTS, ...over } });
+  }
+
+  it("answers the Pods tile from a count, with no pod list anywhere", async () => {
+    big();
+    open();
+
+    await waitFor(() => expect(value("Pods")).toBe("5416"));
+    // One pod is crash-looping; the finished Job pod is not a problem, and
+    // core is what says which is which.
+    expect(caption("Pods")).toBe("1 not ready");
+    expect(tone("Pods")).toBe("sev");
+    expect(core.podOverview).toHaveBeenCalledWith("prod-eu");
+  });
+
+  it("fills every node's Pods column from the backend's grouping", async () => {
+    big();
+    open();
+
+    await waitFor(() => expect(rowFor("worker-000")).toBeTruthy());
+    // 40 of the node's own allocatable 50 — the ratio the design draws, on a
+    // cluster whose pod list could never have been fetched to build it.
+    expect(cells(rowFor("worker-000"))[5]).toBe("40/50");
+    expect(screen.queryAllByText("No reading").length).toBeGreaterThan(0);
+    expect(cells(rowFor("worker-000"))[5]).not.toBe("No reading");
+  });
+
+  it("counts the Pods row in the rail from the same count", async () => {
+    big();
+    open();
+
+    const row = await waitFor(() => {
+      const found = within(section("Objects by kind"))
+        .getAllByRole("button")
+        .find((b) => b.textContent?.startsWith(K8S_KIND.pods));
+      if (!found) throw new Error("no Pod row");
+      return found;
+    });
+    expect(row.textContent).toContain("5416");
+    expect(within(section("Objects by kind")).queryByText(/could not count Pod/i)).toBeNull();
+  });
+
+  it("still reads a cluster that did not answer as no reading, never as no pods", async () => {
+    core.listNodes.mockResolvedValue({ nodes: BIG_NODES });
+    core.podOverview.mockResolvedValue({ error: "pod overview timed out" });
+    open();
+
+    await waitFor(() => expect(value("Pods")).toBe("No reading"));
+    // The lie the whole null-is-not-zero chain exists to prevent.
+    expect(value("Pods")).not.toBe("0");
+    await waitFor(() => expect(rowFor("worker-000")).toBeTruthy());
+    expect(cells(rowFor("worker-000"))[5]).toBe("No reading");
+  });
+
+  it("says the not-ready list is short rather than presenting a cap as the whole truth", async () => {
+    big({ truncated: true });
+    open();
+
+    await waitFor(() => expect(within(notReady()).getByText(/more pods need a look/i)).toBeTruthy());
+    // And the tile stops claiming an exact figure it cannot have.
+    expect(caption("Pods")).toBe("at least 1 not ready");
+  });
+
+  it("never says every pod is ready off a list that was cut short", async () => {
+    big({ unsettled: [], truncated: true });
+    open();
+
+    await waitFor(() => expect(value("Pods")).toBe("5416"));
+    // "all ready" is a claim about every pod, and a capped list has not seen
+    // every pod. Silence is what it actually knows.
+    expect(caption("Pods")).toBeNull();
+    expect(within(notReady()).queryByText("Nothing is unhealthy")).toBeNull();
+  });
+});
+
+describe("Overview — coming back to the tab", () => {
+  it("paints the cluster from the last reading instead of loading it again", async () => {
+    const { unmount } = open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+    const calls = {
+      nodes: core.listNodes.mock.calls.length,
+      pods: core.podOverview.mock.calls.length,
+      facts: core.clusterFacts.mock.calls.length,
+    };
+    unmount();
+
+    open();
+    // Already there, on the first render, with no spinner in between.
+    expect(rowFor("n1")).toBeTruthy();
+    expect(value("Pods")).toBe("4");
+    expect(screen.queryByText("Loading nodes")).toBeNull();
+    expect(core.listNodes).toHaveBeenCalledTimes(calls.nodes);
+    expect(core.podOverview).toHaveBeenCalledTimes(calls.pods);
+    expect(core.clusterFacts).toHaveBeenCalledTimes(calls.facts);
+  });
+
+  it("never shows one cluster's cached figures for another", async () => {
+    core.listNodes.mockImplementation((context: string) =>
+      Promise.resolve({ nodes: [aNode(`${context}-1`)] }),
+    );
+    const other: ClusterContext = { ...CTX, name: "staging-eu", stableId: "staging" };
+    setContexts([CTX, other]);
+    store.setState(defaultState([CTX, other]));
+
+    const { unmount } = open();
+    await waitFor(() => expect(rowFor("prod-eu-1")).toBeTruthy());
+    unmount();
+
+    store.setState({ ...defaultState([other]), });
+    store.openTab(ROUTE);
+    render(
+      <ConsoleProvider>
+        <Overview route={ROUTE} />
+      </ConsoleProvider>,
+    );
+    await waitFor(() => expect(rowFor("staging-eu-1")).toBeTruthy());
+    expect(screen.queryByText("prod-eu-1")).toBeNull();
   });
 });
