@@ -31,6 +31,14 @@ describe("LogLine", () => {
     expect(cell(container, "level").style.color).toContain("var(--warn)");
   });
 
+  it("tones a panic as severely as it reads", () => {
+    // `panic` is what a Go process says on its way out, and core's severity rule
+    // has always treated it as danger. It was missing from LEVEL_TONE, so the
+    // most severe line a process can emit rendered grey.
+    const { container } = render(<LogLine ts="14:02:11" level="panic" message="runtime error" />);
+    expect(cell(container, "level").style.color).toContain("var(--sev)");
+  });
+
   it("stays neutral for a level it does not recognise", () => {
     const { container } = render(<LogLine ts="14:02:11" level="audit" message="x" />);
     expect(cell(container, "level").style.color).toContain("var(--ink-muted)");

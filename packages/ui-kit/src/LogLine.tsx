@@ -32,6 +32,7 @@ const LEVEL_TONE: Record<string, Tone> = {
   crit: "sev",
   error: "sev",
   err: "sev",
+  panic: "sev",
   warning: "warn",
   warn: "warn",
   notice: "info",
