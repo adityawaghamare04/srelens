@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // Only the capability wrappers are replaced. `nodeUsage`, `clusterCapacity`,
@@ -40,7 +40,10 @@ proto.setPointerCapture ??= () => {};
 proto.releasePointerCapture ??= () => {};
 
 import {
+  K8S_KIND,
+  RESOURCE_LABELS,
   resourceStatusLine,
+  scaledStatus,
   type ClusterContext,
   type ClusterFacts,
   type DaemonSetSummary,
@@ -48,6 +51,7 @@ import {
   type K8sObject,
   type NodeSummary,
   type PodSummary,
+  type ResourceKind,
   type StatefulSetSummary,
 } from "@srelens/core";
 import { Overview } from "./Overview";
@@ -890,6 +894,23 @@ describe("Overview — the rail's object counts", () => {
   const countRow = (label: string) =>
     within(section("Objects by kind")).getByRole("button", { name: new RegExp(`^${label}`) });
 
+  it("names the kind, singular, and not the sidebar's list label", async () => {
+    open();
+    await waitFor(() => expect(countRow("Deployment")).toBeTruthy());
+
+    // §7 writes `Deployment 25`: the row names the KIND its number counts,
+    // where the sidebar's plural names a list you are about to open. Core
+    // holds both tables (`K8S_KIND` and `RESOURCE_LABELS`) side by side, so
+    // this is a choice between them and not a table of the screen's own.
+    const labels = Array.from(
+      section("Objects by kind").querySelectorAll<HTMLElement>(".ns-row"),
+    ).map((row) => row.firstElementChild?.textContent ?? "");
+    expect(labels).toEqual(["Deployment", "Pod", "StatefulSet", "DaemonSet", "CronJob", "Job"]);
+    for (const [slug, label] of Object.entries(K8S_KIND)) {
+      if (labels.includes(label)) expect(RESOURCE_LABELS[slug as ResourceKind]).not.toBe(label);
+    }
+  });
+
   it("counts a kind off the list the screen already loaded, without asking twice", async () => {
     core.listDeployments.mockResolvedValue({
       deployments: [aDeployment("a", "1/1"), aDeployment("b", "1/1")],
@@ -898,10 +919,10 @@ describe("Overview — the rail's object counts", () => {
     core.listResource.mockResolvedValue({ items: [{ name: "x" }] });
     open();
 
-    await waitFor(() => expect(countRow("Deployments").textContent).toContain("2"));
-    expect(countRow("StatefulSets").textContent).toContain("1");
+    await waitFor(() => expect(countRow("Deployment").textContent).toContain("2"));
+    expect(countRow("StatefulSet").textContent).toContain("1");
     // Four pods in the fixture, from the one `listPods` the screen makes.
-    expect(countRow("Pods").textContent).toContain("4");
+    expect(countRow("Pod").textContent).toContain("4");
 
     // The collapse: Deployments, StatefulSets, DaemonSets and Pods are all
     // already on screen, so the generic list is called only for the two kinds
@@ -914,16 +935,16 @@ describe("Overview — the rail's object counts", () => {
 
   it("opens that kind's list when a row is activated", async () => {
     open();
-    await waitFor(() => expect(countRow("Deployments")).toBeTruthy());
+    await waitFor(() => expect(countRow("Deployment")).toBeTruthy());
 
-    await userEvent.click(countRow("Deployments"));
+    await userEvent.click(countRow("Deployment"));
     expect(store.activeRoute()).toBe("/k/deployments");
 
-    await userEvent.click(countRow("CronJobs"));
+    await userEvent.click(countRow("CronJob"));
     expect(store.activeRoute()).toBe("/k/cronjobs");
   });
 
-  it("shows no number for a kind it could not count, and says why", async () => {
+  it("shows no number for a kind it could not count, and says why on that row", async () => {
     core.listResource.mockImplementation((_context: string, kind: string) =>
       Promise.resolve(
         kind === "Job"
@@ -933,21 +954,29 @@ describe("Overview — the rail's object counts", () => {
     );
     open();
 
-    await waitFor(() => expect(countRow("CronJobs").textContent).toContain("2"));
+    await waitFor(() => expect(countRow("CronJob").textContent).toContain("2"));
     // Zero is a number a reader will believe. A refusal is not a count.
-    expect(countRow("Jobs").textContent).not.toContain("0");
-    expect(countRow("Jobs").textContent).toContain("—");
-    expect(section("Objects by kind").textContent).toContain("Jobs");
-    expect(within(section("Objects by kind")).getByText(/could not count/i)).toBeTruthy();
+    expect(countRow("Job").textContent).not.toContain("0");
+    expect(countRow("Job").textContent).toContain("—");
+
+    // The reason belongs to the row that could not answer — the treatment
+    // `Fleet` gives an unreachable cluster — not to a paragraph under the
+    // section naming the kinds a second time. It sits beside its own row and
+    // carries what the cluster actually said.
+    const reason = within(section("Objects by kind")).getByText(/could not count job/i);
+    expect(reason.textContent).toContain("jobs is forbidden");
+    expect(reason.previousElementSibling).toBe(countRow("Job"));
+    // And it is the only one: the kinds that answered say nothing.
+    expect(within(section("Objects by kind")).getAllByText(/could not count/i)).toHaveLength(1);
   });
 
   it("does not count a refused workload list as a cluster with none of that kind", async () => {
     core.listDeployments.mockResolvedValue({ error: "deployments is forbidden" });
     open();
 
-    await waitFor(() => expect(countRow("Pods").textContent).toContain("4"));
-    expect(countRow("Deployments").textContent).not.toContain("0");
-    expect(countRow("Deployments").textContent).toContain("—");
+    await waitFor(() => expect(countRow("Pod").textContent).toContain("4"));
+    expect(countRow("Deployment").textContent).not.toContain("0");
+    expect(countRow("Deployment").textContent).toContain("—");
   });
 });
 
@@ -982,5 +1011,316 @@ describe("Overview — the rail's incidents and fleet", () => {
     // Fleet is a courtesy; the overview is about this cluster.
     expect(value("Nodes")).toBe("3");
     expect(rowFor("n1")).toBeTruthy();
+  });
+});
+
+/* ------------------------------------------------------- the screen's shape */
+
+/** The left-hand column of bands — the sibling run `.section + .section` rules. */
+const leftColumn = () =>
+  (document.querySelector('[data-slot="rail-main"] .scroll') ?? undefined) as HTMLElement | undefined;
+
+const railBody = () =>
+  (document.querySelector('[data-slot="rail-body"]') ?? undefined) as HTMLElement | undefined;
+
+const bandTitles = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll(":scope > section.section > h3")).map((h) => h.textContent ?? "");
+
+describe("Overview — a flat surface, not a stack of cards", () => {
+  it("draws no card anywhere on the screen", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    // The user settled this for the resource detail pane and it is the same
+    // decision: "flat sections win — the mock is a flat run of sections
+    // separated by hairline rules… Drop the cards." A card has a border, a
+    // lifted surface and a ruled head, and three of them read as three boxes
+    // on a page rather than one continuous surface.
+    expect(document.querySelectorAll(".card")).toHaveLength(0);
+    expect(document.querySelectorAll(".card-head")).toHaveLength(0);
+  });
+
+  it("makes the bands direct siblings of one box, in both columns", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    // `.section + .section` is what draws the hairlines. A wrapper per band —
+    // one div each to hang a class on — silently removes every rule while
+    // leaving the screen looking almost right, so this is pinned rather than
+    // trusted. The kit's own suite pins the CSS; this pins the adjacency.
+    expect(bandTitles(leftColumn()!)).toEqual(["Capacity", "Nodes", "Not ready"]);
+    expect(bandTitles(railBody()!)).toEqual([
+      "Control plane",
+      "Objects by kind",
+      "Open incidents",
+      "Fleet",
+    ]);
+    for (const host of [leftColumn()!, railBody()!]) {
+      expect([...host.children].every((el) => el.matches("section.section"))).toBe(true);
+    }
+  });
+
+  it("puts no gap and no padding between the bands", async () => {
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    // The design's bands sit directly against each other, divided by one
+    // hairline. A `gap` puts daylight either side of that rule and a `p-3`
+    // insets every band inside a second margin the rail beside it has not
+    // got — which is what made the build read as three boxes.
+    const column = leftColumn()!.className;
+    expect(column).not.toMatch(/\bgap-\d/);
+    expect(column).not.toMatch(/\bp-\d/);
+  });
+
+  it("heads every band in the design's small caps", async () => {
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    // §C.3's structural signpost, the same recipe the pane heads wear. The
+    // uppercase is CSS, so the outline and a screen reader still hear the
+    // words themselves.
+    for (const host of [leftColumn()!, railBody()!]) {
+      for (const head of Array.from(host.querySelectorAll(":scope > section.section > h3"))) {
+        expect(head.className, head.textContent ?? "").toContain("subhead-caps");
+      }
+    }
+  });
+
+  it("runs the tables and the row lists to both edges, and keeps the fact list inset", async () => {
+    sick();
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    const unpadded = (title: string) =>
+      screen
+        .getAllByRole("heading", { name: title })[0]
+        .closest("section")
+        ?.getAttribute("data-padded");
+
+    // §D names it: `padded: false` for tables and list rows. A table inside an
+    // inset draws its hairlines short of the rules dividing the bands around
+    // it.
+    expect(unpadded("Capacity")).toBe("false");
+    expect(unpadded("Nodes")).toBe("false");
+    expect(unpadded("Not ready")).toBe("false");
+    expect(unpadded("Objects by kind")).toBe("false");
+    // The key/value bands keep theirs: a `.kv` row is not a full-width row.
+    expect(unpadded("Control plane")).toBeNull();
+    expect(unpadded("Fleet")).toBeNull();
+  });
+
+  it("heads the left column with the cluster and its server version", async () => {
+    await probed("v1.31.4");
+    open();
+
+    // §7's `prod-eu · v1.31.4`, level with the rail's own head. The version is
+    // the probe's — the same reading the rail's `Version` row takes, not a
+    // second call.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="main-head"]')?.textContent).toBe(
+        "prod-eu · v1.31.4",
+      ),
+    );
+  });
+
+  it("heads it with the name alone until something has probed the cluster", async () => {
+    open();
+    // Not "prod-eu · " — a separator with nothing after it reads as a fact
+    // that failed to load rather than as one nobody has asked for yet.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="main-head"]')?.textContent).toBe("prod-eu"),
+    );
+  });
+});
+
+describe("Overview — a context name too long for the toolbar", () => {
+  const LONG = "m01-1786968575165/kubernetes-admin@cluster.local";
+  const crumb = () => document.querySelector(".crumb")?.textContent ?? "";
+
+  beforeEach(() => {
+    const ctx = { ...CTX, name: LONG };
+    resetContexts();
+    setContexts([ctx]);
+    store.setState(defaultState([ctx]));
+  });
+
+  it("keeps both ends of the name, and cuts the middle", async () => {
+    open();
+    await waitFor(() => expect(crumb()).toBeTruthy());
+
+    // Cutting the TAIL is the one form that must not be used: every kubeadm
+    // context in a fleet ends `@cluster.local`, so two clusters truncated that
+    // way are indistinguishable. Cutting the head loses the other half. The
+    // middle goes, and both ends that tell one cluster from another survive.
+    expect(crumb().length).toBeLessThan(LONG.length);
+    expect(crumb()).toContain("…");
+    expect(crumb().startsWith("m01-")).toBe(true);
+    expect(crumb().endsWith("cluster.local")).toBe(true);
+    expect(crumb()).not.toContain("kubernetes-admin");
+  });
+
+  it("tells two clusters apart that differ only at one end", async () => {
+    open();
+    const first = crumb();
+    cleanup();
+
+    const other = { ...CTX, name: "m02-1786968575165/kubernetes-admin@cluster.local" };
+    resetContexts();
+    setContexts([other]);
+    store.setState(defaultState([other]));
+    open();
+    await waitFor(() => expect(crumb()).toBeTruthy());
+    expect(crumb()).not.toBe(first);
+  });
+
+  it("leaves a name that already fits exactly as it is", async () => {
+    resetContexts();
+    setContexts([CTX]);
+    store.setState(defaultState([CTX]));
+    open();
+    await waitFor(() => expect(crumb()).toBeTruthy());
+    expect(crumb()).toBe("prod-eu");
+    expect(crumb()).not.toContain("…");
+  });
+
+  it("still carries the whole name in the rail, where there is room for it", async () => {
+    open();
+    // Nothing is hidden by the cut: the header is a label and the rail is the
+    // record.
+    await waitFor(() => expect(factValue("Context")).toBe(LONG));
+  });
+});
+
+/* -------------------------------------------------- the nodes band's shape */
+
+/** The node names the table drew, in the order it drew them — the name alone,
+ *  without the flagged node's `sr-only` "Needs attention". */
+const nodeNames = () =>
+  Array.from(document.querySelectorAll("tbody tr.tbl-row td:first-child span.truncate")).map(
+    (el) => el.textContent?.trim() ?? "",
+  );
+
+describe("Overview — a nodes band that stays a summary", () => {
+  /** A fleet big enough that drawing all of it is the bug. */
+  const many = (count: number) =>
+    Array.from({ length: count }, (_, i) => aNode(`node-${String(i).padStart(3, "0")}`));
+
+  it("caps the rows, and says what it is not showing", async () => {
+    core.listNodes.mockResolvedValue({ nodes: many(113) });
+    core.nodeMetrics.mockResolvedValue({ metrics: [] });
+    open();
+    await waitFor(() => expect(nodeNames().length).toBeGreaterThan(0));
+
+    // 113 rows pushed `Not ready` — the band that says what is actually wrong
+    // — entirely off the screen on a real cluster. `/k/nodes` is the screen
+    // for the whole inventory; this one is a summary of it.
+    expect(nodeNames()).toHaveLength(10);
+    // Silently truncating is the part that would be dishonest.
+    expect(screen.getByText(/Showing 10 of 113 nodes/)).toBeTruthy();
+    // And the whole list is one click away.
+    await userEvent.click(screen.getByRole("button", { name: /Showing 10 of 113 nodes/ }));
+    expect(store.activeRoute()).toBe("/k/nodes");
+  });
+
+  it("says nothing about a cap when there is nothing to hide", async () => {
+    open();
+    await waitFor(() => expect(nodeNames()).toHaveLength(3));
+    expect(screen.queryByText(/Showing \d+ of/)).toBeNull();
+  });
+
+  it("picks the rows worth looking at, not the first ten alphabetically", async () => {
+    const rest = many(20);
+    core.listNodes.mockResolvedValue({
+      nodes: [
+        ...rest,
+        // Two nodes core has an opinion about, named so that alphabetical
+        // order buries both of them at the very end of 22.
+        aNode("zz-broken", { status: "NotReady" }),
+        aNode("zy-cordoned", { unschedulable: true }),
+      ],
+    });
+    // And one core is content with, running hot.
+    core.nodeMetrics.mockResolvedValue({
+      metrics: [{ name: "node-019", cpuMillicores: 3760, memoryMiB: 2000 }],
+    });
+    open();
+    await waitFor(() => expect(nodeNames()).toHaveLength(10));
+
+    // core's verdict first — a NotReady node above a cordoned one, which is
+    // `nodeVerdict`'s own ordering and not a reading of this file's — then
+    // the hottest of the ones core is content with.
+    expect(nodeNames().slice(0, 3)).toEqual(["zz-broken", "zy-cordoned", "node-019"]);
+    // The point of it: this is NOT what the list arrived in.
+    expect(nodeNames()[0]).not.toBe("node-000");
+  });
+
+  it("counts the whole cluster in the capacity tile, not the ten it drew", async () => {
+    core.listNodes.mockResolvedValue({
+      nodes: [...many(112), aNode("zz-broken", { status: "NotReady" })],
+    });
+    core.nodeMetrics.mockResolvedValue({ metrics: [] });
+    open();
+
+    // The cap is the TABLE's. A tile that counted the rows on screen would
+    // report a 113-node cluster as a ten-node one.
+    await waitFor(() => expect(value("Nodes")).toBe("113"));
+    expect(caption("Nodes")).toBe("1 not ready");
+  });
+
+  it("gives the meters room to show their tone", async () => {
+    core.listNodes.mockResolvedValue({ nodes: [aNode("n1")] });
+    core.nodeMetrics.mockResolvedValue({
+      metrics: [{ name: "n1", cpuMillicores: 3520, memoryMiB: 6560 }],
+    });
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    // `Meter`'s bar is `w-full`, which has no intrinsic width, so a table cell
+    // sized by its content collapsed the column onto the percentage beside it
+    // and drew a 40px stub. At that size the tone — 88% red against 41% green
+    // — is the one thing the column exists to show and the one thing nobody
+    // can see. The width goes on the CONTENT, where auto layout can act on it.
+    for (const label of ["n1 CPU", "n1 memory"]) {
+      const meter = within(rowFor("n1")).getByRole("meter", { name: label });
+      const cell = meter.closest("td");
+      expect(cell?.firstElementChild?.className, label).toContain("min-w-[10rem]");
+    }
+  });
+
+  it("asks for that room before the metrics have landed", async () => {
+    // The node list answers well before `nodeMetrics` does, and `Table`
+    // measures the natural column widths on the FIRST render that has rows,
+    // then pins them. A width that arrived with the meters arrived after the
+    // columns had been fixed at the width of the words "No reading", and the
+    // meters drew straight across the columns beside them.
+    core.listNodes.mockResolvedValue({ nodes: [aNode("n1")] });
+    core.nodeMetrics.mockResolvedValue({ error: "metrics API unavailable" });
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    const row = rowFor("n1");
+    expect(cells(row)[3]).toBe("No reading");
+    expect(within(row).queryByRole("meter")).toBeNull();
+    for (const index of [3, 4]) {
+      const cell = row.querySelectorAll("td")[index];
+      expect(cell.firstElementChild?.className, String(index)).toContain("min-w-[10rem]");
+    }
+  });
+
+  it("marks the two node actions with the design's glyphs", async () => {
+    open();
+    await waitFor(() => expect(rowFor("n1")).toBeTruthy());
+
+    // A crossed circle on Cordon, a wave on Drain. From `lib/icons` — the
+    // app's vocabulary — because the kit takes no icon-set dependency.
+    for (const label of ["Cordon", "Drain"]) {
+      const button = within(rowFor("n1")).getByRole("button", { name: label });
+      expect(button.querySelector("svg"), label).not.toBeNull();
+    }
+    // The words still say what the buttons do; the glyph is a second channel.
+    expect(within(rowFor("n1")).getByRole("button", { name: "Drain" }).textContent).toBe("Drain");
   });
 });

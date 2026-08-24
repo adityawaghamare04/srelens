@@ -1,5 +1,5 @@
-import { podCount, type ClusterContext, type PodCount } from "@srelens/core";
-import { KV, Spinner } from "@srelens/ui-kit";
+import { podCount, scaledStatus, type ClusterContext, type PodCount } from "@srelens/core";
+import { KV, Spinner, statusTone, toneColor } from "@srelens/ui-kit";
 import { useResource, type Resource } from "../../lib/useResource";
 import { LINK_WORD } from "../../lib/workspace";
 
@@ -37,6 +37,9 @@ export interface FleetProps {
  * no way to catch. {@link count} below is what keeps it: an outcome carrying
  * an error becomes a rejection, never a count.
  *
+ * **The count's colour is core's verdict, not a comparison written here.**
+ * See {@link countTone}.
+ *
  * **This cluster is in the list.** `active` is prepended when the workspace's
  * own list has lost it — a window between a kubeconfig changing and the store
  * reconciling — because a fleet summary that omits the cluster the reader is
@@ -56,6 +59,33 @@ export function Fleet({ clusters, active }: FleetProps) {
       ))}
     </>
   );
+}
+
+/**
+ * The tone a row's count reads in — core's verdict on it, never a comparison
+ * of this file's own.
+ *
+ * `scaledStatus` is the rule every ready-out-of-desired figure on this screen
+ * already takes: it is what `deploymentVerdict`, `statefulSetVerdict` and
+ * `daemonSetVerdict` hand the `Not ready` list, and what the detail header
+ * asks about the same object. A cluster is not a workload, so the `kind`
+ * argument only picks the WORD for a cluster with nothing running, which this
+ * row never draws; the health is the whole of what is read.
+ *
+ * **What core actually says, stated so nobody has to guess.** Any shortfall is
+ * `Degraded` and danger; a whole count is `Running` and ok; a cluster whose
+ * countable pods are all gone — `total` is zero — is `AT_REST`, neither, and
+ * reads plain. Core has no separate opinion about a POD-COUNT shortfall
+ * specifically: it has one opinion about a ready-out-of-desired shortfall, and
+ * this is it. Softening it here ("a couple missing is only amber") would be a
+ * threshold this file invented, which is the fault ten hand-paired label/tone
+ * tables were removed from this project for.
+ *
+ * The colour is a SECOND channel over a figure that is already in words. The
+ * row reads `1284/1310 running` whether or not anyone can see the red.
+ */
+function countTone(counts: PodCount) {
+  return statusTone(scaledStatus("Cluster", counts.running, counts.total).health);
 }
 
 /** An outcome-shaped count, turned into the rejection `useResource` reads. */
@@ -109,5 +139,9 @@ function Reading({
   // `total` excludes `Succeeded` pods — the backend does that, see
   // `crates/kube/src/pod_count.rs` — so a cluster whose Jobs have all
   // finished reads 30/30 rather than claiming three pods are down.
-  return <>{`${counts.data.running}/${counts.data.total} running`}</>;
+  return (
+    <span className="num" style={{ color: toneColor(countTone(counts.data)) }}>
+      {`${counts.data.running}/${counts.data.total} running`}
+    </span>
+  );
 }

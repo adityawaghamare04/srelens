@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
-  RESOURCE_LABELS,
+  K8S_KIND,
   copyKubectlCommand,
   cordonNode,
   drainNode,
@@ -28,7 +28,6 @@ import {
   KubectlPreview,
   LoadingState,
   Meter,
-  Panel,
   Screen,
   Section,
   SideRail,
@@ -95,6 +94,36 @@ const SUMMARISE = "Summarise the health of this cluster";
 /** §7's rail width, and this screen's alone — see `SideRail`'s note on widths. */
 const RAIL_WIDTH = 286;
 
+/**
+ * How much of a context name the toolbar's eyebrow carries.
+ *
+ * The design's is `PROD-EU / GKE` — two short words. Real kubeconfig contexts
+ * are not: `m01-1786968575165/kubernetes-admin@cluster.local` rendered in full
+ * swamps the bar and pushes the screen's own title along with it.
+ *
+ * A number rather than a CSS truncation because the ellipsis has to fall in the
+ * MIDDLE — see {@link shorten}. `text-overflow` only cuts the tail.
+ */
+const EYEBROW_MAX = 30;
+
+/**
+ * A context name cut to fit, keeping both ends.
+ *
+ * Cutting the tail is the one form that must not be used here: kubeadm names
+ * end `…@cluster.local` on every cluster in a fleet, so `m01-178696…` and
+ * `m02-178701…` are still told apart while `…@cluster.local` on both is not.
+ * Cutting the head loses the opposite half. So the middle goes, and both ends
+ * that distinguish one cluster from another survive.
+ *
+ * Nothing is hidden by it: the rail's `Context` row carries the whole name, one
+ * region away, which is why the header does not need to.
+ */
+function shorten(text: string, max = EYEBROW_MAX): string {
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) / 2);
+  return `${text.slice(0, head)}…${text.slice(text.length - (max - 1 - head))}`;
+}
+
 /** This screen's own words for the two node actions. Nothing else renders them. */
 const NODE_ACTION_LABEL = {
   cordon: "Cordon",
@@ -133,6 +162,10 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
   const overview = useOverview(name);
   const { ask } = useConsole();
   const Sparkle = Icons.ask;
+  // The server version, from the probe the shell already ran at launch — the
+  // same reading the rail's `Version` row takes, not a second call. Absent
+  // until it lands, and the head then reads the cluster's name alone.
+  const version = useInfo(context.stableId)?.version ?? "";
 
   // `<cluster name> / <provider>`, and just the name until the facts answer.
   // A provider row that said "unknown" would look like an answer; an absent
@@ -142,7 +175,7 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
   return (
     <Screen
       title={title}
-      eyebrow={provider ? `${name} / ${provider}` : name}
+      eyebrow={provider ? `${shorten(name)} / ${provider}` : shorten(name)}
       // The rail is full height beside the main column, so the body fills and
       // the column below scrolls inside itself rather than the page scrolling
       // the rail away with it.
@@ -165,9 +198,24 @@ function ClusterOverview({ title, context }: { title: string; context: ClusterCo
         </Button>
       }
     >
-      <SideRail head="At a glance" width={RAIL_WIDTH} rail={<AtAGlance context={context} overview={overview} />}>
-        {/* The column of sections, scrolling inside itself. */}
-        <div className="scroll flex min-h-0 flex-1 flex-col gap-3 p-3">
+      <SideRail
+        head="At a glance"
+        // §7 heads the left pane too, level with the rail's own head:
+        // `<name> · <version>`. The separator goes with the version, so a
+        // cluster nobody has probed yet reads as its name rather than as a
+        // name trailing a dot.
+        mainHead={version ? `${name} · ${version}` : name}
+        width={RAIL_WIDTH}
+        rail={<AtAGlance context={context} overview={overview} />}
+      >
+        {/* The column of bands, scrolling inside itself.
+
+            NO PADDING AND NO GAP, and both are the design rather than an
+            oversight. The bands are direct siblings so `.section + .section`
+            rules between them; a gap would put daylight where the design has
+            one hairline, and a pad would inset every band inside a second
+            margin the rail beside it does not have. */}
+        <div className="scroll flex min-h-0 flex-1 flex-col">
           <Capacity overview={overview} />
           <Nodes context={name} nodes={overview.nodes} />
           <NotReady context={name} overview={overview} />
@@ -206,7 +254,7 @@ function AtAGlance({ context, overview }: { context: ClusterContext; overview: O
       <ControlPlane context={context} facts={overview.facts} />
       <ObjectsByKind context={context.name} objects={overview.objects} />
       <OpenIncidents />
-      <Section title="Fleet">
+      <Section title="Fleet" smallCaps>
         <Fleet clusters={clusters} active={context} />
       </Section>
     </>
@@ -287,7 +335,7 @@ function ControlPlane({ context, facts }: { context: ClusterContext; facts: Over
   if (metrics) rows.push(["Metrics server", metrics]);
 
   return (
-    <Section title="Control plane">
+    <Section title="Control plane" smallCaps>
       <KVList rows={rows} />
       {/* The facts call itself failing is not the same as a cluster that named
           none, and the rows above cannot tell the reader which happened. */}
@@ -301,44 +349,50 @@ function ControlPlane({ context, facts }: { context: ClusterContext; facts: Over
  *
  * A button per row rather than a `KV`: §7 draws the counts as a navigation
  * list, and the accessible name is computed from the words already on screen
- * ("Deployments 25") rather than from a second string that can drift from
+ * ("Deployment 25") rather than from a second string that can drift from
  * them. `ReasonRail` settled the same shape for the events rail.
  *
- * **A kind that could not be counted shows no number and says so.** `0` is a
- * number a reader will believe, and a refused list and an empty cluster are
- * the same picture with opposite meanings. The em dash asks the question and
- * the line beneath answers it.
+ * **The label is the KIND, singular — `K8S_KIND`, not `RESOURCE_LABELS`.**
+ * The sidebar's plurals name a list you are about to open; a row here names
+ * the kind the number counts, and the design writes `Deployment 25`. The two
+ * tables already exist in core beside each other, so this is a choice of which
+ * question is being answered rather than a table of this screen's own.
+ *
+ * **A kind that could not be counted shows no number and says so on its own
+ * row.** `0` is a number a reader will believe, and a refused list and an
+ * empty cluster are the same picture with opposite meanings. The em dash asks
+ * the question, and the reason sits under the row that could not answer —
+ * beside it, the way `Fleet` puts an unreachable cluster's reason on that
+ * cluster's row, rather than as a paragraph under the section naming kinds a
+ * second time.
  */
 function ObjectsByKind({ context, objects }: { context: string; objects: ObjectCounts }) {
-  const refused = objects.counts.filter((count) => count.error);
-
   return (
-    <Section title="Objects by kind">
-      {/* Pulled back out to the section's own inset, so the row's text lines
-          up with the label column of the `Control plane` rows above it and
-          the hover fill still bleeds the full width of the block. */}
-      <div className="-mx-2">
-        {objects.counts.map(({ slug, count }) => (
+    <Section title="Objects by kind" smallCaps padded={false}>
+      {objects.counts.map(({ slug, count, error }) => (
+        <div key={slug}>
           <Button
-            key={slug}
             type="button"
             variant="ghost"
             // `.ns-row` is the design's flat row and follows `.btn` in the
             // stylesheet, so the row's padding, width and alignment win while
             // `ghost` keeps the border off — see `ReasonRail`.
-            className="ns-row rounded font-normal"
+            // `px-3` rather than `.ns-row`'s own 0.5rem: the band is unpadded,
+            // so the row itself has to hold the 0.75rem inset that lines this
+            // label up with the `Control plane` keys above it. A utility beats
+            // a components-layer class by layer order, not by source order, so
+            // this is decided rather than a coin flip.
+            className="ns-row rounded px-3 font-normal"
             onClick={() => openTab(`/k/${slug}`, { clusterName: context })}
           >
-            <span className="flex min-w-0 flex-1 truncate">{RESOURCE_LABELS[slug]}</span>
+            <span className="flex min-w-0 flex-1 truncate">{K8S_KIND[slug]}</span>
             <span className="path text-faint">{count === null ? UNKNOWN : count}</span>
           </Button>
-        ))}
-      </div>
-      {refused.length > 0 && (
-        <p className="text-faint">
-          Could not count {refused.map(({ slug }) => RESOURCE_LABELS[slug]).join(", ")}.
-        </p>
-      )}
+          {error && (
+            <p className="path px-3 pb-1 text-faint">Could not count {K8S_KIND[slug]}: {error}</p>
+          )}
+        </div>
+      ))}
     </Section>
   );
 }
@@ -359,10 +413,15 @@ function ObjectsByKind({ context, objects }: { context: string; objects: ObjectC
  */
 function OpenIncidents() {
   return (
-    <Section title="Open incidents">
+    <Section title="Open incidents" smallCaps padded={false}>
+      {/* The rail-sized form. The page-sized one spends `py-10` on padding
+          around three wrapped lines, and in a 286px rail that is enough to
+          push `Fleet` below the fold — a section stating an absence taking
+          the space from one with something to say. */}
       <EmptyState
+        compact
         title="No incident feed yet"
-        hint="Kubernetes reports no incident's title, severity or trend. srelens will grow its own incidents; until then this stays empty on purpose."
+        hint="Kubernetes reports no incident's title, severity or trend. srelens will grow its own."
       />
     </Section>
   );
@@ -396,11 +455,15 @@ function Capacity({ overview }: { overview: OverviewData }) {
   const memory = memoryTile(overview.nodes.capacity);
 
   return (
-    <Panel title="Capacity">
+    <Section title="Capacity" smallCaps padded={false}>
       {/* The row sizes the tiles rather than each tile sizing itself: `Stat`
           cannot be given a width through `className` (two utilities that both
-          set `flex` resolve by stylesheet order), so the grid does it. */}
-      <div data-slot="capacity" className="grid grid-cols-5 gap-3">
+          set `flex` resolve by stylesheet order), so the grid does it.
+
+          NO GAP. `.stat + .stat` draws a hairline between the tiles, which is
+          the design's divider; a gap would put daylight either side of it and
+          turn one strip into five cells. */}
+      <div data-slot="capacity" className="grid grid-cols-5">
         <Stat label="Nodes" value={nodes.value} delta={nodes.caption} tone={nodes.tone} />
         <Stat label="Pods" value={pods.value} delta={pods.caption} tone={pods.tone} />
         {/* The one tile the design gives no caption: a namespace count has no
@@ -409,7 +472,7 @@ function Capacity({ overview }: { overview: OverviewData }) {
         <Stat label="CPU" value={cpu.value} delta={cpu.caption} tone={cpu.tone} />
         <Stat label="Memory" value={memory.value} delta={memory.caption} tone={memory.tone} />
       </div>
-    </Panel>
+    </Section>
   );
 }
 
@@ -519,12 +582,65 @@ function mib(value: number): string {
 
 /* ------------------------------------------------------------------- nodes */
 
+/**
+ * How many node rows this band draws before it stops.
+ *
+ * **A dashboard section is not an inventory.** The design's frame shows five
+ * rows; a live cluster the user ran this against has 113, and every one of
+ * them rendered — which pushed `Not ready`, the section that says what is
+ * actually wrong, entirely off the screen. `/k/nodes` is the screen for the
+ * whole list, and this one is a summary of it.
+ *
+ * Ten rather than five: five is the frame's own count on a 42-node cluster,
+ * and a summary that shows fewer rows than the design drew is its own
+ * regression on the ordinary case.
+ */
+const NODE_ROWS = 10;
+
+/**
+ * The order a summary of nodes has to be in: the ones worth looking at first.
+ *
+ * Alphabetical is what a list of 113 nodes arrives in, and the first ten of
+ * those tell a reader nothing — the cordoned node and the one at 94% are as
+ * likely to be at the end as anywhere. So the band sorts before it caps, and
+ * what it sorts by is:
+ *
+ * 1. **core's verdict**, through the same `nodeVerdict` the State column
+ *    draws — a NotReady node above a cordoned one above a healthy one. Not a
+ *    predicate of this file's: `SEVERITY` is the `Not ready` list's own order
+ *    over `HealthKind`, reused rather than restated.
+ * 2. **the hotter of its two readings**, so among nodes core is content with,
+ *    the one at 94% CPU comes before the one at 8%. A node with NO reading
+ *    sorts as `-1` — below every measured node rather than among the idle
+ *    ones — which is the rule the CPU column already sorts by.
+ * 3. **the name**, so the order is stable between renders.
+ *
+ * The reader can still sort the table by any column; that reorders the rows
+ * this chose, and the caption underneath says how many were chosen out of how
+ * many there are.
+ */
+function worstFirst(a: NodeRow, b: NodeRow): number {
+  const health = SEVERITY[nodeVerdict(a).health] - SEVERITY[nodeVerdict(b).health];
+  if (health !== 0) return health;
+  const load = hottest(b) - hottest(a);
+  if (load !== 0) return load;
+  return a.name.localeCompare(b.name);
+}
+
+/** The higher of a node's two readings, or `-1` when it reported neither. */
+function hottest(row: NodeRow): number {
+  return Math.max(row.usage.cpuPercent ?? -1, row.usage.memoryPercent ?? -1);
+}
+
 function Nodes({ context, nodes }: { context: string; nodes: OverviewNodes }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const rows: NodeRow[] = nodes.nodes.map(({ node, usage }) => ({ ...node, usage }));
+  const all: NodeRow[] = nodes.nodes.map(({ node, usage }) => ({ ...node, usage }));
+  // Sorted on a copy: `nodes.nodes` is the loader's array and shared with the
+  // capacity tiles, which count off it.
+  const rows = [...all].sort(worstFirst).slice(0, NODE_ROWS);
 
   // Stable, so the column set below is built once per context rather than per
   // render — `Table` re-sorts whenever its `columns` identity changes.
@@ -580,7 +696,7 @@ function Nodes({ context, nodes }: { context: string; nodes: OverviewNodes }) {
   }
 
   return (
-    <Panel title="Nodes">
+    <Section title="Nodes" smallCaps padded={false}>
       {nodes.status === "loading" ? (
         <LoadingState label="Loading nodes" />
       ) : nodes.error ? (
@@ -593,13 +709,31 @@ function Nodes({ context, nodes }: { context: string; nodes: OverviewNodes }) {
           onRetry={nodes.reload}
         />
       ) : (
-        <Table
-          columns={columns}
-          data={rows}
-          getRowKey={(row) => row.name}
-          emptyText="No nodes"
-          emptyHint={`Nothing in ${context} reported a node.`}
-        />
+        <>
+          <Table
+            columns={columns}
+            data={rows}
+            getRowKey={(row) => row.name}
+            emptyText="No nodes"
+            emptyHint={`Nothing in ${context} reported a node.`}
+          />
+          {/* A cap the reader cannot see is a lie by omission: the band would
+              look like the whole cluster. It says what it is showing, what it
+              chose them by, and offers the screen that has the rest. */}
+          {all.length > rows.length && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="ns-row rounded px-3 font-normal"
+              onClick={() => openTab("/k/nodes", { clusterName: context })}
+            >
+              <span className="flex min-w-0 flex-1 truncate text-faint">
+                {`Showing ${rows.length} of ${all.length} nodes, worst first`}
+              </span>
+              <span className="path">All nodes</span>
+            </Button>
+          )}
+        </>
       )}
       {pending && (
         <NodeConfirm
@@ -611,7 +745,7 @@ function Nodes({ context, nodes }: { context: string; nodes: OverviewNodes }) {
           onCancel={close}
         />
       )}
-    </Panel>
+    </Section>
   );
 }
 
@@ -636,14 +770,48 @@ function pool(node: NodeRow): string {
   return node.instanceType;
 }
 
+/**
+ * How much room a reading gets, whether or not there is one yet.
+ *
+ * `Meter`'s bar is `w-full`, which has no intrinsic width of its own, so a
+ * table cell sized by its content collapsed the column onto the percentage
+ * beside it and drew a 40px stub. At that size the tone is the one thing the
+ * column exists to show and the one thing nobody can see — 88% red and 41%
+ * green are two short marks. The design gives CPU and MEMORY a wide column
+ * each; ten rems is as much as this table can spare before the row scrolls
+ * sideways.
+ *
+ * **Declared on every cell, including the ones with no reading.** `Table`
+ * measures the natural column widths on the first render that has rows and
+ * PINS them (`table-layout: fixed` from then on), and the node list answers
+ * well before the metrics do — so the first render is all "No reading", and a
+ * width that arrived with the meters arrived after the columns had already
+ * been fixed at the width of those two words. The meters then drew straight
+ * across the columns beside them. Whatever the cell is going to hold, it asks
+ * for the same room from the start.
+ *
+ * On the CONTENT rather than on the column because that is what a table's auto
+ * layout reads: `Column.minWidth` is the floor a drag stops at, and it is not
+ * consulted when the browser sizes the columns.
+ */
+const READING_WIDTH = "min-w-[10rem]";
+
 /** The percentage a meter draws, or the words that say there is none. */
 function reading(percent: number | null, ariaLabel: string) {
-  if (percent === null) return NO_READING;
-  // Straight through, unrounded and uncapped. `Meter` clamps the bar it draws
-  // while keeping `aria-valuetext` truthful and rounds only what it shows, so
-  // rounding or clamping here would make a node at 140% indistinguishable
-  // from one exactly at its limit — hiding the case worth seeing.
-  return <Meter value={percent} ariaLabel={ariaLabel} />;
+  return (
+    <div className={READING_WIDTH}>
+      {percent === null ? (
+        NO_READING
+      ) : (
+        // Straight through, unrounded and uncapped. `Meter` clamps the bar it
+        // draws while keeping `aria-valuetext` truthful and rounds only what
+        // it shows, so rounding or clamping here would make a node at 140%
+        // indistinguishable from one exactly at its limit — hiding the case
+        // worth seeing.
+        <Meter value={percent} ariaLabel={ariaLabel} />
+      )}
+    </div>
+  );
 }
 
 /** `31/50`, or no reading — including for a node that reported no capacity. */
@@ -742,16 +910,24 @@ function nodeActions(context: string, row: NodeRow, open: (pending: Pending) => 
       ? {
           id: "uncordon",
           label: NODE_ACTION_LABEL.uncordon,
+          // The same glyph as `Cordon`, because it is the same switch: the
+          // label is what says which way it is being thrown, and a second
+          // picture for the reverse of one action is a second thing to read.
+          icon: Icons.cordon,
           onSelect: () => open({ type: "cordon", name: row.name, unschedulable: false }),
         }
       : {
           id: "cordon",
+          // The design's crossed circle — nothing new gets scheduled here.
           label: NODE_ACTION_LABEL.cordon,
+          icon: Icons.cordon,
           onSelect: () => open({ type: "cordon", name: row.name, unschedulable: true }),
         },
     {
       id: "drain",
       label: NODE_ACTION_LABEL.drain,
+      // The design's wave — everything flows off the node.
+      icon: Icons.drain,
       // Danger-toned because it is: every pod on the node is evicted.
       danger: true,
       onSelect: () => open({ type: "drain", name: row.name }),
@@ -917,7 +1093,7 @@ function NotReady({ context, overview }: { context: string; overview: OverviewDa
   };
 
   return (
-    <Panel title="Not ready">
+    <Section title="Not ready" smallCaps padded={false}>
       {workloads.status === "loading" || pods.status === "loading" ? (
         <LoadingState label="Checking workloads and pods" />
       ) : failures.length > 0 && rows.length === 0 ? (
@@ -961,7 +1137,7 @@ function NotReady({ context, overview }: { context: string; overview: OverviewDa
           )}
         </>
       )}
-    </Panel>
+    </Section>
   );
 }
 

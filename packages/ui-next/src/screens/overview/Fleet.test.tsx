@@ -10,7 +10,8 @@ vi.mock("@srelens/core", async (orig) => ({
   ...core,
 }));
 
-import type { ClusterContext } from "@srelens/core";
+import { scaledStatus, type ClusterContext } from "@srelens/core";
+import { statusTone, toneColor } from "@srelens/ui-kit";
 import { Fleet } from "./Fleet";
 
 function aContext(name: string): ClusterContext {
@@ -146,5 +147,81 @@ describe("Fleet", () => {
     await waitFor(() => expect(row("staging")).toBeTruthy());
     expect(document.querySelectorAll(".kv")).toHaveLength(2);
     expect(core.podCount).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The count's colour. §7 draws `1 284 / 1 310` in red beside `1 702 / 1 702`
+ * in green, and that is what makes the section scannable.
+ *
+ * Three states in the fixture, not one. A table that paired the wrong colour
+ * with the wrong state has passed a two-state suite before on this project,
+ * because the fixture only ever contained the case both readings agreed on.
+ */
+describe("Fleet's tone", () => {
+  const colour = (name: string) =>
+    row(name).querySelector<HTMLElement>(".kv-v span")?.style.color ?? "";
+
+  /** What core says about the same two numbers, read the way the screen reads it. */
+  const fromCore = (running: number, total: number) =>
+    statusTone(scaledStatus("Cluster", running, total).health);
+
+  it("takes the colour from core's verdict on the same two numbers", async () => {
+    core.podCount.mockImplementation((context: string) =>
+      Promise.resolve(
+        context === "prod-eu"
+          ? { counts: { running: 1284, total: 1310 } }
+          : context === "staging"
+            ? { counts: { running: 1702, total: 1702 } }
+            : // Every countable pod gone — `total` excludes `Succeeded`, so a
+              // cluster whose Jobs have all finished lands here. Core calls it
+              // neither well nor broken, and so does the row.
+              { counts: { running: 0, total: 0 } },
+      ),
+    );
+    render(<Fleet clusters={[PROD, STAGING, DR]} active={PROD} />);
+
+    await waitFor(() => expect(row("prod-eu").textContent).toContain("1284/1310 running"));
+
+    // Three distinct answers, so a single wrong pairing cannot pass by
+    // agreeing with the one case the fixture happens to contain.
+    expect(new Set([fromCore(1284, 1310), fromCore(1702, 1702), fromCore(0, 0)]).size).toBe(3);
+
+    expect(colour("prod-eu")).toBe(toneColor(fromCore(1284, 1310)));
+    expect(colour("staging")).toBe(toneColor(fromCore(1702, 1702)));
+    expect(colour("dr-us")).toBe(toneColor(fromCore(0, 0)));
+
+    // And what core actually says, spelled out: a shortfall is danger and a
+    // whole count is ok. Written as core's own constants rather than as
+    // literals, so this asserts the wiring and not a second copy of the rule.
+    expect(colour("prod-eu")).toBe(toneColor(statusTone("danger")));
+    expect(colour("staging")).toBe(toneColor(statusTone("success")));
+  });
+
+  it("names no colour of its own — every one is a token", async () => {
+    core.podCount.mockResolvedValue({ counts: { running: 3, total: 4 } });
+    render(<Fleet clusters={[PROD]} active={PROD} />);
+    await waitFor(() => expect(row("prod-eu").textContent).toContain("3/4 running"));
+
+    expect(colour("prod-eu")).toMatch(/^var\(--/);
+  });
+
+  it("keeps the figure in words, so the colour is never the only channel", async () => {
+    core.podCount.mockResolvedValue({ counts: { running: 1284, total: 1310 } });
+    render(<Fleet clusters={[PROD]} active={PROD} />);
+    await waitFor(() =>
+      expect(row("prod-eu").querySelector(".kv-v")?.textContent).toBe("1284/1310 running"),
+    );
+  });
+
+  it("colours nothing at all for a cluster that did not answer", async () => {
+    // There is no count to tone. A red "Unreachable" would be a judgement
+    // about a cluster nobody reached.
+    core.podCount.mockResolvedValue({ error: "pod count timed out" });
+    render(<Fleet clusters={[PROD]} active={PROD} />);
+    await waitFor(() => expect(row("prod-eu").textContent).toContain("Unreachable"));
+
+    expect(row("prod-eu").textContent).not.toContain("0/0");
+    expect(colour("prod-eu")).toBe("");
   });
 });
