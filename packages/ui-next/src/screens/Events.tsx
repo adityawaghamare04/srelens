@@ -8,10 +8,8 @@ import {
 } from "@srelens/core";
 import { useNamespaceOptions } from "@srelens/core/react";
 import {
-  Alert,
   Button,
   ColumnPicker,
-  ErrorState,
   Eyebrow,
   FilterBar,
   LiveSignal,
@@ -27,6 +25,7 @@ import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
 import { detailRoute } from "../lib/detailRoute";
+import { FailureAlert, FailureState } from "../lib/errorCopy";
 import { Icons } from "../lib/icons";
 import {
   EVENT_DESCRIPTOR,
@@ -349,18 +348,16 @@ function EventList({
           // table rather than inside it — a "these rows are stale" warning the
           // reader scrolls past no longer warns anyone. The table runs flush to
           // the panel, so the alert carries its own inset.
-          <Alert tone="warn" title={`These ${lower} are stale`} className="mx-3 mt-3 mb-3">
-            {list.error}
-          </Alert>
+          <FailureAlert title={`These ${lower} are stale`} error={list.error} className="mx-3 mt-3 mb-3" />
         )}
 
         <div className="scroll min-h-0 flex-1">
           {list.status === "loading" ? (
             <LoadingState label={`Loading ${lower}`} />
           ) : list.status === "error" ? (
-            <ErrorState
+            <FailureState
               title={`Could not list ${lower} on ${name}`}
-              detail={list.error}
+              error={list.error}
               onRetry={list.reload}
             />
           ) : (

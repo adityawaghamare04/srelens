@@ -74,6 +74,12 @@ const CTX: ClusterContext = {
 
 const ROUTE = "/overview";
 
+/** A 401 as `String(e)` over a `CapabilityError` actually delivers it. */
+const API_401 =
+  'Error: handler error: ApiError: Unauthorized: Unauthorized (Status { status: Some("Failure"), ' +
+  "metadata: Some(ListMeta { continue_: None, remaining_item_count: None, resource_version: None, " +
+  'self_link: None }), reason: Some("Unauthorized"), code: Some(401), message: Some("Unauthorized") })';
+
 function aNode(name: string, over: Partial<NodeSummary> = {}): NodeSummary {
   return {
     name,
@@ -113,14 +119,26 @@ function aPod(name: string, node: string, over: Partial<PodSummary> = {}): PodSu
  * that are not simply running. A fixture that starts from pods and derives all
  * three keeps the numbers in a test consistent with each other the way the
  * backend keeps them consistent on a real cluster.
+ *
+ * `unsettled` mirrors `crates/kube/src/pod_overview.rs`: the union of the
+ * `status.phase!=Running` field selector and every pod the printed pod table's
+ * READY column shows short of ready. It used to read `phase !== "Running" ||
+ * p.waitingReason`, which is a NARROWER list than the backend actually sends —
+ * a crash-looping pod between restarts has phase `Running` and no waiting
+ * reason, and the real `short_of_ready` still fetches it by name. Modelling
+ * the backend as narrower than it is hid the very pod this screen was losing.
  */
 function anOverview(pods: PodSummary[], over: Partial<PodOverview> = {}): PodOverview {
   const byNode = new Map<string, number>();
   for (const pod of pods) if (pod.node) byNode.set(pod.node, (byNode.get(pod.node) ?? 0) + 1);
+  const shortOfReady = (ready: string) => {
+    const [have, want] = ready.split("/").map(Number);
+    return !(have >= want);
+  };
   return {
     total: pods.length,
     byNode: [...byNode].map(([node, count]) => ({ node, pods: count })),
-    unsettled: pods.filter((p) => p.phase !== "Running" || p.waitingReason),
+    unsettled: pods.filter((p) => p.phase !== "Running" || shortOfReady(p.ready)),
     truncated: false,
     ...over,
   };
@@ -485,11 +503,65 @@ describe("Overview — the nodes table", () => {
     // The rows are still the ones the cluster last gave, not an error state.
     await waitFor(() => expect(rowFor("n1")).toBeTruthy());
     expect(value("Nodes")).toBe("3");
-    // And the screen says so, once, with what the cluster actually said.
+    // And the screen says so, once, in words the reader can act on — the
+    // sentence about the rows is this screen's and does not change, the
+    // reason under it is the classification, and what the cluster actually
+    // said is folded away rather than dropped.
     const notice = await waitFor(() => screen.getByText(/no longer refreshing/i));
     expect(notice).toBeTruthy();
-    expect(screen.getByText(/nodes is forbidden/)).toBeTruthy();
+    expect(screen.getByText(/Check your RBAC roles/)).toBeTruthy();
+    const folded = document.querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.textContent).toContain("nodes is forbidden");
     clock.mockRestore();
+  });
+
+  /**
+   * The rail is 286px wide, and every one of these rows used to print a
+   * whole apiserver `Status { … }` into it.
+   */
+  it("says why a count is missing in a phrase, not in the apiserver's struct", async () => {
+    // `listResource` is called with the kind LABEL, which is what the rail
+    // prints — `COUNTED_BY_LISTING` is CronJob and Job.
+    core.listResource.mockImplementation(async (_c: string, kind: string) =>
+      kind === "Job" ? { error: API_401 } : { items: [] },
+    );
+    open();
+
+    const row = await waitFor(() => screen.getByText(/Could not count Job/));
+    // The copy, with the folded-away original taken out: a closed `details`
+    // keeps its content in the DOM — that is what makes it a disclosure and
+    // not a deletion — so reading straight through `textContent` would pass
+    // whether or not the struct was being printed at the reader.
+    const copy = row.cloneNode(true) as HTMLElement;
+    copy.querySelector('[data-slot="raw"]')?.remove();
+    expect(copy.textContent).toBe("Could not count Job: Not authorized");
+    // Still reachable, still closed, still nowhere near an attribute.
+    const folded = row.querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.textContent).toContain("ListMeta");
+    for (const node of Array.from(row.querySelectorAll("*"))) {
+      for (const attribute of Array.from(node.attributes)) {
+        expect(attribute.value).not.toContain("ListMeta");
+      }
+    }
+  });
+
+  it("says one outage once when it refused every kind at the same time", async () => {
+    // Six kinds behind one expired credential is one problem. Repeating the
+    // same sentence six times says it six times and explains it nowhere.
+    core.listNodes.mockResolvedValue({ error: API_401 });
+    core.podOverview.mockResolvedValue({ error: API_401 });
+    core.listDeployments.mockResolvedValue({ error: API_401 });
+    core.listStatefulSets.mockResolvedValue({ error: API_401 });
+    core.listDaemonSets.mockResolvedValue({ error: API_401 });
+    open();
+
+    const card = await waitFor(() => screen.getByText(/Could not check every workload/));
+    const detail = card.parentElement?.querySelector('[data-slot="detail"]');
+    expect(detail?.textContent).toBe(
+      "The cluster rejected your credentials. Your token or client certificate may have expired — refresh your kubeconfig credentials and try again.",
+    );
   });
 });
 
@@ -713,6 +785,62 @@ describe("Overview — the not-ready list", () => {
         expect(pill?.getAttribute("data-bad"), name).toBe("true");
       }
     }
+  });
+
+  it("holds a crash-looping pod in the list through the instant it is not backing off", async () => {
+    // The flicker, at the screen it was observed on. `aa-worker-0` is the same
+    // pod as in the fixture above with one field changed — the waiting reason
+    // the kubelet stops reporting while the container is briefly up. Nothing
+    // else about the pod moves: still 0/1 ready, still 41 restarts, still
+    // phase "Running". Two of four consecutive screenshots of this list caught
+    // it and two did not.
+    const between = SICK_PODS.map((p) =>
+      p.name === "aa-worker-0" ? { ...p, waitingReason: "", restarts: 41 } : p,
+    );
+    core.listDeployments.mockResolvedValue({ deployments: SICK_DEPLOYMENTS });
+    core.listStatefulSets.mockResolvedValue({ statefulsets: SICK_STATEFULSETS });
+    core.listDaemonSets.mockResolvedValue({ daemonsets: SICK_DAEMONSETS });
+    core.podOverview.mockResolvedValue({ pods: anOverview(between) });
+    open();
+
+    // Same six rows, same order: the pod holds its place at the top of the
+    // danger band rather than vanishing and re-appearing under the reader.
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+    expect(notReadyNames()).toEqual([
+      "aa-worker-0",
+      "cc-log-agent",
+      "mm-payments-db",
+      "zz-checkout-api",
+      "bb-queue-0",
+      "dd-mystery-0",
+    ]);
+    const row = notReadyRow("aa-worker-0")!;
+    expect(row.querySelector(".status")?.getAttribute("data-kind")).toBe("danger");
+    expect(row.querySelector(".status")?.textContent).toBe("NotReady");
+
+    // And the two pods that must NOT be dragged in with it, both of which are
+    // also short of ready: one finished, one never started.
+    expect(notReadyRow("done-backup-0")).toBeUndefined();
+    expect(notReadyRow("ok-web-0")).toBeUndefined();
+  });
+
+  it("counts that pod in the pods tile too, at the same severity", async () => {
+    // The tile reads `podFlagged` over the same list, so a pod that fell out
+    // of the rows fell out of the count and its colour with it — "4 not ready"
+    // one second and "3 not ready" the next, on an unchanged cluster.
+    const between = SICK_PODS.map((p) =>
+      p.name === "aa-worker-0" ? { ...p, waitingReason: "", restarts: 41 } : p,
+    );
+    core.podOverview.mockResolvedValue({ pods: anOverview(between) });
+    core.listDeployments.mockResolvedValue({ deployments: SICK_DEPLOYMENTS });
+    core.listStatefulSets.mockResolvedValue({ statefulsets: SICK_STATEFULSETS });
+    core.listDaemonSets.mockResolvedValue({ daemonsets: SICK_DAEMONSETS });
+    open();
+
+    await waitFor(() => expect(notReadyNames()).toHaveLength(6));
+    // Three pods flagged — the crash-looper, the Pending one and the one in a
+    // phase core cannot read — and NOT the Succeeded or the healthy one.
+    expect(screen.getByText("3 not ready")).toBeTruthy();
   });
 
   it("names every trailing fact, so a reader hears more than 'checkout 9/12'", async () => {

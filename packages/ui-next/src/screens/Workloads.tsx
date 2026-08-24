@@ -13,7 +13,6 @@ import {
 } from "@srelens/core";
 import { useNamespaceOptions } from "@srelens/core/react";
 import {
-  Alert,
   ColumnPicker,
   FilterBar,
   LiveSignal,
@@ -32,6 +31,7 @@ import { useConsole } from "../console";
 import { getKubeconfigFiles, useActiveContext } from "../lib/clusters";
 import { useHiddenColumns } from "../lib/columnPrefs";
 import { detailRoute } from "../lib/detailRoute";
+import { FailureAlert } from "../lib/errorCopy";
 import {
   cronJobVerdict,
   daemonSetVerdict,
@@ -162,7 +162,7 @@ function fromPod(row: ListRow): WorkloadRow {
   // its own unhealthy dot — which comes from `podFlagged`, which asks this
   // same function. One reading, so the dot and the word cannot disagree.
   return {
-    ...fromVerdict(p, "Pod", p.ready, podStatus(p.phase, p.waitingReason)),
+    ...fromVerdict(p, "Pod", p.ready, podStatus(p)),
     restarts: p.restarts,
     cpu: p.cpu,
     memory: p.memory,
@@ -472,24 +472,20 @@ function WorkloadList({
               that failed or went stale; a banner that scrolls away with the
               rows no longer warns anyone. */}
           {failed.map((k) => (
-            <Alert
+            <FailureAlert
               key={k.key}
-              tone="warn"
               title={`Could not list ${k.label.toLocaleLowerCase()}s`}
+              error={k.list.error}
               className="mx-3 mt-3 mb-3"
-            >
-              {k.list.error}
-            </Alert>
+            />
           ))}
           {stale.map((k) => (
-            <Alert
+            <FailureAlert
               key={k.key}
-              tone="warn"
               title={`These ${k.label.toLocaleLowerCase()}s are stale`}
+              error={k.list.error}
               className="mx-3 mt-3 mb-3"
-            >
-              {k.list.error}
-            </Alert>
+            />
           ))}
           <div className="scroll min-h-0 flex-1">
             <Table

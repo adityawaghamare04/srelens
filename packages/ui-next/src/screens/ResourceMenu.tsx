@@ -4,6 +4,7 @@ import {
   cronjobSetSuspend,
   cronjobTriggerNow,
   deleteResource,
+  describeError,
   evictPod,
   notify,
   rolloutRestart,
@@ -13,6 +14,7 @@ import {
 } from "@srelens/core";
 import { ConfirmDialog, KubectlPreview, TextInput, type ContextMenuItem } from "@srelens/ui-kit";
 import { detailRoute } from "../lib/detailRoute";
+import { FailureLine } from "../lib/errorCopy";
 import { Icons } from "../lib/icons";
 import { ROW_ACTION_LABEL } from "../lib/kinds/rowActions";
 import type { KindActions, ListRow } from "../lib/kinds/types";
@@ -87,7 +89,10 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
   async function runNow(row: ListRow) {
     const out = await cronjobTriggerNow(context, row.namespace ?? "", row.name);
     if (out.error) {
-      notify.error(`Failed to run ${row.name}`, out.error);
+      // The same shape core's own `reportActionError` gives classic's toasts:
+      // a toast is read once, in passing, and a Rust struct in one is noise
+      // nobody can act on before it fades.
+      notify.error(`Failed to run ${row.name}`, describeError(out.error).detail);
       return;
     }
     notify.success(`Triggered ${row.name}`, out.jobName ? `Created job ${out.jobName}` : undefined);
@@ -359,7 +364,12 @@ function PendingDialog({
             />
           )}
           <KubectlPreview command={command} note={note} onCopy={command ? () => void copyKubectlCommand(command) : undefined} />
-          {error && <p style={{ color: "var(--sev)" }}>Error: {error}</p>}
+          {/* The dialog stays open on a refusal rather than closing as if the
+              write had happened, so this line is the whole of what the reader
+              is told about why. A validation message this component wrote
+              itself ("Enter a non-negative replica count.") matches no
+              classification and arrives exactly as written. */}
+          {error && <FailureLine error={error} className="text-sev" />}
         </>
       }
     />

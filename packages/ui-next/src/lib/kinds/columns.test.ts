@@ -151,6 +151,44 @@ describe("pod columns", () => {
     expect(pill.props.kind).toBe("danger");
   });
 
+  it("keeps flagging that same pod in the instant it is BETWEEN restarts", () => {
+    // The second moment of the very pod above, and the one no fixture in this
+    // repo used to hold: the container is briefly up, so the kubelet reports
+    // no waiting reason at all and the phase is still "Running". The row used
+    // to lose its dot for that instant and get it back a moment later — on a
+    // real cluster, two of four consecutive screenshots.
+    //
+    // Only `waitingReason` differs from the row above. The ready ratio and the
+    // restart count do not move between the two moments, which is exactly why
+    // the verdict is now derived from them.
+    const between = { name: "checkout-api-7d", namespace: "d", phase: "Running", ready: "0/1", restarts: 7, node: "n", age: "1d", image: "acme/checkout-api:4f2a1c", waitingReason: "" };
+    expect(podFlagged(between)).toBe(true);
+    const phase = podColumns.find((c) => c.key === "phase")!;
+    const pill = phase.render!(between) as { props: { status: string; kind: string } };
+    expect(pill.props.status).toBe("NotReady");
+    expect(pill.props.kind).toBe("danger");
+    // The dot and the tone are what must not move; the word legitimately does,
+    // because between restarts there is no reason for the kubelet to name.
+    const backingOff = { ...between, waitingReason: "CrashLoopBackOff" };
+    expect(podFlagged(backingOff)).toBe(podFlagged(between));
+    const other = phase.render!(backingOff) as { props: { status: string; kind: string } };
+    expect(other.props.kind).toBe(pill.props.kind);
+  });
+
+  it("does not flag a pod that is merely starting up, restarts or no ready containers yet", () => {
+    // The other half of the same rule, and the reason the restart count is
+    // read at all: a container two seconds old that has not yet passed its
+    // readiness probe is a normal pod mid-rollout, not a failing one. A row
+    // carries no clock, so having died at least once is the only evidence in
+    // the snapshot that separates them.
+    const starting = { name: "web-9", namespace: "d", phase: "Running", ready: "0/1", restarts: 0, node: "n", age: "2s", image: "redis:7.4-alpine", waitingReason: "" };
+    expect(podFlagged(starting)).toBe(false);
+    const phase = podColumns.find((c) => c.key === "phase")!;
+    const pill = phase.render!(starting) as { props: { status: string; kind: string } };
+    expect(pill.props.status).toBe("Running");
+    expect(pill.props.kind).toBe("success");
+  });
+
   it("shows an image-pull failure the same way, and sorts the column on what it shows", () => {
     const pulling = { name: "web-0", namespace: "d", phase: "Pending", ready: "0/1", restarts: 0, node: "n", age: "1d", image: "acme/missing:1", waitingReason: "ImagePullBackOff" };
     const phase = podColumns.find((c) => c.key === "phase")!;

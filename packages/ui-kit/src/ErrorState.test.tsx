@@ -126,4 +126,34 @@ describe("ErrorState", () => {
     const { container } = render(<ErrorState title="Could not load pods" detail={false} />);
     expect(container.querySelector('[data-slot="detail"]')).toBeNull();
   });
+
+  it("folds the original message away under the detail rather than dropping it", () => {
+    const raw = "ApiError: Unauthorized (Status { code: Some(401) })";
+    const { container } = render(
+      <ErrorState
+        title="Could not list pods on prod-eu"
+        detail="The cluster rejected your credentials."
+        raw={raw}
+      />,
+    );
+    const disclosure = container.querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(disclosure).not.toBeNull();
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.textContent).toContain(raw);
+    // And nowhere in an attribute — the rule PairList and KV settled. (#331)
+    for (const node of Array.from(container.querySelectorAll("*"))) {
+      for (const attribute of Array.from(node.attributes)) {
+        expect(attribute.value).not.toContain(raw);
+      }
+    }
+  });
+
+  it("shows no disclosure when the detail IS the original message", () => {
+    // A caller whose `describeError` fell through to the generic case has the
+    // same string in both fields; drawing it twice reads as two problems.
+    const { container } = render(
+      <ErrorState title="Could not load pods" detail="connection refused" />,
+    );
+    expect(container.querySelector('[data-slot="raw"]')).toBeNull();
+  });
 });

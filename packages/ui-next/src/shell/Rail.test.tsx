@@ -70,10 +70,33 @@ describe("Rail", () => {
     expect(activeCluster()).toBe("staging");
   });
 
-  it("says why a cluster is out of reach in its name", () => {
-    setLink("prod-eu", "error", "connection refused");
+  it("says why a cluster is out of reach in its name, classified rather than quoted", () => {
+    setLink("prod-eu", "error", "dial tcp 10.1.2.3:6443: connect: connection refused");
     setup();
-    expect(screen.getByRole("button", { name: "prod-eu, connection refused" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "prod-eu, Can't reach the cluster" })).toBeDefined();
+  });
+
+  it("never reads a cluster's raw refusal out as the name of a button", () => {
+    // The rail is 46px wide and this string is not drawn — it joins the mark's
+    // accessible name. What was reaching a screen reader was three hundred
+    // characters of `Status { metadata: Some(ListMeta { … })` announced as the
+    // name of a button; two words say the same thing. (The original is not
+    // lost — the overview's Fleet row for this cluster has it.)
+    setLink(
+      "prod-eu",
+      "error",
+      'Error: handler error: ApiError: Unauthorized: Unauthorized (Status { code: Some(401), ' +
+        "metadata: Some(ListMeta { continue_: None, resource_version: None }) })",
+    );
+    setup();
+    expect(screen.getByRole("button", { name: "prod-eu, Not authorized" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /ListMeta/ })).toBeNull();
+  });
+
+  it("still says something for a failure that arrived with no message", () => {
+    setLink("prod-eu", "error", "");
+    setup();
+    expect(screen.getByRole("button", { name: "prod-eu, Unreachable" })).toBeDefined();
   });
 
   it("opens a context menu on the menu gesture, not a drawer", async () => {

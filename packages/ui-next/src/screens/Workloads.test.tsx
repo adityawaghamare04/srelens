@@ -165,6 +165,29 @@ describe("Workloads", () => {
     expect(within(row).queryByText("Running")).toBeNull();
   });
 
+  it("keeps that same pod flagged in the instant it is between restarts", async () => {
+    // The moment the row above never modelled: no waiting reason, phase still
+    // "Running", ready still 0/1. The row used to drop its dot and read a
+    // plain green "Running" until the container failed again.
+    watchResource.mockImplementation(
+      async (_c: string, _n: string, kind: string, onRows: (rows: unknown[]) => void) => {
+        onRows(
+          kind === "pods"
+            ? [{ name: "web-1", namespace: "default", phase: "Running", ready: "0/1", restarts: 7, node: "n1", age: "2d", image: "acme/web:1", waitingReason: "" }]
+            : [],
+        );
+        return { stop };
+      },
+    );
+    open();
+
+    await waitFor(() => expect(rowNames()).toEqual(["Needs attentionweb-1"]));
+    const row = screen.getByText("web-1").closest("tr")!;
+    expect(within(row).getByText("Needs attention")).toBeTruthy();
+    expect(within(row).getByText("NotReady")).toBeTruthy();
+    expect(within(row).queryByText("Running")).toBeNull();
+  });
+
   it("leaves a healthy pod reading its phase", async () => {
     open();
     await waitFor(() => expect(rowNames()).toHaveLength(5));
@@ -276,7 +299,10 @@ describe("Workloads", () => {
     open();
 
     expect(await screen.findByText("Namespaces could not be listed")).toBeTruthy();
-    expect(screen.getByText("namespaces: etcd timeout")).toBeTruthy();
+    expect(screen.getByText(/didn't respond in time/)).toBeTruthy();
+    expect(document.querySelector('[data-slot="raw"]')?.textContent).toContain(
+      "namespaces: etcd timeout",
+    );
     expect(screen.getByRole("combobox", { name: "Namespaces" })).toBeTruthy();
     await waitFor(() => expect(rowNames()).toHaveLength(5));
   });
@@ -310,6 +336,13 @@ describe("Workloads", () => {
     expect(within(scrollBody).queryByText(/could not list deployments/i)).toBeNull();
     // Still rendered — pinned above the scrolling body, not gone.
     expect(screen.getByText(/could not list deployments/i)).toBeTruthy();
+    // And the kind that refused says what to do about it, not what the
+    // apiserver called it. Four kinds still answered; this is a banner over
+    // real rows, so it stays a warning rather than becoming an error state.
+    expect(screen.getByText(/Check your RBAC roles/)).toBeTruthy();
+    expect(document.querySelector('[data-slot="raw"]')?.textContent).toContain(
+      "forbidden: cannot list deployments",
+    );
   });
 
   // A union row's actions differ by kind — this is the per-row correctness

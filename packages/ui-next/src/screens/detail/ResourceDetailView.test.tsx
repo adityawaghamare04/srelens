@@ -1070,6 +1070,19 @@ describe("ResourceDetailView", () => {
       await waitFor(() => expect(getByRole("alert")).toBeDefined());
       expect(documentContains(FIXTURE_B64)).toBe(false);
       expect(container.querySelector(".cm-content")).toBeNull();
+
+      // The redactor's refusals are this package's own careful sentences, and
+      // they are careful precisely because no error message here may quote the
+      // source it failed on. They are not cluster errors and match no
+      // classification, so routing this pane through `describeError` must
+      // leave them exactly as written — and, because the pane keeps its own
+      // title, the reader is never told "Something went wrong" about them.
+      const alert = getByRole("alert");
+      expect(alert.textContent).toContain("Could not load Secret default/s-1's manifest");
+      expect(alert.textContent).toContain("it could not be parsed");
+      expect(alert.textContent).not.toContain("Something went wrong");
+      // Nothing was reformatted into a second copy of anything, either.
+      expect(alert.querySelector('[data-slot="raw"]')).toBeNull();
     });
 
     it("leaves a non-Secret kind's manifest untouched, with no redaction notice", async () => {

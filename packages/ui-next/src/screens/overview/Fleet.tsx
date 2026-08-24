@@ -1,5 +1,6 @@
 import { podCount, scaledStatus, type ClusterContext, type PodCount } from "@srelens/core";
 import { KV, Spinner, statusTone, toneColor } from "@srelens/ui-kit";
+import { FailureWord } from "../../lib/errorCopy";
 import { useResource, type Resource } from "../../lib/useResource";
 import { LINK_WORD } from "../../lib/workspace";
 
@@ -126,7 +127,15 @@ function Reading({
             reach, from the same table — a second word for the same fact is
             how two readouts of one cluster start disagreeing. */}
         {LINK_WORD.error}
-        <span className="block text-faint">{counts.error}</span>
+        {/* And under it, WHY, in one line. This row is 286px wide and used to
+            print the apiserver's whole `Status { … }` struct into it: a dozen
+            wrapped lines that pushed every cluster below it off the rail, so
+            one unreachable cluster hid the nine that answered — the exact
+            failure this section is built to prevent, arriving through the
+            copy instead of through the fetch. The headline is what fits; the
+            struct is still one click away, which is what someone filing a bug
+            actually needs. */}
+        <FailureWord error={counts.error} className="text-faint" />
       </>
     );
   }

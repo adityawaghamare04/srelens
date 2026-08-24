@@ -310,6 +310,50 @@ describe("PodDetailsBody", () => {
       expect(screen.queryByText("Running")).toBeNull();
     });
 
+    it("keeps the header's word off the phase between restarts, when there is no reason to show", () => {
+      // The same pod a moment later: the container is genuinely running, so
+      // there is no waiting reason on the object at all — only `ready: false`
+      // and a restart count. The header used to read a plain "Running" here
+      // while the pod was still failing every few seconds.
+      renderFacts(
+        pod(
+          { containers: [APP_CONTAINER] },
+          {
+            phase: "Running",
+            containerStatuses: [
+              {
+                name: "app",
+                ready: false,
+                restartCount: 7,
+                state: { running: { startedAt: "2026-08-24T13:28:18Z" } },
+                lastState: { terminated: { exitCode: 1, reason: "Error" } },
+              },
+            ],
+          },
+        ),
+      );
+      expect(screen.getByText("NotReady")).toBeDefined();
+      expect(screen.queryByText("Running")).toBeNull();
+    });
+
+    it("still reads a pod that has simply not become ready yet as Running", () => {
+      // The carve-out, at the header: no restarts, so nothing says this is
+      // failure rather than a container that started two seconds ago.
+      renderFacts(
+        pod(
+          { containers: [APP_CONTAINER] },
+          {
+            phase: "Running",
+            containerStatuses: [
+              { name: "app", ready: false, restartCount: 0, state: { running: { startedAt: "2026-08-24T13:28:18Z" } } },
+            ],
+          },
+        ),
+      );
+      expect(screen.getByText("Running")).toBeDefined();
+      expect(screen.queryByText("NotReady")).toBeNull();
+    });
+
     it("shows the remaining facts as plain text, with nothing that navigates", () => {
       renderFacts(FULL_POD);
       expect(screen.getByText("default")).toBeDefined();

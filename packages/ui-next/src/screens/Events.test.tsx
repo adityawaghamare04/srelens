@@ -390,8 +390,14 @@ describe("Events", () => {
     await waitFor(() => expect(watchResource).toHaveBeenCalledTimes(1));
     await act(async () => stream.error("watch closed: 401"));
 
+    // The screen's own title, which names WHAT failed, plus the
+    // classification, which says what to do about it. The watch's own words
+    // are folded away rather than dropped.
     expect(screen.getByText("Could not list events on prod-eu")).toBeTruthy();
-    expect(screen.getByText("watch closed: 401")).toBeTruthy();
+    expect(screen.getByText(/rejected your credentials/)).toBeTruthy();
+    const folded = document.querySelector('[data-slot="raw"]') as HTMLDetailsElement;
+    expect(folded.open).toBe(false);
+    expect(folded.textContent).toContain("watch closed: 401");
 
     initialRows = EVENTS;
     await user.click(screen.getByRole("button", { name: "Retry" }));

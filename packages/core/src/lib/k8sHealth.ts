@@ -18,8 +18,14 @@ export type HealthKind = "neutral" | "success" | "warning" | "danger" | "info";
  * either design passes the result straight into its own pill.
  *
  * `Ready`/`NotReady` are here because a Node reports readiness where a Pod
- * reports a phase, and both go through this one table; a Pod never reports
- * either, and a Node never reports `Running`.
+ * reports a phase, and both go through this one table; a Node never reports
+ * `Running`.
+ *
+ * `NotReady` is no longer a Node's word alone. `podStatus` reaches for it for
+ * a pod that is up and short of ready — a crash-looper caught between
+ * restarts, which the API gives no phase and no waiting reason for — because
+ * the fact is the same fact, and a second word for it would be a second
+ * entry in this table to keep in step with the first.
  */
 export function phaseKind(phase: string): HealthKind {
   switch (phase) {
@@ -58,8 +64,31 @@ export interface Condition {
  * ReplicaSet's `ReplicaFailure`, a Namespace's three `…Failure` conditions,
  * and a Job's `FailureTarget` — painting a healthy `ReplicaFailure: False`
  * red, which is what the design mock caught.
+ *
+ * The alternatives after `Dangling` are the second round of the same lesson.
+ * `Error` and `Remaining` are families for the same reason `Fail` is —
+ * `Error` covers a PVC's `ControllerResizeError`, `NodeResizeError` AND its
+ * `ModifyVolumeError`, and `Remaining` covers a Namespace's
+ * `NamespaceContentRemaining` and `NamespaceFinalizersRemaining`, the two the
+ * `Fail` round left behind on the very resource it fixed (the namespace
+ * controller sets both `True` while deletion is blocked, and `False` with
+ * "All content successfully removed" once it is not). The other three are
+ * single types because nothing conjugates them: `Degraded` is the one
+ * condition in the KEP-1623 vocabulary whose `True` is the bad state,
+ * `DisruptionTarget` says a pod is about to be evicted, and `Denied` on a
+ * CertificateSigningRequest says the request was refused.
+ *
+ * **A substring is a claim about every type that contains it**, which is the
+ * cost of the family form and the reason one candidate is deliberately NOT
+ * here. kstatus's (and Flux's) `Stalled` is exactly this shape — `True` means
+ * reconciliation has given up — but "Installed" CONTAINS "stalled"
+ * (i-n-**s-t-a-l-l-e-d**), so adding it would paint every operator's
+ * `Installed: True` red: the same inversion this constant keeps being fixed
+ * for, pointed the other way. Landing `Stalled` needs a whole-type match
+ * rather than a substring one, and no type in srelens's reach needs it yet.
+ * The test file's `POLARITY` table holds `Installed` as a live guard.
  */
-const NEGATIVE_CONDITION = /Pressure|Unavailable|Fail|Dangling/i;
+const NEGATIVE_CONDITION = /Pressure|Unavailable|Fail|Dangling|Error|Remaining|Degraded|DisruptionTarget|Denied/i;
 
 /**
  * A condition's tone from its type and status alone. The rule both designs
