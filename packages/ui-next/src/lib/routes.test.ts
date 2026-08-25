@@ -5,6 +5,7 @@ import { AppLog } from "../screens/AppLog";
 import { Events } from "../screens/Events";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { Overview } from "../screens/Overview";
+import { Logs, logsRoute } from "../screens/Logs";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
 import { Workloads } from "../screens/Workloads";
 
@@ -88,6 +89,23 @@ suite("describe", () => {
     expect(describe("/resources/web-1", "c")).toMatchObject({ title: "web-1", kind: "resource", sub: "c" });
   });
 
+  it("names a logs tab after its subject, not after the raw route", () => {
+    // `/logs/<kind>/<namespace>/<name>` is four segments deep and matched by
+    // none of the exact tables, so without this it fell to the last-resort
+    // branch and titled itself "logs/Deployment/checkout/checkout-api" under
+    // the control-room icon — the one screen on the strip whose tab could not
+    // say which workload it was streaming.
+    expect(describe(logsRoute("Deployment", "checkout", "checkout-api"), "c")).toMatchObject({
+      title: "checkout-api · logs",
+      kind: "logs",
+      sub: "c",
+    });
+    // Percent-encoded on the way in, so the title is the decoded name.
+    expect(describe(logsRoute("Pod", "kube-system", "weird/name"), "c").title).toBe("weird/name · logs");
+    // The bare route keeps the plain title the sidebar's vocabulary gives it.
+    expect(describe("/logs", "c")).toMatchObject({ title: "Logs", kind: "logs", sub: "c" });
+  });
+
   it("names an edit tab after what it edits", () => {
     expect(describe("/edit/web-1", "c")).toMatchObject({ title: "Edit web-1", kind: "edit" });
   });
@@ -130,6 +148,24 @@ suite("screenFor", () => {
     // the tree — the one a reader clicks before anything else — lands on the
     // Placeholder while the screen sits there finished.
     expect(screenFor("/overview")).toBe(Overview);
+  });
+
+  it("resolves both shapes of the logs route to the Logs screen", () => {
+    // The bare route is the empty state that asks for a subject; the deep one
+    // is a stream. One screen answers both, because `parseLogsRoute` is what
+    // tells them apart and it lives inside it.
+    expect(screenFor("/logs")).toBe(Logs);
+    expect(screenFor(logsRoute("Deployment", "checkout", "checkout-api"))).toBe(Logs);
+    expect(screenFor(logsRoute("Pod", "kube-system", "weird/name"))).toBe(Logs);
+  });
+
+  it("leaves the row menu's older /resources/<name>/logs shape on the Placeholder", () => {
+    // `ResourceMenu.tsx` still mints this shape, and it carries neither a kind
+    // nor a namespace — so it cannot resolve a subject and must NOT be routed
+    // to Logs, which would strand the reader on an unresolvable stream instead
+    // of the Placeholder that says the screen is not wired up. Reconciling the
+    // two shapes is its own step; this pins the dead end as a known one.
+    expect(screenFor("/resources/web-1/logs")).toBeNull();
   });
 
   it("resolves /k/events to the Events screen rather than the generic resource list", () => {
@@ -185,7 +221,7 @@ suite("screenFor", () => {
   it("still refuses a route with no screen", () => {
     // `/k/` on its own names no kind, so it is not a route: a prefix that
     // matched itself would render the list screen with an empty slug.
-    for (const route of ["/topology", "/k/", "constructor"]) {
+    for (const route of ["/topology", "/k/", "/logs/", "constructor"]) {
       expect(screenFor(route), route).toBeNull();
     }
   });

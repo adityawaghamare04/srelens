@@ -211,6 +211,11 @@ export const PORTED_SCREENS: ReadonlyArray<{ route: string; name: string }> = [
   // control room: it is the cluster's own front page — the capacity strip, the
   // nodes table, the unhealthy list and the At a glance rail.
   { route: "/overview", name: "Cluster overview" },
+  // A live stream rather than a view of a list: `/logs` tails every container
+  // behind a workload, or one pod, and keeps tailing after you switch tabs.
+  // Its deeper `/logs/<kind>/<namespace>/<name>` shape is the same screen with
+  // a subject in it, so "/logs" names both here.
+  { route: "/logs", name: "Logs" },
 ];
 
 /**

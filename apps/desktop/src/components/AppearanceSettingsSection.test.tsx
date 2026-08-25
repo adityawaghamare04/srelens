@@ -65,6 +65,15 @@ describe("AppearanceSettingsSection", () => {
     expect(items).toContain("Cluster overview");
   });
 
+  it("lists Logs, which is a live stream and not one of the kind lists", () => {
+    // `/logs` tails a workload's pods or one pod: its own screen, its own
+    // route shape, and the one that keeps running after you switch away from
+    // it. Someone weighing the toggle is weighing this in particular.
+    render(<AppearanceSettingsSection />);
+    const items = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(items).toContain("Logs");
+  });
+
   it("introduces the list, so the names are not a bare list under the hint", () => {
     render(<AppearanceSettingsSection />);
     expect(screen.getByText(/in the new design so far/i)).toBeDefined();
