@@ -350,6 +350,21 @@ describe("the logs route", () => {
     expect(parseLogsRoute("/logs/checkout")).toBeNull();
     expect(parseLogsRoute("/k/pods/checkout/api-7")).toBeNull();
   });
+
+  it("refuses a segment that cannot be decoded, rather than throwing", () => {
+    // `decodeURIComponent` THROWS on a malformed escape, and this parser runs
+    // during render on every restored tab — `describe` and `screenFor` both
+    // call it, and tab routes are persisted. One corrupted route in storage
+    // would take the whole window down on boot. "Unrecognised route" is
+    // already a normal outcome of this function; a bad escape is one more of
+    // them, not a new path.
+    expect(parseLogsRoute("/logs/Pod/checkout/%zz")).toBeNull();
+    expect(parseLogsRoute("/logs/%e0%a4%a/checkout/api-7")).toBeNull();
+    expect(parseLogsRoute("/logs/Pod/%/api-7")).toBeNull();
+    // The last segment decodes fine; the parser must still refuse the route
+    // rather than returning a half-decoded subject.
+    expect(parseLogsRoute("/logs/Pod/%zz/api-7")).toBeNull();
+  });
 });
 
 describe("Logs", () => {
@@ -421,6 +436,26 @@ describe("Logs", () => {
     expect(rendered(region)).toEqual(["|api-7 · api||a line with no timestamp on it"]);
   });
 
+  it("names a target carrying no container by its pod alone, separator and all", async () => {
+    // `LogTarget.container` is optional: a stream can be opened against a pod
+    // and let the API pick its only container. There is then no container
+    // name to say — and a gutter that draws the separator anyway prints
+    // `api-7 · `, which an export turns into `api-7/ | …`. Both read as a
+    // truncated fact rather than an absent one.
+    h.resolve.mockResolvedValue({
+      status: "resolved",
+      targets: [{ pod: "api-7", label: "" }],
+      pods: [{ name: "api-7", health: "success" }],
+      previous: [],
+    });
+    const region = await (draw(logsRoute("Pod", "checkout", "api-7")), body());
+    push({ source: "", text: "a line from a container nobody named" });
+    expect(rendered(region)).toEqual(["|api-7||a line from a container nobody named"]);
+
+    // And nothing to filter by, so the select is not offered at all.
+    expect(screen.queryByRole("combobox", { name: /container/i })).toBeNull();
+  });
+
   it("filters on the message and on the severity word, either case", async () => {
     const region = await (draw(), body());
     push(...LINES);
@@ -441,6 +476,84 @@ describe("Logs", () => {
     push(...LINES);
     await userEvent.selectOptions(screen.getByRole("combobox", { name: /container/i }), "otel-sidecar");
     expect(rendered(region).map((r) => r.split("|")[3])).toEqual(["warn exporter queue is full"]);
+  });
+
+  it("filters by container when the label names the pod alone", async () => {
+    // The ORDINARY workload: a Deployment with three replicas of one
+    // container. Every in-scope target shares that container name, so
+    // `resolveLogSubject` labels each line with the POD ALONE — naming the
+    // container on every row would repeat one word down the whole gutter.
+    //
+    // That is a decision about the DISPLAY. The container is still a fact
+    // about the line, and the select is populated from the targets, which
+    // carry it. Recovering the container by splitting the label finds no
+    // slash, calls it `""`, and then picking `web` from the dropdown matches
+    // no row at all: the screen goes blank on the commonest case there is.
+    h.resolve.mockResolvedValue({
+      status: "resolved",
+      targets: [
+        { pod: "web-0", container: "web", label: "web-0" },
+        { pod: "web-1", container: "web", label: "web-1" },
+      ],
+      pods: [
+        { name: "web-0", health: "success" },
+        { name: "web-1", health: "success" },
+      ],
+      previous: [],
+    });
+    const region = await (draw(logsRoute("Deployment", "checkout", "web")), body());
+    push(
+      line("web-0", "14:07:41.208000000", "info serving on :8080"),
+      line("web-1", "14:07:42.100000000", "warn upstream slow"),
+    );
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /container/i }), "web");
+    expect(rendered(region)).toEqual([
+      // Still there — and the gutter still names the pod ALONE, because the
+      // fix carries the container as data beside the label rather than
+      // putting it back into the string the reader sees.
+      "14:07:41.208|web-0|info|info serving on :8080",
+      "14:07:42.100|web-1|warn|warn upstream slow",
+    ]);
+  });
+
+  it("hides the other container when a pod-only label is in play", async () => {
+    // The other half of the same seam: a pod-only label must not become a
+    // wildcard that matches EVERY container either. Two pods, one of which
+    // also runs a sidecar, so the labels are `pod/container` — and one whose
+    // line arrives under a pod-only label because it is the only target of
+    // its kind. Picking `api` must drop the sidecar's line.
+    h.resolve.mockResolvedValue({
+      status: "resolved",
+      targets: [
+        { pod: "api-7", container: "api", label: "api-7" },
+        { pod: "api-8", container: "api", label: "api-8" },
+      ],
+      pods: [
+        { name: "api-7", health: "success" },
+        { name: "api-8", health: "success" },
+      ],
+      previous: [],
+    });
+    const region = await (draw(), body());
+    push(
+      line("api-7", "14:07:41.208000000", "info from api-7"),
+      // A line whose source matches no target at all — the stream tagged it
+      // with something this screen never handed out. It must not be claimed
+      // by a container filter that never named it.
+      line("ghost-0/sidecar", "14:07:42.100000000", "warn from a stranger"),
+    );
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /container/i }), "api");
+    expect(rendered(region).map((r) => r.split("|")[3])).toEqual(["info from api-7"]);
+  });
+
+  it("falls back to the placeholder on an undecodable route rather than dying", async () => {
+    // What a corrupted persisted tab actually does to the window: the parser
+    // is called during render, so a throw here is an unmounted app, not a
+    // blank pane.
+    draw("/logs/Pod/checkout/%zz");
+    expect(await screen.findByText("Pick a workload or a pod to follow")).toBeTruthy();
   });
 
   it("wires the since select to what the stream is asked to tail", async () => {

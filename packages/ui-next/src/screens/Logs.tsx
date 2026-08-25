@@ -107,11 +107,23 @@ export function parseLogsRoute(route: string): LogsRouteParts | null {
   const [empty, prefix, rawKind, rawNamespace, rawName] = segments;
   if (empty !== "" || prefix !== "logs") return null;
   if (!rawKind || !rawNamespace || !rawName) return null;
-  return {
-    kind: decodeURIComponent(rawKind),
-    namespace: decodeURIComponent(rawNamespace),
-    name: decodeURIComponent(rawName),
-  };
+  try {
+    return {
+      kind: decodeURIComponent(rawKind),
+      namespace: decodeURIComponent(rawNamespace),
+      name: decodeURIComponent(rawName),
+    };
+  } catch {
+    // `decodeURIComponent` THROWS a `URIError` on a malformed escape — `%zz`,
+    // or a truncated multi-byte sequence. This parser runs DURING RENDER
+    // (`describe` and `screenFor` both call it) over routes that are
+    // persisted and restored, so a throw here is not a bad tab: it is the
+    // whole new-design window failing to boot off one corrupted string in
+    // storage. `null` is the contract's existing answer for a route this
+    // function cannot make a subject of, and a route whose segments are not
+    // decodable is one of those.
+    return null;
+  }
 }
 
 /** The `since` windows the design offers, and what each one means in seconds. */
@@ -238,8 +250,28 @@ const RFC3339 = /^\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})(\.\d+)?(?:Z|[+-]\d{2}:?\
 interface Row {
   /** `14:07:41.208`, or `""` for a line that arrived without a stamp. */
   ts: string;
+  /** Which pod wrote the line. DATA — read off the target, not the label. */
   pod: string;
+  /**
+   * Which container wrote it. DATA, and the reason it does not come out of
+   * the line's `source` string: that string is the target's **display**
+   * label, and `resolveLogSubject` drops the container from it whenever every
+   * target in scope shares one container name — the ordinary Deployment with
+   * three replicas of one container. Recovering the container by splitting
+   * the label there yields `""` for every line, while the container select is
+   * populated from the targets, which carry the real name: the reader picks
+   * their container and the screen goes blank. The label is a decision about
+   * what to SHOW; this is what the line IS, and they do not travel in one
+   * string.
+   */
   container: string;
+  /**
+   * Whether the source gutter names the container as well as the pod — the
+   * display half of the same fact, taken from the shape of the label rather
+   * than recomputed here. A stream whose targets all run one container says
+   * the pod alone; repeating that one word down a 200px gutter is noise.
+   */
+  namesContainer: boolean;
   /**
    * The level word AS THE LINE SPELLS IT — `error`, `WARNING`, `warn`,
    * `debug` — from {@link logLineLevel}, or `""` when the line carries none.
@@ -271,32 +303,50 @@ interface Row {
 /** The line's origin as one string: `api-7 · api` on screen, `api-7/api` in a
  *  file, and the pod alone for a stream with no container to disambiguate. */
 function sourceOf(row: Row, separator: string): string {
-  return row.container === ""
-    ? row.pod
-    : `${row.pod}${separator}${row.container}`;
+  return row.namesContainer && row.container !== ""
+    ? `${row.pod}${separator}${row.container}`
+    : row.pod;
+}
+
+/**
+ * Every target under the label its lines arrive tagged with — the index
+ * {@link toRow} recovers a line's pod and container through.
+ *
+ * The labels are unique by construction: `resolveLogSubject` emits `pod` alone
+ * only when one container name is shared across the whole scope (so one target
+ * per pod), `pod/container` when they differ, and `""` only when there is
+ * exactly one target altogether — which is why the empty key resolves that
+ * lone target rather than standing for "unknown".
+ */
+function indexTargets(targets: readonly LogTarget[]): ReadonlyMap<string, LogTarget> {
+  return new Map(targets.map((t) => [t.label ?? "", t]));
 }
 
 /**
  * Split a stream line into the columns the design draws.
  *
- * `source` is the target's own `label`, which `resolveLogSubject` leaves empty
- * when there is exactly one target — so a single-container stream falls back
- * to that target rather than drawing a nameless source.
+ * The line's `source` is its target's **display label**, so the pod and the
+ * container are looked up through {@link indexTargets} rather than parsed back
+ * out of it — see {@link Row.container} for what parsing it costs. Splitting on
+ * `/` survives only as the fallback for a source no target claims, which is a
+ * line the screen did not ask for; naming it from its own string beats drawing
+ * it nameless.
  */
-function toRow(line: StreamLine, only: LogTarget | undefined): Row {
+function toRow(line: StreamLine, byLabel: ReadonlyMap<string, LogTarget>): Row {
   const stamp = line.text.match(RFC3339);
   const ts = stamp ? `${stamp[1]}${(stamp[2] ?? "").slice(0, 4)}` : "";
   const message = stamp ? line.text.slice(stamp[0].length) : line.text;
   const slash = line.source.indexOf("/");
+  const target = byLabel.get(line.source);
   const pod =
-    line.source === ""
-      ? (only?.pod ?? "")
+    target !== undefined
+      ? target.pod
       : slash < 0
         ? line.source
         : line.source.slice(0, slash);
   const container =
-    line.source === ""
-      ? (only?.container ?? "")
+    target !== undefined
+      ? (target.container ?? "")
       : slash < 0
         ? ""
         : line.source.slice(slash + 1);
@@ -305,6 +355,10 @@ function toRow(line: StreamLine, only: LogTarget | undefined): Row {
     ts,
     pod,
     container,
+    // An unlabelled line is the single-target stream, whose gutter would
+    // otherwise be blank; a labelled one shows the container exactly when its
+    // label carried it.
+    namesContainer: line.source === "" || slash >= 0,
     level: logLineLevel(message) ?? "",
     health,
     message,
@@ -741,10 +795,10 @@ function LogsStream({
     tailLines: TAIL_LINES,
   });
 
-  const only = targets.length === 1 ? targets[0] : undefined;
+  const byLabel = useMemo(() => indexTargets(targets), [targets]);
   const liveRows = useMemo(
-    () => stream.lines.map((l) => toRow(l, only)),
-    [stream.lines, only],
+    () => stream.lines.map((l) => toRow(l, byLabel)),
+    [stream.lines, byLabel],
   );
 
   /**
@@ -815,8 +869,8 @@ function LogsStream({
   }, [previous, terminated, context, namespace, targets]);
 
   const previousRows = useMemo(
-    () => (snapshot.status === "ready" ? snapshot.lines.map((l) => toRow(l, only)) : []),
-    [snapshot, only],
+    () => (snapshot.status === "ready" ? snapshot.lines.map((l) => toRow(l, byLabel)) : []),
+    [snapshot, byLabel],
   );
 
   /**
