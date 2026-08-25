@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   type ActiveForward,
+  browsable,
+  describeError,
   forwardAddress,
   getForwards,
   kindToForwardTarget,
@@ -8,6 +10,7 @@ import {
   listPods,
   listServices,
   notify,
+  openExternal,
   startPortForward,
   subscribeForwards,
   toKubectl,
@@ -55,19 +58,6 @@ function portOf(text: string): number | null {
   if (!trimmed) return null;
   const n = Number(trimmed);
   return Number.isInteger(n) && n > 0 && n <= MAX_PORT ? n : null;
-}
-
-/**
- * An address as something a browser can be sent to.
- *
- * `forwardAddress` answers in two shapes — a bare `host:port` authority on the
- * desktop and a full `http(s)://…/pf/<id>/` URL in web mode — because the
- * places that print it want the short form. A browser wants a scheme, and
- * `window.open("localhost:9090")` resolves against the current page rather than
- * opening the tunnel.
- */
-function browsable(address: string): string {
-  return /^https?:\/\//i.test(address) ? address : `http://${address}`;
 }
 
 /**
@@ -407,7 +397,18 @@ export function NewForwardDialog({
       // whenever the request could not have the port it asked for.
       const address = forwardAddress({ id: started.id, localPort: started.localPort });
       notify.success(`Forwarding ${address} to ${chosen.value}`);
-      if (inBrowser) window.open(browsable(address), "_blank", "noopener,noreferrer");
+      // Core's opener, not `window.open`: inside a Tauri WebView that call
+      // returns without opening anything and without failing, so the switch
+      // read as wired up and did nothing (#348). A browser that will not open
+      // is a TOAST rather than the banner above — the tunnel is up either way,
+      // and the dialog it would be drawn in is already closing.
+      if (inBrowser) {
+        try {
+          await openExternal(browsable(address));
+        } catch (e) {
+          notify.error("Couldn't open the forward in your browser", describeError(e).detail);
+        }
+      }
       onClose();
     } catch (e) {
       setFailure({ title: `Could not forward ${chosen.value}`, error: e });

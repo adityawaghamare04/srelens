@@ -24,6 +24,7 @@ const store = vi.hoisted(() => ({
 }));
 const core = vi.hoisted(() => ({
   startPortForward: vi.fn(),
+  openExternal: vi.fn(),
   listNamespaces: vi.fn(),
   listPods: vi.fn(),
   listServices: vi.fn(),
@@ -87,6 +88,10 @@ beforeEach(() => {
   // half of it.
   store.list = [holding(8080)];
   store.listeners.clear();
+  core.openExternal.mockResolvedValue(undefined);
+  // Not the mechanism any more — the spy is here to prove it is NOT reached.
+  // `window.open` is a silent no-op inside a Tauri WebView (#348), so a switch
+  // that called it would look wired up and open nothing on the desktop.
   opened = vi.fn();
   Object.defineProperty(window, "open", { value: opened, configurable: true, writable: true });
 });
@@ -343,17 +348,23 @@ describe("NewForwardDialog — the browser switch", () => {
     await fillIn();
     await userEvent.click(startButton());
     await waitFor(() => expect(core.notify.success).toHaveBeenCalled());
+    expect(core.openExternal).not.toHaveBeenCalled();
     expect(opened).not.toHaveBeenCalled();
   });
 
-  it("opens the desktop's loopback when it is on", async () => {
+  it("opens the desktop's loopback when it is on — through core, never window.open", async () => {
     core.startPortForward.mockResolvedValue({ id: 7, localPort: 9091 });
     open();
     await fillIn({ local: "9090" });
     await userEvent.click(screen.getByRole("switch", { name: "Open in browser when it comes up" }));
     await userEvent.click(startButton());
-    await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
-    expect(opened.mock.calls[0][0]).toBe("http://localhost:9091");
+    await waitFor(() => expect(core.openExternal).toHaveBeenCalledTimes(1));
+    // With the scheme: `forwardAddress` answers a bare authority here, and a
+    // bare `localhost:9091` is not a URL — it resolves against the page.
+    expect(core.openExternal.mock.calls[0][0]).toBe("http://localhost:9091");
+    // The switch used to call this directly, which does nothing at all in a
+    // Tauri WebView and does it without an error (#348).
+    expect(opened).not.toHaveBeenCalled();
   });
 
   it("opens the SAME address it promised in web mode, not a hardcoded localhost", async () => {
@@ -362,11 +373,34 @@ describe("NewForwardDialog — the browser switch", () => {
     await fillIn({ local: "9090" });
     await userEvent.click(screen.getByRole("switch", { name: "Open in browser when it comes up" }));
     await userEvent.click(startButton());
-    await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
-    const url = opened.mock.calls[0][0] as string;
+    await waitFor(() => expect(core.openExternal).toHaveBeenCalledTimes(1));
+    const url = core.openExternal.mock.calls[0][0] as string;
     expect(url).toBe(`${window.location.origin}/pf/7/`);
+    // Said twice: jsdom's own origin contains "localhost", so the equality
+    // above would still hold for a dialog that had hardcoded the desktop
+    // answer at some other port. This is the property.
     expect(url).toContain("/pf/7/");
     expect(url).not.toContain("localhost:9090");
+  });
+
+  it("says the browser could not be opened without losing the forward that started", async () => {
+    // The tunnel is up either way. Turning a browser that would not open into
+    // a banner over a dialog that is closing would report the wrong failure.
+    core.openExternal.mockRejectedValue(new Error("handler error: no default browser"));
+    const onClose = open();
+    await fillIn({ local: "9090" });
+    await userEvent.click(screen.getByRole("switch", { name: "Open in browser when it comes up" }));
+    await userEvent.click(startButton());
+    await waitFor(() => expect(core.notify.error).toHaveBeenCalledTimes(1));
+    const [title, detail] = core.notify.error.mock.calls[0] as [string, string];
+    expect(title).toMatch(/browser/i);
+    // `describeError`'s wording, and the internal prefix stripped off it.
+    expect(detail).toContain("no default browser");
+    expect(detail).not.toContain("handler error:");
+    // The forward itself still succeeded, and the dialog still got out of the
+    // way.
+    expect(core.notify.success).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
   it("hints the desktop address §A.4 writes, for the port in the field", async () => {

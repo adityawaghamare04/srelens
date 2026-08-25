@@ -29,6 +29,7 @@ const store = vi.hoisted(() => ({
 const core = vi.hoisted(() => ({
   stopPortForward: vi.fn(),
   rehydrateForwards: vi.fn(),
+  openExternal: vi.fn(),
   // Only so the mounted dialog has something to list. What it does with them
   // is `NewForwardDialog.test.tsx`'s business; this file only cares that both
   // `New forward` buttons reach it.
@@ -119,12 +120,18 @@ function fixture(now: number): ActiveForward[] {
 }
 
 let NOW = 0;
+let windowOpen: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   platform.isTauri.mockReturnValue(true);
   core.stopPortForward.mockResolvedValue(undefined);
   core.rehydrateForwards.mockResolvedValue(undefined);
+  core.openExternal.mockResolvedValue(undefined);
+  // A spy only so it can be asserted UNREACHED: `window.open` opens nothing at
+  // all inside a Tauri WebView, and does it silently (#348).
+  windowOpen = vi.fn();
+  Object.defineProperty(window, "open", { value: windowOpen, configurable: true, writable: true });
   core.listNamespaces.mockResolvedValue({ namespaces: ["checkout"] });
   core.listServices.mockResolvedValue({ services: [] });
   core.listPods.mockResolvedValue({ pods: [] });
@@ -471,6 +478,87 @@ describe("Forwards — the screen around the table", () => {
     // branched at all would still report no columns here.)
     expect(document.querySelector(".pane-head")).toBeNull();
     expect(screen.queryByText(/moved/)).toBeNull();
+  });
+});
+
+describe("Forwards — the Local cell opens", () => {
+  const localCell = (target: string) => cell(rowFor(target), 2);
+
+  it("is a control, not a label", () => {
+    open();
+    // A span with an onClick would satisfy "the address is on screen and
+    // clicking it works" and would be reachable by neither Tab nor Enter.
+    // Named by the address it shows, the way a link is named by its text —
+    // `getByRole`'s name is the computed accessible name, not the markup.
+    const button = within(localCell("svc/checkout-api")).getByRole("button", {
+      name: "localhost:8080",
+    });
+    expect(button.tagName).toBe("BUTTON");
+  });
+
+  it("keeps the column's mono face, and keeps a long address inside the cell", () => {
+    platform.isTauri.mockReturnValue(false);
+    open();
+    // §13's Local column is a `code` cell. Making it a control must not cost
+    // it the face that makes a host:port readable.
+    const mono = localCell("svc/checkout-api").querySelector(".code") as HTMLElement;
+    expect(mono.textContent).toBe(`${window.location.origin}/pf/1/`);
+    // A proxy URL is long and the button is a flex box, whose items refuse to
+    // shrink below their content without `min-w-0`. jsdom lays nothing out, so
+    // this asserts the mechanism — the same way the Cluster cell's does, after
+    // column overflow shipped unnoticed three times on this project.
+    expect(mono.className).toContain("truncate");
+    expect(mono.className).toContain("min-w-0");
+  });
+
+  it("opens the desktop address with the scheme a browser needs", async () => {
+    open();
+    await userEvent.click(within(localCell("svc/prometheus")).getByRole("button"));
+    await waitFor(() => expect(core.openExternal).toHaveBeenCalledTimes(1));
+    // `forwardAddress` answers a bare `localhost:9090` here. A bare authority
+    // is NOT a URL: opened verbatim it resolves against the current page.
+    expect(core.openExternal).toHaveBeenCalledWith("http://localhost:9090");
+    // And it goes through core rather than the WebView's own dead `window.open`.
+    expect(windowOpen).not.toHaveBeenCalled();
+  });
+
+  it("opens the proxy address in web mode, not a loopback the browser cannot reach", async () => {
+    platform.isTauri.mockReturnValue(false);
+    open();
+    await userEvent.click(within(localCell("svc/checkout-api")).getByRole("button"));
+    await waitFor(() => expect(core.openExternal).toHaveBeenCalledTimes(1));
+    const url = core.openExternal.mock.calls[0][0] as string;
+    expect(url).toBe(`${window.location.origin}/pf/1/`);
+    // Said twice on purpose: jsdom's own origin contains "localhost", so the
+    // equality above would still hold for a screen that had hardcoded the
+    // desktop answer at some other port. This is the property.
+    expect(url).toContain("/pf/1/");
+    expect(url).not.toContain("localhost:8080");
+  });
+
+  it("opens the address the row it was clicked in is showing", async () => {
+    open();
+    await userEvent.click(within(localCell("svc/identity-gateway")).getByRole("button"));
+    await waitFor(() => expect(core.openExternal).toHaveBeenCalledTimes(1));
+    // The LOCAL port, 8443 — not the row's remote 443 and not the first row's.
+    expect(core.openExternal).toHaveBeenCalledWith("http://localhost:8443");
+  });
+
+  it("says why an open was refused, in words rather than in Rust", async () => {
+    core.openExternal.mockRejectedValue(
+      new Error("handler error: No such file or directory (os error 2)"),
+    );
+    open();
+    await userEvent.click(within(localCell("svc/checkout-api")).getByRole("button"));
+    const title = await screen.findByText(/Could not open svc\/checkout-api/i);
+    const alert = title.closest("[data-tone]") as HTMLElement;
+    // The screen's own error surface, in its severe tone — not a raw backend
+    // string dropped into a cell.
+    expect(alert.getAttribute("data-tone")).toBe("sev");
+    // `describeError`'s cleaning: `handler error:` is `CapabilityError`'s
+    // Display prefix and is news to nobody.
+    expect(alert.textContent).toContain("No such file or directory");
+    expect(alert.textContent).not.toContain("handler error:");
   });
 });
 

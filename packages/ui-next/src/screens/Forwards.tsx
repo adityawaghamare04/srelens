@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   ageFromTimestamp,
+  browsable,
   copyKubectlCommand,
   forwardAddress,
   getForwards,
   kindToForwardTarget,
   notify,
+  openExternal,
   plural,
   rehydrateForwards,
   stopPortForward,
@@ -163,8 +165,13 @@ export function Forwards(_props: { route: string }) {
     return () => clearInterval(tick);
   }, []);
 
-  /** The last stop that was refused, and which tunnel it was about. */
-  const [stopFailure, setStopFailure] = useState<{ target: string; error: unknown } | null>(null);
+  /**
+   * The last thing this screen was refused, in the words the reader gets.
+   *
+   * One slot rather than two: a stop and an open cannot both be the most
+   * recent, and a second banner over a table is a row of the table gone.
+   */
+  const [failure, setFailure] = useState<{ title: string; error: unknown } | null>(null);
 
   const rows = useMemo<ForwardRow[]>(
     () =>
@@ -217,11 +224,30 @@ export function Forwards(_props: { route: string }) {
   );
 
   async function stop(row: ForwardRow) {
-    setStopFailure(null);
+    setFailure(null);
     try {
       await stopPortForward(row.id);
     } catch (e) {
-      setStopFailure({ target: row.target, error: e });
+      setFailure({ title: `Could not stop ${row.target}`, error: e });
+    }
+  }
+
+  /**
+   * Open a tunnel in the reader's own browser.
+   *
+   * `openExternal`, never an `<a target="_blank">` and never `window.open`:
+   * both of those are silent no-ops inside the Tauri WebView (#348), which is
+   * exactly the shape of dead link this migration keeps deleting. The address
+   * is the row's own — the one `forwardAddress` produced and the cell prints —
+   * through `browsable`, because the desktop's answer is a bare authority and
+   * a bare authority is not a URL.
+   */
+  async function openAddress(row: ForwardRow) {
+    setFailure(null);
+    try {
+      await openExternal(browsable(row.address));
+    } catch (e) {
+      setFailure({ title: `Could not open ${row.target}`, error: e });
     }
   }
 
@@ -237,7 +263,9 @@ export function Forwards(_props: { route: string }) {
   }
 
   const columns: Column<ForwardRow>[] = [
-    ...COLUMNS,
+    // `void`, the way every other handler on this screen discards its
+    // promise: the failure is already the banner's business.
+    ...forwardColumns((row) => void openAddress(row)),
     {
       // §13's unnamed trailing column. Three compact controls rather than the
       // inline `CopyCommand` §13 names: that component prints the whole command
@@ -291,13 +319,9 @@ export function Forwards(_props: { route: string }) {
           onClose={() => setNewForwardOpen(false)}
         />
       )}
-      {stopFailure && (
+      {failure && (
         <div className="p-3 pb-0">
-          <FailureAlert
-            tone="sev"
-            title={`Could not stop ${stopFailure.target}`}
-            error={stopFailure.error}
-          />
+          <FailureAlert tone="sev" title={failure.title} error={failure.error} />
         </div>
       )}
       {rows.length === 0 ? (
@@ -330,79 +354,111 @@ export function Forwards(_props: { route: string }) {
 /**
  * §13's columns, in §13's order.
  *
- * Module-level and free of handlers so the sort and filter values are read off
- * the same strings the reader sees — a filter for `staging` that matched
- * nothing because the cell was built from a different field is the sort of
- * mismatch nobody reports. The two numeric columns are the exception and say
- * why at each one.
+ * Module-level so the sort and filter values are read off the same strings the
+ * reader sees — a filter for `staging` that matched nothing because the cell
+ * was built from a different field is the sort of mismatch nobody reports. The
+ * two numeric columns are the exception and say why at each one.
+ *
+ * It takes ONE handler, for the one cell that does something: the Local
+ * address opens. A factory rather than a spliced-in column, so the order stays
+ * §13's order in one readable list rather than depending on an index.
  */
-const COLUMNS: Column<ForwardRow>[] = [
-  {
-    key: "target",
-    header: "Target",
-    // Both lines are searchable: a reader looking for `checkout` means either
-    // the service or the namespace and should not have to know which.
-    getValue: (row) => `${row.target} ${row.namespace}`,
-    render: (row) => (
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate font-medium">{row.target}</span>
-        <span className="path truncate">{row.namespace}</span>
-      </div>
-    ),
-  },
-  {
-    key: "cluster",
-    header: "Cluster",
-    // `block`, not a bare span: `truncate` sets `overflow: hidden`, which does
-    // nothing to an inline box. A kubeconfig context name is user-chosen and
-    // routinely long — `m01-1786968575165/kubernetes-admin@cluster.local` —
-    // and without this it draws straight over the Local cell beside it.
-    render: (row) => <span className="path block truncate">{row.cluster}</span>,
-  },
-  {
-    key: "address",
-    header: "Local",
-    render: (row) => <span className="code block truncate">{row.address}</span>,
-  },
-  {
-    key: "remote",
-    header: "Remote",
-    // Sorted as the number it is: `:443` beside `:8080` and `:9090` orders
-    // 443, 8080, 9090 numerically and "443", "8080", "9090" the same way by
-    // luck — `:6060` and `:443` do not.
-    getSortValue: (row) => Number(row.remote.slice(1)),
-    render: (row) => <span className="tabular-nums">{row.remote}</span>,
-  },
-  {
-    key: "state",
-    header: "State",
-    // Sorted and searched on the word the reader can see, not on the internal
-    // status behind it.
-    getValue: (row) => FORWARD_VERDICT[row.status].word,
-    render: (row) => (
-      <StatusPill
-        status={FORWARD_VERDICT[row.status].word}
-        kind={FORWARD_VERDICT[row.status].kind}
-        tinted
-      />
-    ),
-  },
-  {
-    key: "traffic",
-    header: "Traffic",
-    align: "end",
-    // The bytes, not the words: `312 KB` sorts above `44.1 MB` as text.
-    getSortValue: (row) => row.bytesMoved,
-    render: (row) => <span className="tabular-nums">{row.traffic}</span>,
-  },
-  {
-    key: "age",
-    header: "Age",
-    align: "end",
-    // The start stamp, not the compact age: `2h` sorts below `51m` as text,
-    // which is the defect `ageSeconds` exists for — and this row has the
-    // original millis, so it does not need to parse its own words back.
-    getSortValue: (row) => row.startedAt,
-    render: (row) => <span className="tabular-nums text-muted">{row.age}</span>,
-  },
-];
+function forwardColumns(openAddress: (row: ForwardRow) => void): Column<ForwardRow>[] {
+  return [
+    {
+      key: "target",
+      header: "Target",
+      // Both lines are searchable: a reader looking for `checkout` means either
+      // the service or the namespace and should not have to know which.
+      getValue: (row) => `${row.target} ${row.namespace}`,
+      render: (row) => (
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate font-medium">{row.target}</span>
+          <span className="path truncate">{row.namespace}</span>
+        </div>
+      ),
+    },
+    {
+      key: "cluster",
+      header: "Cluster",
+      // `block`, not a bare span: `truncate` sets `overflow: hidden`, which does
+      // nothing to an inline box. A kubeconfig context name is user-chosen and
+      // routinely long — `m01-1786968575165/kubernetes-admin@cluster.local` —
+      // and without this it draws straight over the Local cell beside it.
+      render: (row) => <span className="path block truncate">{row.cluster}</span>,
+    },
+    {
+      key: "address",
+      header: "Local",
+      /**
+       * The one cell that is a control.
+       *
+       * A `Button`, not an anchor: `<a target="_blank">` opens NOTHING in the
+       * Tauri WebView and says nothing about it (#348) — classic's
+       * `PortForwardsView` ships that exact dead link today. The kit has no link
+       * variant, and `ghost` is the borderless one, so the cell keeps the column's
+       * `code` face and reads as text that can be pressed rather than as a box
+       * around every row.
+       *
+       * Its accessible name is the address it shows, which is what a link's would
+       * be. No `title`: the address is already on screen, and a value in a title
+       * is the rule a Secret once leaked through.
+       */
+      render: (row) => (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="-mx-1 max-w-full text-[0.8125rem] text-accent"
+          onClick={() => openAddress(row)}
+        >
+          {/* `min-w-0` as well as `truncate`: a flex item's implicit
+              `min-width: auto` refuses to shrink below its content, so without
+              it a long proxy URL widens the button instead of ellipsing —
+              invisible in jsdom, which is why the class is asserted. */}
+          <span className="code min-w-0 truncate">{row.address}</span>
+        </Button>
+      ),
+    },
+    {
+      key: "remote",
+      header: "Remote",
+      // Sorted as the number it is: `:443` beside `:8080` and `:9090` orders
+      // 443, 8080, 9090 numerically and "443", "8080", "9090" the same way by
+      // luck — `:6060` and `:443` do not.
+      getSortValue: (row) => Number(row.remote.slice(1)),
+      render: (row) => <span className="tabular-nums">{row.remote}</span>,
+    },
+    {
+      key: "state",
+      header: "State",
+      // Sorted and searched on the word the reader can see, not on the internal
+      // status behind it.
+      getValue: (row) => FORWARD_VERDICT[row.status].word,
+      render: (row) => (
+        <StatusPill
+          status={FORWARD_VERDICT[row.status].word}
+          kind={FORWARD_VERDICT[row.status].kind}
+          tinted
+        />
+      ),
+    },
+    {
+      key: "traffic",
+      header: "Traffic",
+      align: "end",
+      // The bytes, not the words: `312 KB` sorts above `44.1 MB` as text.
+      getSortValue: (row) => row.bytesMoved,
+      render: (row) => <span className="tabular-nums">{row.traffic}</span>,
+    },
+    {
+      key: "age",
+      header: "Age",
+      align: "end",
+      // The start stamp, not the compact age: `2h` sorts below `51m` as text,
+      // which is the defect `ageSeconds` exists for — and this row has the
+      // original millis, so it does not need to parse its own words back.
+      getSortValue: (row) => row.startedAt,
+      render: (row) => <span className="tabular-nums text-muted">{row.age}</span>,
+    },
+  ];
+}
