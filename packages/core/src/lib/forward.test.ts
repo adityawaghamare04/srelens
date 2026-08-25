@@ -89,7 +89,8 @@ beforeEach(() => {
         startedAt: BACKEND_EPOCH + id,
         bytes: 0,
       });
-      return { id, localPort: backend[backend.length - 1].localPort };
+      const started = backend[backend.length - 1];
+      return { id, localPort: started.localPort, startedAt: started.startedAt };
     }
     if (command === "list_forwards") {
       if (listFails) throw new Error(String(listFails));
@@ -375,16 +376,18 @@ describe("rehydrateForwards", () => {
     expect(getForwards()).toHaveLength(0);
   });
 
-  it("adopts a tunnel whose start could not be dated", async () => {
+  it("starts a forward with no follow-up list_forwards call, even when listing would fail", async () => {
+    // The start response carries its own startedAt now, so a broken
+    // list_forwards must not be able to break a start that is otherwise
+    // fine — the whole point of dropping the follow-up read.
     listFails = "handler error: list forwards timed out";
-    await expect(startPortForward(req)).rejects.toThrow();
-    expect(getForwards()).toHaveLength(0);
 
-    listFails = null;
-    await rehydrateForwards();
+    const fwd = await startPortForward(req);
 
+    expect(fwd.startedAt).toBe(BACKEND_EPOCH + 1);
     expect(getForwards()).toHaveLength(1);
-    expect(getForwards()[0]).toMatchObject({ id: 1, name: "web-1", startedAt: BACKEND_EPOCH + 1 });
+    expect(invokeCommandMock).toHaveBeenCalledTimes(1);
+    expect(invokeCommandMock).toHaveBeenCalledWith("start_port_forward", expect.anything());
   });
 });
 

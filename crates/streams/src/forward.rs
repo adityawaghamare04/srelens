@@ -288,13 +288,19 @@ pub struct ForwardManager {
     forwards: Mutex<HashMap<u64, Forward>>,
 }
 
-/// What `start` returns: the forward's id and the actual local port it bound
-/// to (the OS picks one when the caller passes no preference).
+/// What `start` returns: the forward's id, the actual local port it bound to
+/// (the OS picks one when the caller passes no preference), and the epoch
+/// millis it was stamped with. That stamp is the SAME value `list` reports
+/// for this forward later — read once here, off `FixedFacts.started_at` — so
+/// a row this session started and a row recovered after a reload agree on
+/// the tunnel's age instead of a caller having to ask `list` a second time
+/// just to date what it already started.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardInfo {
     pub id: u64,
     pub local_port: u16,
+    pub started_at: u64,
 }
 
 /// The parts of a forward that are settled once and never change again.
@@ -434,6 +440,11 @@ impl ForwardManager {
             );
         });
 
+        // Stamped once, here, and read back for both the response and the
+        // stored fact — never a second call to `epoch_millis()` for the same
+        // forward, so `start`'s answer and a later `list` can't disagree.
+        let started_at = epoch_millis();
+
         self.forwards.lock().unwrap().insert(
             id,
             Forward {
@@ -447,13 +458,14 @@ impl ForwardManager {
                     name,
                     remote_port,
                     local_port: bound,
-                    started_at: epoch_millis(),
+                    started_at,
                 },
             },
         );
         Ok(ForwardInfo {
             id,
             local_port: bound,
+            started_at,
         })
     }
 
@@ -1020,6 +1032,60 @@ mod tests {
         assert!(
             manager.list().is_empty(),
             "a stopped tunnel is not still forwarding"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn start_returns_the_same_started_at_that_list_later_reports() {
+        // One value, stamped once: whatever `start` hands back for this
+        // forward must be the exact number `list` reports for it later, not
+        // a second reading that merely happens to be close.
+        let manager = ForwardManager::new(ClientCache::new_many(vec![]));
+        let sink = Arc::new(TestSink::default());
+        let before = epoch_millis();
+        let info = manager
+            .start(
+                sink,
+                "nope".into(),
+                "ns".into(),
+                "Pod".into(),
+                "pod-a".into(),
+                8080,
+                None,
+            )
+            .await
+            .expect("bind succeeds locally");
+
+        assert!(
+            info.started_at >= before,
+            "start's own started_at {} predates the call at {before}",
+            info.started_at
+        );
+        let entry = manager.list().remove(0);
+        assert_eq!(
+            info.started_at, entry.started_at,
+            "the start response and list must agree on the same stamp"
+        );
+        manager.stop(info.id);
+    }
+
+    #[test]
+    fn forward_info_serialises_started_at_alongside_id_and_local_port() {
+        // What the desktop command and the server command hand back to the
+        // frontend; a rename or a dropped field here is a silent contract
+        // break with `packages/core`.
+        let info = ForwardInfo {
+            id: 4,
+            local_port: 51234,
+            started_at: 1_700_000_000_000,
+        };
+        assert_eq!(
+            serde_json::to_value(&info).expect("a forward info is serialisable"),
+            serde_json::json!({
+                "id": 4,
+                "localPort": 51234,
+                "startedAt": 1_700_000_000_000u64,
+            })
         );
     }
 

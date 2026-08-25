@@ -79,22 +79,34 @@ export function getForwards(): ActiveForward[] {
 
 /** Start a port-forward and track it; auto-removes if the backend loop ends. */
 export async function startPortForward(req: ForwardRequest): Promise<ActiveForward> {
-  const info = await invokeCommand<{ id: number; localPort: number }>("start_port_forward", {
+  const info = await invokeCommand<{ id: number; localPort: number; startedAt: number }>(
+    "start_port_forward",
+    {
+      context: req.context,
+      namespace: req.namespace,
+      kind: req.kind,
+      name: req.name,
+      remotePort: req.remotePort,
+      localPort: req.localPort ?? null,
+    },
+  );
+  // The start response carries its own startedAt now — the same stamp
+  // `list_forwards` would report for this forward, taken once on the
+  // backend rather than read back with a second call. No follow-up
+  // `list_forwards` here: a tunnel that started fine no longer fails on a
+  // read that has nothing to do with whether it's running.
+  const fwd: ActiveForward = {
+    id: info.id,
     context: req.context,
     namespace: req.namespace,
     kind: req.kind,
     name: req.name,
     remotePort: req.remotePort,
-    localPort: req.localPort ?? null,
-  });
-  // The start command answers with the id and the bound port; the start time
-  // comes from `list_forwards`, the same place a rehydrated forward's does, so
-  // an age is one measurement rather than two that happen to agree. If that
-  // read fails the tunnel is live but undated, and this throws rather than
-  // dating it from the local clock — `rehydrateForwards` adopts it next look.
-  const entry = (await listForwards()).find((e) => e.id === info.id);
-  if (!entry) throw new Error(`the backend started forward ${info.id} but does not list it`);
-  const fwd = fromEntry(entry);
+    localPort: info.localPort,
+    status: "active",
+    bytesMoved: 0,
+    startedAt: info.startedAt,
+  };
   forwards = [...forwards, fwd];
   watchForward(info.id);
   emit();

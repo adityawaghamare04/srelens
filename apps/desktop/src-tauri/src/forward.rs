@@ -94,6 +94,7 @@ mod tests {
         .await
         .unwrap();
         assert_ne!(info.local_port, 0, "an ephemeral port must have been bound");
+        assert!(info.started_at > 0, "the start response must carry its stamp");
 
         stop_port_forward(info.id, app.state()).await.unwrap();
         stop_port_forward(info.id + 1, app.state()).await.unwrap();

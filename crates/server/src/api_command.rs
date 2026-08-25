@@ -308,7 +308,7 @@ async fn run(
                 )
                 .await
                 .map_err(|e| command_error(&e))?;
-            json!({ "id": info.id, "localPort": info.local_port })
+            json!({ "id": info.id, "localPort": info.local_port, "startedAt": info.started_at })
         }
         "stop_port_forward" => {
             let a: IdArg = parse(body)?;
@@ -544,6 +544,77 @@ mod tests {
         assert_eq!(
             body["error"],
             json!("helm repo/plugin operations are not available in web mode")
+        );
+    }
+
+    /// POST one `/api/command/<name>` call through the real router and hand
+    /// back its status and decoded JSON body. A small helper because
+    /// `start_port_forward` and `list_forwards` both need it below, and
+    /// hand-building the request twice would be the same boilerplate with
+    /// more chances to drift.
+    async fn post_command(
+        state: &AppState,
+        token: &str,
+        name: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let resp = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/command/{name}"))
+                    .header("content-type", "application/json")
+                    .header("cookie", format!("srelens_session={token}"))
+                    .header("x-srelens-csrf", "1")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn start_port_forward_returns_the_stamp_list_will_later_agree_with() {
+        // The whole point of Task 4b: the start response carries the same
+        // `startedAt` a later `list_forwards` reports, so the frontend never
+        // has to make a second call just to date what it started.
+        let state = AppState::for_tests(Arc::new(Registry::new())).await;
+        let user = state.db.upsert_user("i", "s", "u@x", "U", 1).await.unwrap();
+        let token = state
+            .db
+            .create_session(user.id, crate::unix_now())
+            .await
+            .unwrap();
+
+        let (status, body) = post_command(
+            &state,
+            &token,
+            "start_port_forward",
+            json!({
+                "context": "no-such-context",
+                "namespace": "ns",
+                "kind": "Pod",
+                "name": "pod-a",
+                "remotePort": 8080,
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["id"].is_u64());
+        assert!(body["localPort"].as_u64().unwrap() > 0);
+        let started_at = body["startedAt"].as_u64().expect("startedAt is numeric");
+        assert!(started_at > 0, "the response must carry a real stamp");
+
+        let (_, list_body) = post_command(&state, &token, "list_forwards", json!({})).await;
+        assert_eq!(
+            list_body["forwards"][0]["startedAt"],
+            json!(started_at),
+            "list must agree with what start already answered"
         );
     }
 
