@@ -408,16 +408,23 @@ describe("Logs", () => {
     // not red on one screen and grey on the next. The screen passes the word
     // and no `tone`, so what comes out is the kit's own mapping — asserted
     // against `toneColor`, not against a hex the screen could have written.
-    const region = await (draw(), body());
+    await (draw(), body());
     push(...LINES);
-    const levels = Array.from(region.querySelectorAll<HTMLElement>("[data-slot=level]"));
-    expect(levels.map((el) => el.style.color)).toEqual([
-      toneColor("info"),
-      toneColor("warn"),
-      toneColor("sev"),
-      // No level word: the kit's fallback, not a tone the screen chose.
-      toneColor("muted"),
-    ]);
+    // Re-query the region rather than holding the one `body()` returned: a
+    // resolution still in flight can re-render and replace that node, and a
+    // detached element answers every query with nothing. This failed about
+    // one run in a hundred, under full-package load, as an empty array.
+    await waitFor(() => {
+      const region = screen.getByRole("log", { name: /logs/i });
+      const levels = Array.from(region.querySelectorAll<HTMLElement>("[data-slot=level]"));
+      expect(levels.map((el) => el.style.color)).toEqual([
+        toneColor("info"),
+        toneColor("warn"),
+        toneColor("sev"),
+        // No level word: the kit's fallback, not a tone the screen chose.
+        toneColor("muted"),
+      ]);
+    });
   });
 
   it("names the source of a single-target stream, which arrives unlabelled", async () => {
