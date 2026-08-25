@@ -161,30 +161,53 @@ export interface NewForwardDialogProps {
  * may well want a different one; the target select and both port fields stay
  * exactly as editable as they are from the header action.
  *
- * **The local port is offered, not demanded.** It starts at the remote port —
- * `8443:8443` is what everybody reaches for — stepped up past anything srelens
- * is already forwarding, so arriving from a port whose number is taken does
- * not greet the reader with the clash error above. Clearing the field sends no
- * local port at all and lets the OS choose, which is the answer that still
- * works when the obvious number is held by something outside srelens.
+ * **The local port is offered, not demanded** — and it is a free port drawn
+ * at random rather than the remote one again. See {@link offerLocalPort}: a
+ * port worth forwarding is one this machine plausibly already serves, and
+ * srelens can only see its own forwards. Clearing the field sends no local
+ * port at all and lets the OS choose, which is the answer that cannot
+ * collide.
  */
 /**
- * The local port to offer for a remote one: the same number, which is what
- * everybody reaches for, moved up until it is one srelens is not already
- * forwarding.
+ * The low and high ends of the range a suggested local port is drawn from.
  *
- * Only OUR forwards are consulted, because they are all this process knows —
- * another program holding the port is invisible here and surfaces as a failed
- * start instead. That is why the field stays clearable: emptied, no local port
- * is sent and the OS picks a free one itself, which is the reliable answer
- * when the obvious one is taken by something outside srelens.
+ * Above the well-known (0-1023) and the bulk of the registered service ports,
+ * so a suggestion does not land on something a developer runs by habit; and
+ * below 49152, where the OS assigns its own ephemeral ports for outbound
+ * connections, so a listener bound here is not competing with the kernel for
+ * the same number.
  */
-function offerLocalPort(remote: number, taken: readonly ActiveForward[]): number {
+export const OFFER_LOW = 10000;
+export const OFFER_HIGH = 32767;
+
+/**
+ * A local port to offer: a free one at random, not the remote port again.
+ *
+ * Mirroring the far end reads well — `50051:50051` — and is the more likely
+ * of the two to fail, because a port worth forwarding is a port something on
+ * this machine plausibly already serves. Only srelens' own forwards can be
+ * checked from here; anything else holding the number is invisible until the
+ * start fails. A number drawn from a range nothing claims by convention is
+ * far likelier to be free on the first try.
+ *
+ * `random` is a parameter so a test can pin the draw. Clearing the field
+ * sends no local port at all and lets the OS choose, which remains the answer
+ * that cannot collide.
+ */
+export function offerLocalPort(
+  taken: readonly ActiveForward[],
+  random: () => number = Math.random,
+): number {
   const held = new Set(taken.map((f) => f.localPort));
-  let port = remote;
-  // 65535 is the last valid port; stop rather than wrap into nonsense.
-  while (held.has(port) && port < 65535) port += 1;
-  return port;
+  const span = OFFER_HIGH - OFFER_LOW + 1;
+  const first = OFFER_LOW + Math.floor(random() * span);
+  // Walk on from the draw rather than re-drawing, so this terminates even if
+  // the random source is degenerate, and wrap so the whole range is reachable.
+  for (let i = 0; i < span; i += 1) {
+    const port = OFFER_LOW + ((first - OFFER_LOW + i) % span);
+    if (!held.has(port)) return port;
+  }
+  return first;
 }
 
 export function NewForwardDialog({
@@ -223,7 +246,7 @@ export function NewForwardDialog({
   const [localText, setLocalText] = useState(() =>
     arrivedFrom?.remotePort == null
       ? ""
-      : String(offerLocalPort(arrivedFrom.remotePort, getForwards())),
+      : String(offerLocalPort(getForwards())),
   );
   const [remoteText, setRemoteText] = useState(
     arrivedFrom?.remotePort == null ? "" : String(arrivedFrom.remotePort),

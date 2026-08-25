@@ -254,8 +254,12 @@ describe("a container's ports as the way in to a forward", () => {
     await waitFor(() => expect(dialogSelect("Target").value).toBe("pod/web-1"));
     await waitFor(() => expect(dialogSelect("Namespace").value).toBe("default"));
     expect(dialogInput("Remote port").value).toBe("5432");
-    // Offered, not demanded — see NewForwardDialog on the stepping.
-    expect(dialogInput("Local port").value).toBe("5432");
+    // Offered, not demanded, and NOT the far end again — a free port from a
+    // range nothing claims by convention. The property, not the draw.
+    const offered = Number(dialogInput("Local port").value);
+    expect(offered).toBeGreaterThanOrEqual(10000);
+    expect(offered).toBeLessThanOrEqual(32767);
+    expect(offered).not.toBe(5432);
   });
 
   it("names the Pod as a Pod — pod/, from its kind, not the container's name", async () => {

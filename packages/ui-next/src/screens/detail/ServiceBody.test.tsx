@@ -216,9 +216,14 @@ describe("ServiceDetailsBody", () => {
       await waitFor(() => expect(select("Target").value).toBe("svc/checkout"));
       await waitFor(() => expect(select("Namespace").value).toBe("default"));
       expect(input("Remote port").value).toBe("6379");
-      // Offered, not demanded: the same number on this side is what a person
-      // reaches for, and it is only stepped up if srelens already holds it.
-      expect(input("Local port").value).toBe("6379");
+      // Offered, not demanded, and NOT the far end again: a free port drawn
+      // from a range nothing claims by convention. Asserted as the property
+      // rather than a number, so this test says what it means without
+      // pinning the draw.
+      const offered = Number(input("Local port").value);
+      expect(offered).toBeGreaterThanOrEqual(10000);
+      expect(offered).toBeLessThanOrEqual(32767);
+      expect(offered).not.toBe(6379);
     });
 
     it("forwards the service's port, not the targetPort behind it", async () => {

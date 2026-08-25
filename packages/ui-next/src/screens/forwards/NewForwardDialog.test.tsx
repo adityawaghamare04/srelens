@@ -40,7 +40,7 @@ vi.mock("@srelens/core", async (orig) => ({
 }));
 
 import { type ActiveForward, toKubectl } from "@srelens/core";
-import { NewForwardDialog } from "./NewForwardDialog";
+import { NewForwardDialog, OFFER_HIGH, OFFER_LOW, offerLocalPort } from "./NewForwardDialog";
 
 const CONTEXT = "prod-eu";
 
@@ -453,27 +453,37 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
     await waitFor(() => expect(select("Namespace").value).toBe("checkout"));
   });
 
-  it("prefills both ports, offering the same number on this side", async () => {
+  it("prefills the remote port, and offers a local one that is not it", async () => {
+    // Drawn at random from a range nothing claims by convention, rather than
+    // mirroring the far end — a port worth forwarding is one this machine
+    // plausibly already serves, and only srelens' own forwards can be seen
+    // from here.
+    vi.spyOn(Math, "random").mockReturnValue(0);
     openOn(POD_TARGET);
     await screen.findByRole("dialog");
     expect(input("Remote port").value).toBe("9376");
-    // The values came from the click, not from the fields: both placeholders
-    // say something else entirely.
+    // The values came from the click and the draw, not from the fields: both
+    // placeholders say something else entirely.
     expect(input("Remote port").placeholder).toBe("8080");
     expect(input("Local port").placeholder).toBe("9090");
-    // `9376:9376` is what a person reaches for, so it is what is offered.
-    expect(input("Local port").value).toBe("9376");
+    expect(input("Local port").value).toBe(String(OFFER_LOW));
+    expect(input("Local port").value).not.toBe(input("Remote port").value);
   });
 
-  it("steps the offer past a port srelens is already forwarding", async () => {
-    // Arriving from a port whose number this app already holds must not greet
-    // the reader with the clash error — the number is walked up until it is
-    // free, and 9377 is free only because 9376 is taken.
-    store.list = [holding(9376), holding(9377)];
-    openOn(POD_TARGET);
-    await screen.findByRole("dialog");
-    expect(input("Local port").value).toBe("9378");
-    expect(screen.queryByText(/already forwarded/)).toBeNull();
+  it("draws only from the offer range", () => {
+    // The unit, so the range is pinned without a component in the way. Below
+    // 49152 the OS is not handing the same numbers out for outbound sockets;
+    // above 1023 nothing well-known is being trodden on.
+    expect(offerLocalPort([], () => 0)).toBe(OFFER_LOW);
+    expect(offerLocalPort([], () => 0.9999999)).toBe(OFFER_HIGH);
+  });
+
+  it("passes over a port srelens is already forwarding, and wraps", () => {
+    const held = [holding(OFFER_LOW), holding(OFFER_LOW + 1)] as ActiveForward[];
+    expect(offerLocalPort(held, () => 0)).toBe(OFFER_LOW + 2);
+    // Drawn at the very top with the top held, it comes round rather than
+    // running off the end of the range.
+    expect(offerLocalPort([holding(OFFER_HIGH)] as ActiveForward[], () => 0.9999999)).toBe(OFFER_LOW);
   });
 
   it("asks only for what is missing, not for the target it was handed", async () => {
@@ -551,6 +561,7 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
   });
 
   it("starts exactly the forward the reader arrived with, without touching a field", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     openOn(POD_TARGET);
     await screen.findByRole("dialog");
     // Nothing typed: the offer is enough to start on.
@@ -562,7 +573,7 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
       namespace: "checkout",
       kind: "Pod",
       name: "checkout-api-5c8b7f2d9-mk3wl",
-      localPort: 9376,
+      localPort: OFFER_LOW,
       remotePort: 9376,
     });
   });
