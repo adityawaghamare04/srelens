@@ -8,15 +8,21 @@ import {
   Button,
   LoadingState,
   Screen,
+  SideRail,
   StatusPill,
   Table,
   type Column,
-  type StatusKind,
 } from "@srelens/ui-kit";
-import { useActiveContext } from "../lib/clusters";
+import { useActiveContext, useContexts } from "../lib/clusters";
 import { FailureAlert, FailureState } from "../lib/errorCopy";
 import { useInfo } from "../lib/probe";
 import { useResource } from "../lib/useResource";
+import {
+  ExecAuthRail,
+  EXEC_AUTH_RAIL_WIDTH,
+  TOOL_VERDICT,
+  type ToolState,
+} from "./toolbox/ExecAuthRail";
 
 /** §17's pane head, verbatim — `SearchPaths` really does add that directory. */
 const PANE_HEAD = "Managed tools · installed under ~/.srelens/bin";
@@ -37,54 +43,25 @@ const INSTALLABLE = new Set(["kubectl", "helm", "krew"]);
 type InstallableTool = "kubectl" | "helm" | "krew";
 
 /**
- * What the screen can actually tell apart about a tool. **Three values, not
- * four.**
+ * What the screen can tell apart about a tool, and the word it draws for each
+ * — {@link TOOL_VERDICT}, which lives beside the rail because the rail needs
+ * the same four words and one table is the rule.
  *
- * §17 draws a fourth, `update` — a newer version exists upstream — and there is
- * no source for it anywhere in this app. Nothing queries a release feed, and a
- * kubeconfig never states a minimum version for the binary it names, so an
- * `update` state could only ever be inferred. It is not inferred here.
+ * §17 draws a fifth state, `update` — a newer version exists upstream — and
+ * there is no source for it anywhere in this app. Nothing queries a release
+ * feed, and a kubeconfig never states a minimum version for the binary it
+ * names, so an `update` state could only ever be inferred. It is not inferred
+ * here, and its `Update` button went with it.
  *
  * `unmanaged` is the one §17 does not draw and this does: a tool that IS
  * installed and IS usable, but that somebody else put on the PATH. It matters
  * because the pane head promises `~/.srelens/bin`, and a row reading plain
  * `Installed` for a Homebrew helm quietly claims srelens put it there.
  */
-type ToolState = "installed" | "unmanaged" | "missing";
-
 function toolState(tool: ToolStatus): ToolState {
   if (!tool.installed) return "missing";
   return tool.source === "system" ? "unmanaged" : "installed";
 }
-
-/**
- * THE ONE HAND-PAIRED WORD/TONE TABLE IN THIS SCREEN, AND IT IS MARKED
- * BECAUSE IT SHOULD NOT HAVE TO EXIST.
- *
- * Every other status word in this app comes off a derivation in
- * `@srelens/core` — `podStatus`, `nodeStatus`, `eventVerdict`,
- * `logConnectionStatus` — precisely so a word and the colour beside it cannot
- * drift apart in two places. `packages/core/src/lib/toolbox.ts` has no such
- * derivation: it wraps the capability and returns the DTO unchanged, and there
- * is no `toolVerdict` anywhere to import. This task owns one screen file, so
- * the verdict cannot be added to core from here.
- *
- * So it lives here, once, next to the state it names, and it is the ONLY place
- * in this file that pairs a word with a severity. **If a `toolVerdict` is ever
- * added to core, delete this and call it** — do not add a second table beside
- * it, and do not spell `state === "missing" ? … : …` anywhere else in this
- * file.
- *
- * The severities are §17's own rule (`installed` → ok, everything else muted),
- * with `update`'s `warn` gone along with the state it belonged to. A missing
- * tool is not an incident: srelens talks to the API server itself, and the row
- * beside the word already offers the install.
- */
-const VERDICT: Record<ToolState, { word: string; kind: StatusKind }> = {
-  installed: { word: "Installed", kind: "success" },
-  unmanaged: { word: "Unmanaged", kind: "neutral" },
-  missing: { word: "Missing", kind: "neutral" },
-};
 
 /** A `vMAJOR.MINOR…` string as the pair Kubernetes measures skew in. */
 function minorVersion(text: string): { major: number; minor: number } | null {
@@ -183,6 +160,14 @@ export function Toolbox(_props: { route: string }) {
   // same source the cluster overview's head reads. Nothing here connects.
   const serverVersion = useInfo(context?.stableId ?? null)?.version ?? "";
 
+  // EVERY context, not the active one. A tool this cluster is fine without is
+  // exactly what stops the next cluster answering, and the reader with a
+  // broken context cannot select it to find that out — selecting it is what
+  // fails. The rail memoizes on the names so the store's identity churn does
+  // not re-diagnose the kubeconfig on every notification.
+  const all = useContexts();
+  const contextNames = useMemo(() => all.map((c) => c.name), [all]);
+
   const inventory = useResource(async () => {
     const result = await toolboxStatus();
     // `toolboxStatus` reports a rejection as `{ error }` rather than throwing,
@@ -265,48 +250,55 @@ export function Toolbox(_props: { route: string }) {
 
   return (
     <Screen title="Toolbox" eyebrow="workspace / binaries" fill>
-      {/* Task 9 wraps this pair in `SideRail` (head `Exec auth check`, 288px)
-          and drops the rail in beside it. Left as the bare pane for now: a
-          rail with nothing in it is a 288px column of empty. */}
-      <div className="pane-head">{PANE_HEAD}</div>
-      <div className="scroll flex min-h-0 flex-1 flex-col gap-3 p-3">
-        {!desktop && (
-          /* Said ONCE, for the whole table, rather than as a disabled button on
-             every row. `installKubectl`, `installHelm`, `installKrew`,
-             `installPlugin`, `upgradePlugin` and `removePlugin` are all in the
-             server's `WEB_DENIED_CAPABILITIES`, so every one of §17's per-row
-             buttons would fail here — and a row of controls that reject on
-             click is worse than a table that reads as the inventory it is. */
-          <Alert tone="info" title="Tools are managed where srelens runs">
-            This lists what that machine has. Installing and updating them happens in the srelens
-            desktop app.
-          </Alert>
-        )}
-        {installError && (
-          <FailureAlert
-            tone="sev"
-            title={`Could not install ${installError.tool}`}
-            error={installError.error}
-          />
-        )}
-        {inventory.status === "loading" ? (
-          <LoadingState label="Locating the toolchain" />
-        ) : inventory.status === "error" ? (
-          <FailureState
-            title="Could not inventory the toolchain"
-            error={inventory.error}
-            onRetry={inventory.reload}
-          />
-        ) : (
-          <Table
-            columns={columns}
-            data={rows}
-            getRowKey={(row) => row.name}
-            emptyText="No tools reported"
-            emptyHint="srelens found no entry for kubectl, helm or krew — not even a missing one."
-          />
-        )}
-      </div>
+      {/* The inventory answers "what does this machine have"; the rail answers
+          "and can each context still authenticate", which is the question a
+          cluster that will not open is actually asking. `mainHead` keeps §17's
+          pane head level with the rail's own. */}
+      <SideRail
+        head="Exec auth check"
+        mainHead={PANE_HEAD}
+        width={EXEC_AUTH_RAIL_WIDTH}
+        rail={<ExecAuthRail contexts={contextNames} />}
+      >
+        <div className="scroll flex min-h-0 flex-1 flex-col gap-3 p-3">
+          {!desktop && (
+            /* Said ONCE, for the whole table, rather than as a disabled button on
+               every row. `installKubectl`, `installHelm`, `installKrew`,
+               `installPlugin`, `upgradePlugin` and `removePlugin` are all in the
+               server's `WEB_DENIED_CAPABILITIES`, so every one of §17's per-row
+               buttons would fail here — and a row of controls that reject on
+               click is worse than a table that reads as the inventory it is. */
+            <Alert tone="info" title="Tools are managed where srelens runs">
+              This lists what that machine has. Installing and updating them happens in the srelens
+              desktop app.
+            </Alert>
+          )}
+          {installError && (
+            <FailureAlert
+              tone="sev"
+              title={`Could not install ${installError.tool}`}
+              error={installError.error}
+            />
+          )}
+          {inventory.status === "loading" ? (
+            <LoadingState label="Locating the toolchain" />
+          ) : inventory.status === "error" ? (
+            <FailureState
+              title="Could not inventory the toolchain"
+              error={inventory.error}
+              onRetry={inventory.reload}
+            />
+          ) : (
+            <Table
+              columns={columns}
+              data={rows}
+              getRowKey={(row) => row.name}
+              emptyText="No tools reported"
+              emptyHint="srelens found no entry for kubectl, helm or krew — not even a missing one."
+            />
+          )}
+        </div>
+      </SideRail>
     </Screen>
   );
 }
@@ -354,9 +346,9 @@ const COLUMNS: Column<ToolRow>[] = [
     // Sorted and searched on the word the reader can see, not on the internal
     // id behind it — a filter for "missing" that matched nothing because the
     // cell says `Missing` is the sort of mismatch nobody reports.
-    getValue: (row) => VERDICT[row.state].word,
+    getValue: (row) => TOOL_VERDICT[row.state].word,
     render: (row) => (
-      <StatusPill status={VERDICT[row.state].word} kind={VERDICT[row.state].kind} />
+      <StatusPill status={TOOL_VERDICT[row.state].word} kind={TOOL_VERDICT[row.state].kind} />
     ),
   },
   {
