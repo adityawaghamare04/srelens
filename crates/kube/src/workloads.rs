@@ -185,12 +185,42 @@ pub fn list_pods_capability(cache: Arc<ClientCache>) -> Capability {
     )
 }
 
+/// One `matchExpressions` entry of a Kubernetes `LabelSelector`.
+///
+/// Spelled as the API spells it — `operator` is one of `In`, `NotIn`,
+/// `Exists`, `DoesNotExist`, **case-sensitively**, so a workload's
+/// `spec.selector.matchExpressions` can be handed over untouched. Anything
+/// else is refused rather than guessed at: a selector rendered wrongly returns
+/// the wrong pods and says nothing about it.
+#[derive(Debug, Clone, PartialEq, Deserialize, JsonSchema)]
+pub struct LabelSelectorRequirement {
+    /// The label key the requirement is about, e.g. `app.kubernetes.io/name`.
+    pub key: String,
+    /// `In`, `NotIn`, `Exists`, or `DoesNotExist`.
+    pub operator: String,
+    /// The set for `In`/`NotIn`; empty (or absent) for the existence
+    /// operators, which refuse a set.
+    #[serde(default)]
+    pub values: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct PodsForSelectorIn {
     pub context: String,
     pub namespace: String,
-    /// Equality label selector as a map, e.g. `{ "app": "web" }`.
+    /// Equality label selector as a map, e.g. `{ "app": "web" }` — a
+    /// `LabelSelector`'s `matchLabels` half.
     pub selector: std::collections::BTreeMap<String, String>,
+    /// The set-based half, a `LabelSelector`'s `matchExpressions`. Optional:
+    /// a caller with only equality labels omits it and nothing changes.
+    ///
+    /// The two halves are a **conjunction** — a pod matches when it satisfies
+    /// every entry of `selector` *and* every requirement here — which is what
+    /// makes sending only `matchLabels` for a workload that has both a bug
+    /// rather than an approximation: it queries a strictly wider set than the
+    /// workload owns.
+    #[serde(default, rename = "matchExpressions")]
+    pub match_expressions: Vec<LabelSelectorRequirement>,
 }
 
 /// Build a kube equality label selector string ("k1=v1,k2=v2") from a map.
@@ -200,6 +230,102 @@ pub(crate) fn label_selector(selector: &std::collections::BTreeMap<String, Strin
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// Refuse a key or value that carries the selector grammar's own punctuation.
+///
+/// The query goes to the API server as a *string*, so a comma or a paren in a
+/// value is read as syntax and silently widens what comes back. Kubernetes'
+/// own label syntax allows none of these characters in a key or a value, so
+/// nothing legitimate is turned away — `/`, `.`, `-` and `_` all pass.
+fn ensure_selector_safe(part: &str, what: &str) -> Result<(), CapabilityError> {
+    if part.is_empty() {
+        return Err(CapabilityError::InvalidInput(format!(
+            "label selector {what} must not be empty"
+        )));
+    }
+    if part
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, ',' | '(' | ')' | '!' | '=' | '<' | '>'))
+    {
+        return Err(CapabilityError::InvalidInput(format!(
+            "label selector {what} {part:?} contains selector syntax"
+        )));
+    }
+    Ok(())
+}
+
+/// The label-selector string to ask the API server for, or `None` when the
+/// request must answer with no pods without asking at all.
+///
+/// `None` covers the two ways a selector has nothing to ask:
+///
+/// - **It constrains nothing.** An empty selector matches *every* pod in the
+///   namespace, which is never what a caller asking for a workload's pods
+///   wants; returning nothing is the deliberate answer. A `NotIn ()` term
+///   constrains nothing either — every pod is outside the empty set — so it
+///   drops out, and a selector left with no terms lands here.
+/// - **It can never match.** `In ()` is membership of the empty set, false for
+///   every pod, so the whole conjunction is false and no query is needed.
+///
+/// A selector made only of `matchExpressions` is *not* one of those cases: it
+/// constrains plenty, and answering it with no pods would report a workload as
+/// having none when it has every one of them.
+pub(crate) fn selector_query(
+    labels: &std::collections::BTreeMap<String, String>,
+    expressions: &[LabelSelectorRequirement],
+) -> Result<Option<String>, CapabilityError> {
+    let mut terms: Vec<String> = Vec::new();
+    if !labels.is_empty() {
+        terms.push(label_selector(labels));
+    }
+
+    for req in expressions {
+        ensure_selector_safe(&req.key, "key")?;
+        let key = &req.key;
+        match req.operator.as_str() {
+            "In" | "NotIn" => {
+                if req.values.is_empty() {
+                    // `In ()` is unsatisfiable, so the conjunction is; `NotIn ()`
+                    // is satisfied by everything, so the term simply goes.
+                    if req.operator == "In" {
+                        return Ok(None);
+                    }
+                    continue;
+                }
+                for v in &req.values {
+                    ensure_selector_safe(v, "value")?;
+                }
+                let set = req.values.join(",");
+                let op = if req.operator == "In" { "in" } else { "notin" };
+                terms.push(format!("{key} {op} ({set})"));
+            }
+            "Exists" | "DoesNotExist" => {
+                if !req.values.is_empty() {
+                    return Err(CapabilityError::InvalidInput(format!(
+                        "label selector operator {} takes no values",
+                        req.operator
+                    )));
+                }
+                terms.push(if req.operator == "Exists" {
+                    key.to_string()
+                } else {
+                    format!("!{key}")
+                });
+            }
+            other => {
+                return Err(CapabilityError::InvalidInput(format!(
+                    "unknown label selector operator {other:?}; expected In, NotIn, Exists, or DoesNotExist"
+                )))
+            }
+        }
+    }
+
+    Ok(if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(","))
+    })
 }
 
 /// `k8s.podsForSelector` — pods in a namespace matching a label selector, used
@@ -212,16 +338,19 @@ pub fn pods_for_selector_capability(cache: Arc<ClientCache>) -> Capability {
         move |input: PodsForSelectorIn| {
             let cache = cache.clone();
             async move {
-                // An empty selector would match every pod; return nothing instead.
-                if input.selector.is_empty() {
+                // Decided before a client is touched: a selector with nothing to
+                // ask (see `selector_query`) returns nothing rather than every pod
+                // in the namespace, and a malformed one is refused rather than
+                // rendered into a query that quietly matches the wrong pods.
+                let Some(query) = selector_query(&input.selector, &input.match_expressions)? else {
                     return Ok(ListPodsOut { pods: vec![] });
-                }
+                };
                 let client = cache
                     .get(&input.context)
                     .await
                     .map_err(CapabilityError::Handler)?;
                 let api: Api<Pod> = crate::scoped_api(client, &input.namespace);
-                let params = ListParams::default().labels(&label_selector(&input.selector));
+                let params = ListParams::default().labels(&query);
                 let list = tokio::time::timeout(request_timeout(), api.list(&params))
                     .await
                     .map_err(|_| CapabilityError::Handler("list pods timed out".into()))?
@@ -259,6 +388,155 @@ mod tests {
         m.insert("app".to_string(), "web".to_string());
         m.insert("tier".to_string(), "frontend".to_string());
         assert_eq!(label_selector(&m), "app=web,tier=frontend");
+    }
+
+    /// `matchLabels` for a selector fixture, so an expression test can state
+    /// the equality half in one line.
+    fn labels(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn req(key: &str, operator: &str, values: &[&str]) -> LabelSelectorRequirement {
+        LabelSelectorRequirement {
+            key: key.to_string(),
+            operator: operator.to_string(),
+            values: values.iter().map(|v| v.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn renders_each_set_based_operator_in_kubernetes_syntax() {
+        // Deliberately no `matchLabels`: an expression rendered by accident
+        // through the equality half would show up here as a missing term.
+        let none = labels(&[]);
+        assert_eq!(
+            selector_query(&none, &[req("track", "In", &["canary", "stable"])]).unwrap(),
+            Some("track in (canary,stable)".to_string())
+        );
+        assert_eq!(
+            selector_query(&none, &[req("track", "NotIn", &["canary"])]).unwrap(),
+            Some("track notin (canary)".to_string())
+        );
+        assert_eq!(
+            selector_query(&none, &[req("track", "Exists", &[])]).unwrap(),
+            Some("track".to_string())
+        );
+        assert_eq!(
+            selector_query(&none, &[req("track", "DoesNotExist", &[])]).unwrap(),
+            Some("!track".to_string())
+        );
+    }
+
+    #[test]
+    fn conjoins_both_halves_of_the_selector() {
+        // `app=web` alone would select the canary pods too, so a query that
+        // drops the expression is visibly different from this one.
+        let q = selector_query(
+            &labels(&[("app", "web")]),
+            &[req("track", "NotIn", &["canary"])],
+        )
+        .unwrap();
+        assert_eq!(q, Some("app=web,track notin (canary)".to_string()));
+    }
+
+    #[test]
+    fn an_expression_only_selector_still_queries() {
+        // The empty-`matchLabels` guard must not swallow a workload whose
+        // selector is expressed entirely in `matchExpressions`.
+        let q = selector_query(&labels(&[]), &[req("app", "In", &["web"])]).unwrap();
+        assert_eq!(q, Some("app in (web)".to_string()));
+    }
+
+    #[test]
+    fn a_selector_with_neither_half_asks_for_nothing() {
+        assert_eq!(selector_query(&labels(&[]), &[]).unwrap(), None);
+    }
+
+    #[test]
+    fn in_with_no_values_can_never_match() {
+        // Membership of the empty set is false for every pod — including the
+        // ones `app=web` would otherwise have selected.
+        assert_eq!(
+            selector_query(&labels(&[("app", "web")]), &[req("track", "In", &[])]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn notin_with_no_values_constrains_nothing() {
+        // Every pod is outside the empty set, so the term drops out — but the
+        // rest of the selector stands.
+        assert_eq!(
+            selector_query(&labels(&[("app", "web")]), &[req("track", "NotIn", &[])]).unwrap(),
+            Some("app=web".to_string())
+        );
+        // ...and on its own it leaves a selector that matches the whole
+        // namespace, which asks for nothing.
+        assert_eq!(
+            selector_query(&labels(&[]), &[req("track", "NotIn", &[])]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn refuses_an_operator_the_api_does_not_spell_that_way() {
+        // Case-sensitive: "in" is not `In`, and a selector we render wrongly
+        // returns the wrong pods silently.
+        for operator in ["in", "IN", "NOTIN", "exists", "Contains", ""] {
+            let out = selector_query(&labels(&[]), &[req("track", operator, &["canary"])]);
+            assert!(
+                matches!(out, Err(CapabilityError::InvalidInput(_))),
+                "expected {operator:?} to be refused, got {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_values_on_an_existence_operator() {
+        for operator in ["Exists", "DoesNotExist"] {
+            let out = selector_query(&labels(&[]), &[req("track", operator, &["canary"])]);
+            assert!(
+                matches!(out, Err(CapabilityError::InvalidInput(_))),
+                "expected {operator} with values to be refused, got {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_a_key_or_value_that_would_break_the_selector_grammar() {
+        // A comma or paren in a key or value would be read as syntax by the
+        // API server, quietly widening the query.
+        let broken = [
+            req("track,app", "In", &["canary"]),
+            req("track", "In", &["canary),app in (web"]),
+            req("", "Exists", &[]),
+            req("track", "In", &[""]),
+            req("tr ack", "Exists", &[]),
+        ];
+        for r in broken {
+            let out = selector_query(&labels(&[]), std::slice::from_ref(&r));
+            assert!(
+                matches!(out, Err(CapabilityError::InvalidInput(_))),
+                "expected {r:?} to be refused, got {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_a_qualified_label_key_intact() {
+        // Real selectors use `/` and `.` in keys; refusing those would refuse
+        // most of the cluster.
+        assert_eq!(
+            selector_query(
+                &labels(&[]),
+                &[req("app.kubernetes.io/name", "In", &["web"])]
+            )
+            .unwrap(),
+            Some("app.kubernetes.io/name in (web)".to_string())
+        );
     }
 
     #[test]
