@@ -417,7 +417,13 @@ pub fn krew_bin_dir() -> PathBuf {
 const MANAGED_TOOLS: [&str; 3] = ["kubectl", "krew", "helm"];
 
 /// One managed tool's inventory entry for the Toolbox "Tools" section.
+///
+/// `camelCase` because every other DTO the frontend reads is camelCase, and
+/// `size_bytes` is the first field here with two words in it — the existing
+/// five are single words, so the rename changes nothing about them and only
+/// stops this one arriving as `size_bytes` in TypeScript.
 #[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolStatusDto {
     pub name: String,
     pub installed: bool,
@@ -1163,13 +1169,13 @@ users:
         assert_eq!(kubectl["version"], "v1.30.2");
         assert!(kubectl["path"].as_str().unwrap().ends_with("/kubectl"));
         // `b"#!/bin/sh\n"` is 10 bytes on disk.
-        assert_eq!(kubectl["size_bytes"], 10);
+        assert_eq!(kubectl["sizeBytes"], 10);
         // krew + helm absent: no reading, not a zero.
         assert_eq!(tools[1]["installed"], false);
         assert_eq!(tools[1]["version"], serde_json::Value::Null);
-        assert_eq!(tools[1]["size_bytes"], serde_json::Value::Null);
+        assert_eq!(tools[1]["sizeBytes"], serde_json::Value::Null);
         assert_eq!(tools[2]["installed"], false);
-        assert_eq!(tools[2]["size_bytes"], serde_json::Value::Null);
+        assert_eq!(tools[2]["sizeBytes"], serde_json::Value::Null);
     }
 
     #[tokio::test]
@@ -1193,7 +1199,7 @@ users:
         reg.register(cap);
         let out = reg.invoke("toolbox.status", json!({})).await.unwrap();
         let tools = out["tools"].as_array().unwrap();
-        assert_eq!(tools[0]["size_bytes"], 5000);
+        assert_eq!(tools[0]["sizeBytes"], 5000);
     }
 
     #[tokio::test]
@@ -1213,7 +1219,7 @@ users:
         let tools = out["tools"].as_array().unwrap();
         // Located and reported installed, but no size was actually read.
         assert_eq!(tools[0]["installed"], true);
-        assert_eq!(tools[0]["size_bytes"], serde_json::Value::Null);
+        assert_eq!(tools[0]["sizeBytes"], serde_json::Value::Null);
     }
 
     #[tokio::test]
