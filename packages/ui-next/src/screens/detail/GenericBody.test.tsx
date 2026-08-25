@@ -337,7 +337,7 @@ describe("GenericBody", () => {
       );
       await waitFor(() => expect(screen.getByText("Pods")).toBeDefined());
       await waitFor(() => expect(screen.getByText("svc-pod-1")).toBeDefined());
-      expect(podsForSelector).toHaveBeenCalledWith("ctx", "default", { app: "web" });
+      expect(podsForSelector).toHaveBeenCalledWith("ctx", "default", { app: "web" }, []);
     });
 
     it("does not render related pods for a kind relatedPodSelector finds none for", () => {

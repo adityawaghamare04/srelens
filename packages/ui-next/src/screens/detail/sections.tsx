@@ -34,6 +34,7 @@ import {
 } from "@srelens/ui-kit";
 import { Section } from "./Section";
 import { formatCpu, formatMemory } from "../../lib/kinds/columns";
+import type { WorkloadSelector } from "../../lib/workloadSelector";
 
 /**
  * A formatted list, one item per line — a pod's IPs, an owner reference, a
@@ -365,18 +366,23 @@ export function RelatedPodsSection({
 }: {
   context: string;
   namespace: string;
-  selector: Record<string, string>;
+  /** The workload's WHOLE `LabelSelector`. Both halves, because a pod is the
+   *  workload's only when it satisfies both — see {@link WorkloadSelector}. */
+  selector: WorkloadSelector;
 }) {
   const [state, setState] = useState<{ status: "loading" | "ready" | "error"; pods?: RelatedPod[] }>({
     status: "loading",
   });
-  const selectorKey = JSON.stringify(selector);
+  // Both halves, so a workload whose requirements changed under an unchanged
+  // set of equality labels is re-read rather than left showing the pods of
+  // the selector before it.
+  const selectorKey = JSON.stringify([selector.matchLabels, selector.matchExpressions]);
 
   useEffect(() => {
     let active = true;
     setState({ status: "loading" });
     Promise.all([
-      podsForSelector(context, namespace, selector),
+      podsForSelector(context, namespace, selector.matchLabels, selector.matchExpressions),
       // Metrics are best-effort: a missing metrics-server must not hide pods.
       podMetrics(context, namespace).catch((): { metrics?: PodMetric[] } => ({ metrics: [] })),
     ]).then(([podsOut, metricsOut]) => {

@@ -288,12 +288,26 @@ function draw(route = ROUTE) {
 }
 
 /** The rendered lines as `ts|source|level|message`, in order. */
-const rendered = (region: HTMLElement) =>
-  Array.from(region.querySelectorAll(".logline")).map((el) =>
+/**
+ * The drawn rows, read from the log region that is in the document NOW.
+ *
+ * The node is re-read rather than trusted: `body()` hands back the element as
+ * it was, and a resolution still in flight can re-render and replace it. A
+ * detached node answers every query with nothing, so the assertion sees an
+ * empty body and reads as "the screen drew none of them" — which is how three
+ * tests in this file flaked under parallel load while passing alone every
+ * time. The argument is kept because it reads naturally at the call sites,
+ * and used only while it is still attached.
+ */
+const rendered = (region?: HTMLElement) => {
+  const live = region?.isConnected ? region : screen.queryByRole("log", { name: /logs/i });
+  if (!live) return [];
+  return Array.from(live.querySelectorAll(".logline")).map((el) =>
     ["ts", "source", "level", "message"]
       .map((slot) => el.querySelector(`[data-slot=${slot}]`)?.textContent ?? "")
       .join("|"),
   );
+};
 
 /** Push lines into the buffer the screen is rendering. */
 function push(...lines: { source: string; text: string }[]) {
@@ -303,7 +317,25 @@ function push(...lines: { source: string; text: string }[]) {
   });
 }
 
-const body = () => screen.findByRole("log", { name: /logs/i });
+/**
+ * The log region, after the screen has settled.
+ *
+ * `findByRole` alone returns the element as soon as one appears, which is
+ * before `resolveLogSubject` has settled — and when it does settle, React can
+ * replace that node. Tests then held a DETACHED element: `querySelectorAll`
+ * answers nothing, and a `clientHeight` defined on it is lost, so the window
+ * sees a zero-height viewport and draws no rows at all. That surfaced as four
+ * different tests in this file failing about one run in six, each passing
+ * alone, and it is why the flakes moved around rather than sitting still.
+ *
+ * Flushing pending promises first, then re-querying, hands back the node the
+ * screen actually settled on.
+ */
+const body = async () => {
+  await screen.findByRole("log", { name: /logs/i });
+  await act(async () => {});
+  return screen.getByRole("log", { name: /logs/i });
+};
 
 /** The last options the screen asked the stream hook for. */
 const lastOptions = () => h.seen[h.seen.length - 1].options;

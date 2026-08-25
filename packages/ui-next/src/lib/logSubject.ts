@@ -10,9 +10,9 @@ import {
   type HealthKind,
   type Invoker,
   type K8sObject,
-  type LabelSelectorRequirement,
   type LogTarget,
 } from "@srelens/core";
+import { selectorOf } from "./workloadSelector";
 
 /**
  * A route's subject, resolved to the pods and containers a stream can open
@@ -194,49 +194,6 @@ function terminationOf(
     ...(typeof reason === "string" && reason !== "" ? { reason } : {}),
     ...(typeof finishedAt === "string" && finishedAt !== "" ? { finishedAt } : {}),
   };
-}
-
-/**
- * A workload's whole `LabelSelector`, both halves.
- *
- * `matchExpressions` is not optional detail: a pod is owned by the workload
- * only when it satisfies the equality labels **and** every expression, so
- * reading `matchLabels` alone is wrong twice over — a workload selected
- * entirely by expressions resolves to an empty selector, which the backend
- * deliberately answers with no pods (an empty selector would otherwise match
- * the whole namespace), and a workload with both halves resolves to a
- * selector broader than the real one, which streams lines from pods the
- * workload never owned.
- */
-interface WorkloadSelector {
-  matchLabels: Record<string, string>;
-  matchExpressions: LabelSelectorRequirement[];
-}
-
-/**
- * The selector on a workload's spec, read loosely so a spec that doesn't have
- * one just yields no pods.
- *
- * Requirements are passed on as they were found — the key and operator
- * verbatim, values narrowed to the strings among them. Nothing here corrects
- * an operator's spelling or drops a requirement it doesn't recognise: the
- * backend renders selectors, and it refuses one it cannot render. An error is
- * a far better outcome than a corrected selector, which is simply a different
- * selector naming different pods.
- */
-function selectorOf(object: unknown): WorkloadSelector {
-  const spec = asRecord(asRecord(object).spec);
-  const selector = asRecord(spec.selector);
-  const matchLabels = (selector.matchLabels ?? {}) as Record<string, string>;
-  const matchExpressions = asArray(selector.matchExpressions).map((entry) => {
-    const requirement = asRecord(entry);
-    return {
-      key: typeof requirement.key === "string" ? requirement.key : "",
-      operator: typeof requirement.operator === "string" ? requirement.operator : "",
-      values: asArray(requirement.values).filter((v): v is string => typeof v === "string"),
-    };
-  });
-  return { matchLabels, matchExpressions };
 }
 
 /** The pod names in scope for `subject` — itself for a pod, or its

@@ -137,8 +137,17 @@ export function GenericBody({
   const meta = object.metadata ?? {};
   const namespace = str(meta.namespace);
   const conditions = asArray(asRecord(object.status).conditions) as unknown as Condition[];
-  const podSelector = relatedPodSelector(kind, object);
-  const hasPodSelector = Object.keys(podSelector).length > 0;
+  // Core's `relatedPodSelector` answers with the equality half only — it is
+  // also classic's reader, and classic is frozen — so the requirements half
+  // is empty here rather than absent: the section takes a whole
+  // `LabelSelector`, and an empty `matchExpressions` sends exactly the
+  // payload this always sent. A DaemonSet, Job, PodDisruptionBudget or
+  // NetworkPolicy written with `matchExpressions` still resolves through that
+  // reader's equality half alone — a narrower instance of the same gap
+  // WorkloadBody just closed, left because widening core's reader changes
+  // what the frozen app sends.
+  const podSelector = { matchLabels: relatedPodSelector(kind, object), matchExpressions: [] };
+  const hasPodSelector = Object.keys(podSelector.matchLabels).length > 0;
 
   return (
     <>
