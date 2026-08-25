@@ -220,12 +220,42 @@ export function ExecAuthRail({ contexts }: ExecAuthRailProps) {
     );
   }
 
+  // A context srelens could not check at all is a different fact from one whose
+  // auth needs a tool, and it repeats: the same refusal arrives once per
+  // context. Drawn one card each, eleven of them push the finding this rail
+  // exists for off the bottom of a 288px column — the shape that made the
+  // cluster overview unreadable when a raw API error took four rows per
+  // cluster. They collapse into one section; the actionable ones keep theirs.
+  const unchecked = rows.filter((check) => check.error !== undefined);
+  const actionable = rows.filter((check) => check.error === undefined);
+
   return (
     <>
-      {rows.map((check) => (
+      {actionable.map((check) => (
         <ContextSection key={check.context} check={check} onInstalled={checks.reload} />
       ))}
+      {unchecked.length > 0 && <UncheckedSection checks={unchecked} />}
     </>
+  );
+}
+
+/**
+ * The contexts srelens could not check, together.
+ *
+ * One card names its context and says why; several say the same sentence over
+ * and over, and the reason belongs to all of them. The first error is shown
+ * because a repeated failure has a repeated cause — and the names are listed
+ * so a reader can tell whether the contexts they care about are among them.
+ */
+function UncheckedSection({ checks }: { checks: ContextCheck[] }) {
+  return (
+    <Section title={`${plural(checks.length, "context")} not checked`}>
+      <div className="flex flex-col gap-1 text-[0.8125rem]">
+        <div>srelens could not read the exec auth for {checks.length === 1 ? "this context" : "these contexts"}.</div>
+        <div className="text-muted">{checks.map((c) => c.context).join(", ")}</div>
+        <FailureLine error={checks[0].error ?? ""} className="text-muted" />
+      </div>
+    </Section>
   );
 }
 

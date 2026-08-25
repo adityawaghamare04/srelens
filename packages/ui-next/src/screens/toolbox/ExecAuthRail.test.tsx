@@ -315,13 +315,30 @@ describe("ExecAuthRail — the check itself", () => {
     });
     rail(["edge-apac"]);
 
-    const section = await waitFor(() => sectionFor("edge-apac"));
+    // A context that could not be checked goes to the collapsed section rather
+    // than getting one of its own — but it is still NAMED there, so a reader
+    // can tell whether the context they came for is among them.
+    const section = await waitFor(() => sectionFor("1 context not checked"));
+    expect(section.textContent).toContain("edge-apac");
     // `describeError`'s own sentence, not the struct.
     expect(section.textContent).toMatch(/rejected your credentials/i);
     // The struct is still reachable — behind a disclosure, which is the whole
     // reason it is not a `title`.
     const raw = section.querySelector('[data-slot="raw"]');
     expect(raw?.textContent).toContain("Status { code: 401 }");
+  });
+
+  it("says the same refusal once, however many contexts it arrives for", async () => {
+    // Eleven contexts refusing identically is one fact, not eleven. Drawn a
+    // card each they fill a 288px column and push the actionable finding off
+    // the bottom — the shape that made the cluster overview unreadable when a
+    // raw API error took four rows per cluster.
+    core.diagnoseContext.mockResolvedValue({ error: "handler error: unknown context: x" });
+    rail(["a", "b", "c"]);
+
+    await waitFor(() => expect(headings()).toEqual(["3 contexts not checked"]));
+    const section = sectionFor("3 contexts not checked");
+    expect(section.textContent).toContain("a, b, c");
   });
 
   it("does not certify health when the check itself blew up", async () => {
@@ -342,8 +359,13 @@ describe("ExecAuthRail — the check itself", () => {
     );
     rail(["edge-apac", "prod-eu"]);
 
-    await waitFor(() => expect(headings()).toEqual(["edge-apac", "prod-eu"]));
+    // The actionable context keeps its own section and its remedy; the one
+    // that could not be checked is reported after it, not instead of it. That
+    // ordering is the property: a failure must never cost the reader the
+    // finding this rail exists to show.
+    await waitFor(() => expect(headings()).toEqual(["prod-eu", "1 context not checked"]));
     expect(within(sectionFor("prod-eu")).getByRole("button", { name: /install/i })).toBeTruthy();
+    expect(sectionFor("1 context not checked").textContent).toContain("edge-apac");
   });
 });
 
