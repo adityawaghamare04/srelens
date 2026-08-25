@@ -56,6 +56,7 @@ const MANAGED: ToolStatus = {
   path: "/Users/ada/.srelens/bin/kubectl",
   version: "v1.31.4",
   source: "managed",
+  sizeBytes: 54_200_000,
 };
 const SYSTEM: ToolStatus = {
   name: "helm",
@@ -63,6 +64,10 @@ const SYSTEM: ToolStatus = {
   path: "/opt/homebrew/bin/helm",
   version: "v3.16.3",
   source: "system",
+  // Installed, on the PATH, and its path could not be stat'd — a dangling
+  // symlink or a permission error. Distinct from "not installed", and the
+  // reason the cell must not read `0 B`.
+  sizeBytes: null,
 };
 const ABSENT: ToolStatus = {
   name: "krew",
@@ -70,6 +75,7 @@ const ABSENT: ToolStatus = {
   path: null,
   version: null,
   source: null,
+  sizeBytes: null,
 };
 
 const TOOLS = [MANAGED, SYSTEM, ABSENT];
@@ -163,19 +169,19 @@ describe("Toolbox — the inventory", () => {
     expect(note(rowFor("kubectl"))).not.toContain("on PATH");
   });
 
-  it("shows no size for anything, because nothing measures one", async () => {
+  it("sizes what it can measure, and dashes what it cannot", async () => {
     open();
     await screen.findByText("kubectl");
 
-    // `ToolStatusDto` carries no size, so every figure in a Size column would
-    // be a measurement nobody took — and `0 B` for the missing one would be the
-    // worst of them. The column is not drawn at all.
-    expect(headers()).not.toContain("Size");
+    expect(headers()).toContain("Size");
+    // Measured.
+    expect(cells(rowFor("kubectl"))).toContain("54.2 MB");
+    // Installed but unreadable, and not installed at all: two different
+    // reasons for the same answer, and neither of them is `0 B`. A zero is a
+    // measurement, and nobody took one.
+    expect(cells(rowFor("helm"))).toContain("\u2014");
+    expect(cells(rowFor("krew"))).toContain("\u2014");
     expect(screen.queryByText(/\b0 B\b/)).toBeNull();
-    // The installed row has no invented figure either — its cells are exactly
-    // the columns that have a source.
-    expect(cells(rowFor("kubectl"))).toHaveLength(headers().length);
-    expect(cells(rowFor("krew")).join(" ")).not.toMatch(/\d+(\.\d+)?\s?[KMG]?B/);
   });
 });
 
@@ -242,7 +248,7 @@ describe("Toolbox — what can be done, and where", () => {
     open();
     await screen.findByText("krew");
 
-    expect(headers()).toEqual(["Tool", "Version", "State", "Note", ""]);
+    expect(headers()).toEqual(["Tool", "Version", "State", "Note", "Size", ""]);
     // The missing tool is offered an install; the managed one a replacement.
     expect(screen.getByRole("button", { name: "Install krew" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reinstall kubectl" })).toBeTruthy();
@@ -274,8 +280,8 @@ describe("Toolbox — what can be done, and where", () => {
 
     // Every per-row button here is a `WEB_DENIED_CAPABILITIES` entry, so none
     // is drawn — the column is gone, not disabled.
-    expect(headers()).toEqual(["Tool", "Version", "State", "Note"]);
-    expect(cells(rowFor("krew"))).toHaveLength(4);
+    expect(headers()).toEqual(["Tool", "Version", "State", "Note", "Size"]);
+    expect(cells(rowFor("krew"))).toHaveLength(5);
     expect(screen.queryByRole("button", { name: /^(Install|Reinstall)/ })).toBeNull();
 
     // Said once, for the whole table, rather than per row.

@@ -15,6 +15,7 @@ import {
 } from "@srelens/ui-kit";
 import { useActiveContext, useContexts } from "../lib/clusters";
 import { FailureAlert, FailureState } from "../lib/errorCopy";
+import { formatBytes } from "../lib/numbers";
 import { useInfo } from "../lib/probe";
 import { useResource } from "../lib/useResource";
 import {
@@ -129,6 +130,7 @@ interface ToolRow {
   version: string;
   state: ToolState;
   note: string;
+  size: string;
   installed: boolean;
 }
 
@@ -190,6 +192,7 @@ export function Toolbox(_props: { route: string }) {
       (inventory.data ?? []).map((tool) => ({
         name: tool.name,
         version: tool.version || ABSENT,
+        size: formatBytes(tool.sizeBytes) || ABSENT,
         state: toolState(tool),
         note: noteFor(tool, serverVersion, context?.name ?? ""),
         installed: tool.installed,
@@ -315,19 +318,14 @@ function progressLabel(percent: number | null): string {
  * The columns every platform draws, in §17's order — **minus `Size`.**
  *
  * §17 puts a right-aligned size on every row (`54.2 MB`, `48.9 MB`, `9.1 MB`).
- * `ToolStatusDto` is `{ name, installed, path, version, source }`: it carries
- * no size, no capability in the catalog reports a file's size, and nothing in
- * this app can stat a path. So there is no reading to render — not for the
- * missing tool, and not for the installed ones either.
+ * `Size` reads the byte length of the file at `path`, following symlinks —
+ * these entries are usually symlinks, and a link's own length is a handful of
+ * bytes: a plausible-looking wrong number, which is worse than none.
  *
- * A missing tool renders its absence and never `0 B`; that rule has held from
- * the cluster overview through every screen since, because a zero is a
- * measurement claimed rather than taken. The same reasoning finishes the job
- * here: if EVERY cell would be an absence, the column is not a column, and
- * drawing one headed `Size` with a dash in every row states that a size was
- * looked for and not found. Nothing looked. The column is dropped, and this
- * comment is the record of why — when `ToolStatusDto` grows a size, add it
- * back and give the missing row its dash.
+ * A tool with no readable size renders a dash, never `0 B`. A zero is a
+ * measurement, and a tool that is not installed — or whose path cannot be
+ * stat'd — has not been measured. That rule has held from the cluster overview
+ * through every screen since.
  */
 const COLUMNS: Column<ToolRow>[] = [
   {
@@ -355,5 +353,11 @@ const COLUMNS: Column<ToolRow>[] = [
     key: "note",
     header: "Note",
     render: (row) => <span className="text-muted">{row.note}</span>,
+  },
+  {
+    key: "size",
+    header: "Size",
+    align: "end",
+    render: (row) => <span className="tabular-nums text-muted">{row.size}</span>,
   },
 ];
