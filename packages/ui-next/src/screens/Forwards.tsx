@@ -353,12 +353,16 @@ const COLUMNS: Column<ForwardRow>[] = [
   {
     key: "cluster",
     header: "Cluster",
-    render: (row) => <span className="path">{row.cluster}</span>,
+    // `block`, not a bare span: `truncate` sets `overflow: hidden`, which does
+    // nothing to an inline box. A kubeconfig context name is user-chosen and
+    // routinely long — `m01-1786968575165/kubernetes-admin@cluster.local` —
+    // and without this it draws straight over the Local cell beside it.
+    render: (row) => <span className="path block truncate">{row.cluster}</span>,
   },
   {
     key: "address",
     header: "Local",
-    render: (row) => <span className="code truncate">{row.address}</span>,
+    render: (row) => <span className="code block truncate">{row.address}</span>,
   },
   {
     key: "remote",

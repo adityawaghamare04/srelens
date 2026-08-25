@@ -202,6 +202,23 @@ describe("Forwards — the table", () => {
     expect(within(pod).getByText("search")).toBeTruthy();
   });
 
+  it("keeps a long context name inside its own cell", () => {
+    // A kubeconfig context is user-chosen and routinely long. Seen against a
+    // real cluster, `m01-1786968575165/kubernetes-admin@cluster.local` drew
+    // straight over the Local cell beside it and both were unreadable.
+    //
+    // `truncate` sets `overflow: hidden`, which does nothing to an inline box,
+    // so the cell has to be a block for the ellipsis to happen at all. jsdom
+    // lays nothing out, so this asserts the mechanism rather than the pixels —
+    // the third time column overflow has shipped on this project, and every
+    // time it was invisible to the suite.
+    render(<Forwards route="/forwards" />);
+    const cluster = rowFor("svc/checkout-api").querySelectorAll("td")[1];
+    const inner = cluster.querySelector("span");
+    expect(inner?.className).toContain("truncate");
+    expect(inner?.className).toContain("block");
+  });
+
   it("gives each row its cluster, ports, traffic and age", () => {
     open();
     expect(cells(rowFor("svc/identity-gateway")).slice(1, 7)).toEqual([
