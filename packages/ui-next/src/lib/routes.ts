@@ -83,11 +83,15 @@ export function describe(route: string, clusterName?: string): RouteInfo {
   if (route.startsWith("/resources/")) {
     const [, , rawName, suffix] = route.split("/");
     const name = decodeURIComponent(rawName ?? "");
-    // The row menu (`ResourceMenu.tsx`) mints `/resources/<name>/logs|shell|forward`
-    // alongside the bare `/resources/<name>` — same prefix, so without this a
-    // pod opened three ways ("Open in new tab", "Follow logs", "Open shell")
-    // got three tabs with the identical title and kind, indistinguishable in
-    // the strip.
+    // `/resources/<name>/logs|shell|forward` shares the bare
+    // `/resources/<name>` prefix — so without this a pod opened three ways
+    // ("Open in new tab", "Follow logs", "Open shell") got three tabs with the
+    // identical title and kind, indistinguishable in the strip.
+    //
+    // Only `shell` is still minted (`ResourceMenu.tsx`). Logs and Port forward
+    // have real front doors now — `logsRoute` and §A.4's dialog — and the
+    // other two shapes survive here only so a tab a previous session
+    // persisted can still name itself in the strip.
     if (suffix === "logs") return { route, title: `${name} · logs`, sub, kind: "logs" };
     if (suffix === "shell") return { route, title: `${name} · shell`, sub, kind: "terminal" };
     if (suffix === "forward") return { route, title: `${name} · forward`, sub, kind: "forwards" };

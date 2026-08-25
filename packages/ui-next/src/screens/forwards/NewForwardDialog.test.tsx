@@ -410,3 +410,137 @@ describe("NewForwardDialog — what it must not leak", () => {
     for (const port of ["9090", "8080"]) expect(joined).not.toContain(port);
   });
 });
+
+/**
+ * The dialog reached from a Service's Ports row, a container's port chip or
+ * the row menu's `Port forward` — the three doors that used to be dead ends.
+ *
+ * What a prefill must be: a STARTING POINT. The target and both ports stay
+ * editable, and the local port stays EMPTY — the OS picks a free one, and
+ * seeding it with the remote port is how forwarding a port you already hold
+ * locally walks straight into §A.4's clash error on the commonest case there
+ * is.
+ */
+describe("NewForwardDialog — opened from the thing being forwarded", () => {
+  /**
+   * §A.4's own fixture lists this pod LAST, and 9376 is neither the Remote
+   * port field's placeholder (8080) nor any port the fixture mentions — so a
+   * dialog that merely defaulted to its first option, or left its fields
+   * alone, cannot pass the assertions below by accident.
+   */
+  const POD_TARGET = { kind: "Pod", name: "checkout-api-5c8b7f2d9-mk3wl", remotePort: 9376 };
+
+  function openOn(
+    target: { kind: string; name: string; remotePort?: number },
+    onClose = vi.fn(),
+  ) {
+    render(
+      <NewForwardDialog context={CONTEXT} namespace="checkout" target={target} onClose={onClose} />,
+    );
+    return onClose;
+  }
+
+  const select = (name: string) => field(name) as HTMLSelectElement;
+  const input = (name: string) => field(name) as HTMLInputElement;
+
+  it("starts on the target it was handed, named the way its KIND is named", async () => {
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(select("Target").value).toBe("pod/checkout-api-5c8b7f2d9-mk3wl"));
+    // `pod/`, from `kindToForwardTarget` — not `svc/`, which is what a prefill
+    // that ignored the kind and guessed would produce.
+    expect(select("Target").value.startsWith("pod/")).toBe(true);
+    await waitFor(() => expect(select("Namespace").value).toBe("checkout"));
+  });
+
+  it("prefills the remote port that was clicked, and leaves the local one empty", async () => {
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    expect(input("Remote port").value).toBe("9376");
+    // The value came from the click, not from the field: its placeholder says
+    // something else entirely.
+    expect(input("Remote port").placeholder).toBe("8080");
+    expect(input("Local port").value).toBe("");
+  });
+
+  it("prefills nothing when there is no target — the screen's own way in, unchanged", async () => {
+    open();
+    await screen.findByRole("dialog");
+    expect(select("Target").value).toBe("");
+    expect(input("Remote port").value).toBe("");
+  });
+
+  it("writes a Service's command with svc/, a Pod's with pod/", async () => {
+    openOn({ kind: "Service", name: "checkout-api", remotePort: 9376 });
+    await screen.findByRole("dialog");
+    await userEvent.type(field("Local port"), "9091");
+    const expected = toKubectl({
+      action: "port-forward",
+      kind: "Service",
+      name: "checkout-api",
+      context: CONTEXT,
+      namespace: "checkout",
+      localPort: 9091,
+      remotePort: 9376,
+    });
+    await waitFor(() => expect(screen.getByText(expected)).toBeTruthy());
+    expect(expected).toContain("port-forward svc/checkout-api 9091:9376");
+  });
+
+  it("is a starting point, not a lock: target and both ports stay editable", async () => {
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    // The prefill is really there first — without this the rest of the test
+    // is just the dialog being filled in by hand, which it always allowed.
+    await waitFor(() => expect(select("Target").value).toBe("pod/checkout-api-5c8b7f2d9-mk3wl"));
+    expect(input("Remote port").value).toBe("9376");
+    await waitFor(() =>
+      expect(within(field("Target")).queryByRole("option", { name: "svc/checkout-web" })).toBeTruthy(),
+    );
+    await userEvent.selectOptions(field("Target"), "svc/checkout-web");
+    await userEvent.clear(field("Remote port"));
+    await userEvent.type(field("Remote port"), "443");
+    await userEvent.type(field("Local port"), "9091");
+    await waitFor(() =>
+      expect(screen.getByText(/port-forward svc\/checkout-web 9091:443/)).toBeTruthy(),
+    );
+  });
+
+  it("keeps offering the handed target when the listing that would name it refuses", async () => {
+    // The reader got here by clicking the thing itself; a Pods listing that
+    // came back forbidden is not a reason to forget what they clicked.
+    core.listPods.mockResolvedValue({ error: "ApiError: forbidden" });
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(core.listPods).toHaveBeenCalled());
+    await waitFor(() => expect(select("Target").value).toBe("pod/checkout-api-5c8b7f2d9-mk3wl"));
+  });
+
+  it("starts exactly the forward the reader arrived with, once they name a local port", async () => {
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    await userEvent.type(field("Local port"), "9091");
+    await waitFor(() => expect(startButton().disabled).toBe(false));
+    await userEvent.click(startButton());
+    await waitFor(() => expect(core.startPortForward).toHaveBeenCalledTimes(1));
+    expect(core.startPortForward).toHaveBeenCalledWith({
+      context: CONTEXT,
+      namespace: "checkout",
+      kind: "Pod",
+      name: "checkout-api-5c8b7f2d9-mk3wl",
+      localPort: 9091,
+      remotePort: 9376,
+    });
+  });
+
+  it("drops the prefilled target when the reader moves to another namespace", async () => {
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(select("Target").value).toBe("pod/checkout-api-5c8b7f2d9-mk3wl"));
+    core.listServices.mockResolvedValue({ services: [] });
+    core.listPods.mockResolvedValue({ pods: [] });
+    await userEvent.selectOptions(field("Namespace"), "payments");
+    await waitFor(() => expect(core.listPods).toHaveBeenCalledWith(CONTEXT, "payments"));
+    await waitFor(() => expect(select("Target").value).toBe(""));
+  });
+});

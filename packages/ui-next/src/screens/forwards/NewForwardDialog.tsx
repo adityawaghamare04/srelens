@@ -88,11 +88,34 @@ function plannedAddress(localPort: number): string {
   return browsable(address.replace(`/pf/${PLACEHOLDER_ID}/`, "/pf/<id>/"));
 }
 
+/**
+ * The thing a reader was already looking at when they asked to forward it —
+ * a Service's Ports row, a container's port, a row in a list.
+ *
+ * `kind` is the KUBERNETES kind (`Service`, `Pod`), never kubectl's short
+ * form: `kindToForwardTarget` owns that mapping, and it is what decides
+ * whether the equivalent command reads `svc/` or `pod/`.
+ *
+ * `remotePort` is the port on the far end — the one that was clicked. There
+ * is deliberately no local port here: see {@link NewForwardDialog}.
+ */
+export interface ForwardTarget {
+  kind: string;
+  name: string;
+  remotePort?: number;
+}
+
 export interface NewForwardDialogProps {
   /** The cluster the forward is made in — a kubeconfig context NAME. */
   context: string;
   /** Where the namespace select starts, when the caller knows a good answer. */
   namespace?: string;
+  /**
+   * What the reader arrived from, when they came through one of the doors
+   * that already knows the answer. Absent from `/forwards`' own header
+   * action, which starts on nothing.
+   */
+  target?: ForwardTarget;
   /** Cancel, escape, the header's control, and a forward that came up. */
   onClose: () => void;
 }
@@ -130,16 +153,56 @@ export interface NewForwardDialogProps {
  * RETURNING an error rather than throwing, so nothing here wraps them in a
  * try/catch and calls that error handling; the field is read. `startPortForward`
  * does throw, and that one is caught.
+ *
+ * **A `target` is a starting point, not a lock.** Every door that opens this
+ * with one — a Service's Ports row, a container's port, the row menu's
+ * `Port forward` — is handing over what the reader was looking at, and they
+ * may well want a different one; the target select and both port fields stay
+ * exactly as editable as they are from the header action. And a prefilled
+ * `remotePort` is NOT a prefilled `localPort`: left empty, the OS picks a free
+ * port, whereas seeding it with the same number walks the commonest case there
+ * is — forwarding a port already open on this machine — straight into the
+ * clash error above.
  */
-export function NewForwardDialog({ context, namespace: initial, onClose }: NewForwardDialogProps) {
+export function NewForwardDialog({
+  context,
+  namespace: initial,
+  target: arrivedFrom,
+  onClose,
+}: NewForwardDialogProps) {
   const forwards = useSyncExternalStore(subscribeForwards, getForwards, getForwards);
 
+  /**
+   * The handed-over target as an OPTION — the same shape the listings produce,
+   * so nothing downstream has to know which of the two it came from.
+   *
+   * Memoised on the primitives rather than on the prop object, because every
+   * door passes an object literal that is new on each of its own renders.
+   */
+  const prefilled = useMemo<Target | null>(
+    () =>
+      arrivedFrom
+        ? {
+            value: `${kindToForwardTarget(arrivedFrom.kind)}/${arrivedFrom.name}`,
+            kind: arrivedFrom.kind,
+            name: arrivedFrom.name,
+          }
+        : null,
+    [arrivedFrom?.kind, arrivedFrom?.name],
+  );
+  /** The namespace a prefilled target belongs to — the one it was opened on. */
+  const homeNamespace = initial ?? "";
+
   const [namespaces, setNamespaces] = useState<string[] | null>(null);
-  const [namespace, setNamespace] = useState(initial ?? "");
+  const [namespace, setNamespace] = useState(homeNamespace);
   const [targets, setTargets] = useState<Target[] | null>(null);
-  const [target, setTarget] = useState("");
+  const [target, setTarget] = useState(prefilled?.value ?? "");
   const [localText, setLocalText] = useState("");
-  const [remoteText, setRemoteText] = useState("");
+  // The remote port only. See {@link NewForwardDialog} on why the local one
+  // starts empty even when the far end is known.
+  const [remoteText, setRemoteText] = useState(
+    arrivedFrom?.remotePort == null ? "" : String(arrivedFrom.remotePort),
+  );
   const [inBrowser, setInBrowser] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -150,6 +213,13 @@ export function NewForwardDialog({ context, namespace: initial, onClose }: NewFo
    * a short window, and the reader only ever acts on the most recent one.
    */
   const [failure, setFailure] = useState<{ title: string; error: unknown } | null>(null);
+
+  /**
+   * The one target value a listing is not allowed to clear — the prefilled
+   * one, and only while the reader is still in the namespace it came from.
+   * `""` (which no option ever holds) when there is nothing to protect.
+   */
+  const keptOnArrival = prefilled && namespace === homeNamespace ? prefilled.value : "";
 
   useEffect(() => {
     let live = true;
@@ -184,7 +254,6 @@ export function NewForwardDialog({ context, namespace: initial, onClose }: NewFo
     }
     let live = true;
     setTargets(null);
-    setTarget("");
     void Promise.all([listServices(context, namespace), listPods(context, namespace)]).then(
       ([services, pods]) => {
         if (!live) return;
@@ -194,7 +263,7 @@ export function NewForwardDialog({ context, namespace: initial, onClose }: NewFo
         }
         // Whatever answered is still worth offering: a cluster that lists its
         // Services but refuses its Pods can still forward a Service.
-        setTargets([
+        const listed: Target[] = [
           ...(services.services ?? []).map((s) => ({
             value: `${kindToForwardTarget("Service")}/${s.name}`,
             kind: "Service",
@@ -205,15 +274,44 @@ export function NewForwardDialog({ context, namespace: initial, onClose }: NewFo
             kind: "Pod",
             name: p.name,
           })),
-        ]);
+        ];
+        setTargets(listed);
+        // The selection is reconciled against what this namespace actually
+        // has, rather than cleared the moment the namespace changes: clearing
+        // up front would wipe a prefilled target before its own listing had a
+        // chance to confirm it. A target the reader ARRIVED with survives a
+        // listing that never named it (see `offered`) — but only in its own
+        // namespace.
+        setTarget((current) =>
+          current === keptOnArrival || listed.some((t) => t.value === current) ? current : "",
+        );
       },
     );
     return () => {
       live = false;
     };
-  }, [context, namespace]);
+  }, [context, namespace, keptOnArrival]);
 
-  const chosen = useMemo(() => targets?.find((t) => t.value === target), [targets, target]);
+  /**
+   * Everything the target select offers: what the namespace listed, plus the
+   * target the reader arrived from when that listing did not name it.
+   *
+   * A Pods listing that came back forbidden — or has simply not landed yet —
+   * is not a reason to forget what was clicked. The reader got here from the
+   * thing itself, so it is a target whether or not a list agrees.
+   */
+  const offered = useMemo<Target[]>(() => {
+    const listed = targets ?? [];
+    if (!prefilled || namespace !== homeNamespace) return listed;
+    return listed.some((t) => t.value === prefilled.value) ? listed : [prefilled, ...listed];
+  }, [targets, prefilled, namespace, homeNamespace]);
+
+  // Gated on the namespace as well as the value: a prefilled target is offered
+  // before any listing lands, and a forward with no namespace is not a forward.
+  const chosen = useMemo(
+    () => (namespace ? offered.find((t) => t.value === target) : undefined),
+    [offered, target, namespace],
+  );
   const localPort = portOf(localText);
   const remotePort = portOf(remoteText);
 
@@ -261,7 +359,7 @@ export function NewForwardDialog({ context, namespace: initial, onClose }: NewFo
   }
 
   const namespaceOptions = (namespaces ?? []).map((n) => ({ value: n }));
-  const targetOptions = (targets ?? []).map((t) => ({ value: t.value }));
+  const targetOptions = offered.map((t) => ({ value: t.value }));
 
   return (
     <Dialog
@@ -292,7 +390,9 @@ export function NewForwardDialog({ context, namespace: initial, onClose }: NewFo
               onValueChange={setTarget}
               options={targetOptions}
               className="w-full"
-              disabled={!namespace || targets === null}
+              // A prefilled target is offered before any listing lands, so
+              // the control it is showing must not be dead in the meantime.
+              disabled={!namespace || (targets === null && targetOptions.length === 0)}
               placeholder={
                 !namespace
                   ? "Pick a namespace first"
