@@ -254,7 +254,8 @@ describe("a container's ports as the way in to a forward", () => {
     await waitFor(() => expect(dialogSelect("Target").value).toBe("pod/web-1"));
     await waitFor(() => expect(dialogSelect("Namespace").value).toBe("default"));
     expect(dialogInput("Remote port").value).toBe("5432");
-    expect(dialogInput("Local port").value).toBe("");
+    // Offered, not demanded — see NewForwardDialog on the stepping.
+    expect(dialogInput("Local port").value).toBe("5432");
   });
 
   it("names the Pod as a Pod — pod/, from its kind, not the container's name", async () => {
@@ -266,6 +267,7 @@ describe("a container's ports as the way in to a forward", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Forward http: 9376/TCP on api" }));
     await screen.findByRole("dialog");
+    await userEvent.clear(screen.getByLabelText("Local port"));
     await userEvent.type(screen.getByLabelText("Local port"), "9091");
     await waitFor(() =>
       expect(screen.getByText(/port-forward pod\/web-1 9091:9376/)).toBeDefined(),

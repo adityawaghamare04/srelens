@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
+  type ActiveForward,
   forwardAddress,
   getForwards,
   kindToForwardTarget,
@@ -158,12 +159,34 @@ export interface NewForwardDialogProps {
  * with one — a Service's Ports row, a container's port, the row menu's
  * `Port forward` — is handing over what the reader was looking at, and they
  * may well want a different one; the target select and both port fields stay
- * exactly as editable as they are from the header action. And a prefilled
- * `remotePort` is NOT a prefilled `localPort`: left empty, the OS picks a free
- * port, whereas seeding it with the same number walks the commonest case there
- * is — forwarding a port already open on this machine — straight into the
- * clash error above.
+ * exactly as editable as they are from the header action.
+ *
+ * **The local port is offered, not demanded.** It starts at the remote port —
+ * `8443:8443` is what everybody reaches for — stepped up past anything srelens
+ * is already forwarding, so arriving from a port whose number is taken does
+ * not greet the reader with the clash error above. Clearing the field sends no
+ * local port at all and lets the OS choose, which is the answer that still
+ * works when the obvious number is held by something outside srelens.
  */
+/**
+ * The local port to offer for a remote one: the same number, which is what
+ * everybody reaches for, moved up until it is one srelens is not already
+ * forwarding.
+ *
+ * Only OUR forwards are consulted, because they are all this process knows —
+ * another program holding the port is invisible here and surfaces as a failed
+ * start instead. That is why the field stays clearable: emptied, no local port
+ * is sent and the OS picks a free one itself, which is the reliable answer
+ * when the obvious one is taken by something outside srelens.
+ */
+function offerLocalPort(remote: number, taken: readonly ActiveForward[]): number {
+  const held = new Set(taken.map((f) => f.localPort));
+  let port = remote;
+  // 65535 is the last valid port; stop rather than wrap into nonsense.
+  while (held.has(port) && port < 65535) port += 1;
+  return port;
+}
+
 export function NewForwardDialog({
   context,
   namespace: initial,
@@ -197,9 +220,11 @@ export function NewForwardDialog({
   const [namespace, setNamespace] = useState(homeNamespace);
   const [targets, setTargets] = useState<Target[] | null>(null);
   const [target, setTarget] = useState(prefilled?.value ?? "");
-  const [localText, setLocalText] = useState("");
-  // The remote port only. See {@link NewForwardDialog} on why the local one
-  // starts empty even when the far end is known.
+  const [localText, setLocalText] = useState(() =>
+    arrivedFrom?.remotePort == null
+      ? ""
+      : String(offerLocalPort(arrivedFrom.remotePort, getForwards())),
+  );
   const [remoteText, setRemoteText] = useState(
     arrivedFrom?.remotePort == null ? "" : String(arrivedFrom.remotePort),
   );

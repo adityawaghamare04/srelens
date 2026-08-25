@@ -216,9 +216,9 @@ describe("ServiceDetailsBody", () => {
       await waitFor(() => expect(select("Target").value).toBe("svc/checkout"));
       await waitFor(() => expect(select("Namespace").value).toBe("default"));
       expect(input("Remote port").value).toBe("6379");
-      // The OS picks the local port. Prefilling it with the remote one is how
-      // forwarding a port already open here hits the clash error.
-      expect(input("Local port").value).toBe("");
+      // Offered, not demanded: the same number on this side is what a person
+      // reaches for, and it is only stepped up if srelens already holds it.
+      expect(input("Local port").value).toBe("6379");
     });
 
     it("forwards the service's port, not the targetPort behind it", async () => {
@@ -235,6 +235,7 @@ describe("ServiceDetailsBody", () => {
       render(<ServiceDetailsBody object={TWO_PORTS} context="ctx" />);
       await userEvent.click(screen.getByRole("button", { name: "Forward port 5432" }));
       await screen.findByRole("dialog");
+      await userEvent.clear(screen.getByLabelText("Local port"));
       await userEvent.type(screen.getByLabelText("Local port"), "9091");
       await waitFor(() =>
         expect(screen.getByText(/port-forward svc\/checkout 9091:5432/)).toBeDefined(),

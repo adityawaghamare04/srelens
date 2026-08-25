@@ -453,14 +453,27 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
     await waitFor(() => expect(select("Namespace").value).toBe("checkout"));
   });
 
-  it("prefills the remote port that was clicked, and leaves the local one empty", async () => {
+  it("prefills both ports, offering the same number on this side", async () => {
     openOn(POD_TARGET);
     await screen.findByRole("dialog");
     expect(input("Remote port").value).toBe("9376");
-    // The value came from the click, not from the field: its placeholder says
-    // something else entirely.
+    // The values came from the click, not from the fields: both placeholders
+    // say something else entirely.
     expect(input("Remote port").placeholder).toBe("8080");
-    expect(input("Local port").value).toBe("");
+    expect(input("Local port").placeholder).toBe("9090");
+    // `9376:9376` is what a person reaches for, so it is what is offered.
+    expect(input("Local port").value).toBe("9376");
+  });
+
+  it("steps the offer past a port srelens is already forwarding", async () => {
+    // Arriving from a port whose number this app already holds must not greet
+    // the reader with the clash error — the number is walked up until it is
+    // free, and 9377 is free only because 9376 is taken.
+    store.list = [holding(9376), holding(9377)];
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    expect(input("Local port").value).toBe("9378");
+    expect(screen.queryByText(/already forwarded/)).toBeNull();
   });
 
   it("asks only for what is missing, not for the target it was handed", async () => {
@@ -468,9 +481,15 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
     // filled. A line reading "choose a target and both ports" then asks the
     // reader for two things they already have, and it is the first thing they
     // read under the command they came to copy.
+    // Arriving from a port, nothing is missing — the command is there to copy
+    // rather than a sentence asking for fields the reader already handed over.
     openOn(POD_TARGET);
     await screen.findByRole("dialog");
-    expect(screen.getByText("Fill in a local port to see it.")).toBeTruthy();
+    expect(screen.queryByText(/Fill in/)).toBeNull();
+
+    // Clear the one field that can be cleared, and it names that field alone.
+    await userEvent.clear(field("Local port"));
+    expect(await screen.findByText("Fill in a local port to see it.")).toBeTruthy();
     expect(screen.queryByText(/a target/)).toBeNull();
   });
 
@@ -484,6 +503,9 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
   it("writes a Service's command with svc/, a Pod's with pod/", async () => {
     openOn({ kind: "Service", name: "checkout-api", remotePort: 9376 });
     await screen.findByRole("dialog");
+    // Cleared first: the field arrives with the offer in it, so typing alone
+    // would append to it.
+    await userEvent.clear(field("Local port"));
     await userEvent.type(field("Local port"), "9091");
     const expected = toKubectl({
       action: "port-forward",
@@ -511,6 +533,7 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
     await userEvent.selectOptions(field("Target"), "svc/checkout-web");
     await userEvent.clear(field("Remote port"));
     await userEvent.type(field("Remote port"), "443");
+    await userEvent.clear(field("Local port"));
     await userEvent.type(field("Local port"), "9091");
     await waitFor(() =>
       expect(screen.getByText(/port-forward svc\/checkout-web 9091:443/)).toBeTruthy(),
@@ -527,10 +550,10 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
     await waitFor(() => expect(select("Target").value).toBe("pod/checkout-api-5c8b7f2d9-mk3wl"));
   });
 
-  it("starts exactly the forward the reader arrived with, once they name a local port", async () => {
+  it("starts exactly the forward the reader arrived with, without touching a field", async () => {
     openOn(POD_TARGET);
     await screen.findByRole("dialog");
-    await userEvent.type(field("Local port"), "9091");
+    // Nothing typed: the offer is enough to start on.
     await waitFor(() => expect(startButton().disabled).toBe(false));
     await userEvent.click(startButton());
     await waitFor(() => expect(core.startPortForward).toHaveBeenCalledTimes(1));
@@ -539,7 +562,7 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
       namespace: "checkout",
       kind: "Pod",
       name: "checkout-api-5c8b7f2d9-mk3wl",
-      localPort: 9091,
+      localPort: 9376,
       remotePort: 9376,
     });
   });
