@@ -3,10 +3,12 @@ import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { parseDetailRoute } from "./detailRoute";
 import { AppLog } from "../screens/AppLog";
 import { Events } from "../screens/Events";
+import { Forwards } from "../screens/Forwards";
 import { Logs, parseLogsRoute } from "../screens/Logs";
 import { Overview } from "../screens/Overview";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
+import { Toolbox } from "../screens/Toolbox";
 import { Workloads } from "../screens/Workloads";
 
 /**
@@ -137,6 +139,13 @@ const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(nul
   // the same screen through `parseLogsRoute` in `screenFor` — one screen, two
   // shapes, because telling them apart is the screen's own job.
   "/logs": Logs,
+  // Cluster-scoped in the strip, but the screen lists every tunnel this
+  // process holds — the store behind it is module-level and does not partition
+  // by context, and a forward outlives the tab that started it.
+  "/forwards": Forwards,
+  // App-scoped: the managed kubectl, helm and krew are the machine's, and the
+  // exec-auth rail is the only part of it that looks at a context at all.
+  "/toolbox": Toolbox,
 });
 
 /**

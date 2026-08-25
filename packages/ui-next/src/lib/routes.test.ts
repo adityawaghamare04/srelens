@@ -5,8 +5,10 @@ import { AppLog } from "../screens/AppLog";
 import { Events } from "../screens/Events";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { Overview } from "../screens/Overview";
+import { Forwards } from "../screens/Forwards";
 import { Logs, logsRoute } from "../screens/Logs";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
+import { Toolbox } from "../screens/Toolbox";
 import { Workloads } from "../screens/Workloads";
 
 suite("isBuiltInKind", () => {
@@ -157,6 +159,28 @@ suite("screenFor", () => {
     expect(screenFor("/logs")).toBe(Logs);
     expect(screenFor(logsRoute("Deployment", "checkout", "checkout-api"))).toBe(Logs);
     expect(screenFor(logsRoute("Pod", "kube-system", "weird/name"))).toBe(Logs);
+  });
+
+  it("resolves /forwards to the port forwards screen", () => {
+    // The route has parsed to `kind: "forwards"` since the tab strip was
+    // built; without an entry here it rendered the Placeholder while the
+    // screen sat there finished.
+    expect(screenFor("/forwards")).toBe(Forwards);
+  });
+
+  it("resolves /toolbox to the toolbox screen", () => {
+    // App-scoped, not cluster-scoped: the managed tools are the machine's,
+    // not any one cluster's.
+    expect(screenFor("/toolbox")).toBe(Toolbox);
+  });
+
+  it("leaves the row menu's /resources/<name>/forward shape on the Placeholder", () => {
+    // `ResourceMenu.tsx` mints this shape and it carries neither a namespace
+    // nor a port — so it cannot name a tunnel, and routing it to Forwards
+    // would open the whole-cluster list under a title claiming one resource.
+    // Exactly the dead end `/resources/<name>/logs` is, pinned as a known one
+    // rather than papered over: reconciling the two shapes is its own step.
+    expect(screenFor("/resources/web-1/forward")).toBeNull();
   });
 
   it("leaves the row menu's older /resources/<name>/logs shape on the Placeholder", () => {
