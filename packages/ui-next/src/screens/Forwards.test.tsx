@@ -29,6 +29,12 @@ const store = vi.hoisted(() => ({
 const core = vi.hoisted(() => ({
   stopPortForward: vi.fn(),
   rehydrateForwards: vi.fn(),
+  // Only so the mounted dialog has something to list. What it does with them
+  // is `NewForwardDialog.test.tsx`'s business; this file only cares that both
+  // `New forward` buttons reach it.
+  listNamespaces: vi.fn(),
+  listServices: vi.fn(),
+  listPods: vi.fn(),
 }));
 vi.mock("@srelens/core", async (orig) => ({
   ...(await orig<typeof import("@srelens/core")>()),
@@ -40,7 +46,7 @@ vi.mock("@srelens/core", async (orig) => ({
   ...core,
 }));
 
-import { type ActiveForward, toKubectl } from "@srelens/core";
+import { type ActiveForward, kindToForwardTarget, toKubectl } from "@srelens/core";
 import { Forwards } from "./Forwards";
 
 const ROUTE = "/forwards";
@@ -119,6 +125,9 @@ beforeEach(() => {
   platform.isTauri.mockReturnValue(true);
   core.stopPortForward.mockResolvedValue(undefined);
   core.rehydrateForwards.mockResolvedValue(undefined);
+  core.listNamespaces.mockResolvedValue({ namespaces: ["checkout"] });
+  core.listServices.mockResolvedValue({ services: [] });
+  core.listPods.mockResolvedValue({ pods: [] });
   NOW = Date.now();
   store.list = fixture(NOW);
   store.listeners.clear();
@@ -163,6 +172,21 @@ describe("Forwards — the table", () => {
       "Age",
       "",
     ]);
+  });
+
+  it("names the target through core's mapping, not a second copy of it", () => {
+    open();
+    // The mapping this screen used to keep its own `{ Service: "svc" }` table
+    // for. Read from core so a drift between the cell and the copied command
+    // is not possible rather than merely unlikely.
+    expect(kindToForwardTarget("Service")).toBe("svc");
+    expect(kindToForwardTarget("Pod")).toBe("pod");
+    expect(cells(rowFor("svc/checkout-api"))[0]).toContain(
+      `${kindToForwardTarget("Service")}/checkout-api`,
+    );
+    expect(cells(rowFor("pod/search-indexer-0"))[0]).toContain(
+      `${kindToForwardTarget("Pod")}/search-indexer-0`,
+    );
   });
 
   it("names the target the way kubectl does, over its namespace", () => {
@@ -379,6 +403,32 @@ describe("Forwards — the screen around the table", () => {
     open();
     const actions = document.querySelector('[data-slot="screen-actions"]') as HTMLElement;
     expect(within(actions).getByRole("button", { name: "New forward" })).toBeTruthy();
+  });
+
+  it("opens §A.4's dialog from the header action", async () => {
+    open();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const actions = document.querySelector('[data-slot="screen-actions"]') as HTMLElement;
+    await userEvent.click(within(actions).getByRole("button", { name: "New forward" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("New port forward")).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("opens the SAME dialog from the empty state's way out", async () => {
+    // The two buttons share one handler, and the dialog is mounted beside the
+    // body rather than inside either branch — so a reader with no tunnels gets
+    // the dialog too. An assertion on the header alone would pass either way.
+    setForwardsBeforeMount([]);
+    open();
+    const empty = screen.getByText("No port forwards").closest("div")
+      ?.parentElement as HTMLElement;
+    await userEvent.click(within(empty).getByRole("button", { name: "New forward" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("New port forward")).toBeTruthy();
+    // And the emptiness is still behind it.
+    expect(screen.getByText("No port forwards")).toBeTruthy();
   });
 
   it("ships the empty state §13 defines and never renders", () => {

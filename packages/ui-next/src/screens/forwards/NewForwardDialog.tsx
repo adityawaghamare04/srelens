@@ -1,0 +1,373 @@
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  forwardAddress,
+  getForwards,
+  kindToForwardTarget,
+  listNamespaces,
+  listPods,
+  listServices,
+  notify,
+  startPortForward,
+  subscribeForwards,
+  toKubectl,
+} from "@srelens/core";
+import {
+  Button,
+  CopyCommand,
+  Dialog,
+  Field,
+  Select,
+  SubHead,
+  Switch,
+  TextInput,
+} from "@srelens/ui-kit";
+import { FailureAlert } from "../../lib/errorCopy";
+
+/** §A.4's width, in px. */
+const WIDTH = 480;
+
+/** The highest port a TCP socket can bind. */
+const MAX_PORT = 65_535;
+
+/**
+ * The id handed to `forwardAddress` to ask *where would a forward on this port
+ * be reachable from*, before there is a forward to ask about.
+ *
+ * Negative because no forward can ever carry it, so the answer it produces is
+ * unmistakably a template rather than a real address that happens to be wrong.
+ * See {@link plannedAddress}.
+ */
+const PLACEHOLDER_ID = -1;
+
+/** One thing in the namespace that a forward can be pointed at. */
+interface Target {
+  /** kubectl's own name for it — `svc/checkout-api` — and the select's value. */
+  value: string;
+  /** The Kubernetes kind, which is what `startPortForward` and `toKubectl` take. */
+  kind: string;
+  name: string;
+}
+
+/** The port a field holds, or null when it holds nothing a socket could bind. */
+function portOf(text: string): number | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  return Number.isInteger(n) && n > 0 && n <= MAX_PORT ? n : null;
+}
+
+/**
+ * An address as something a browser can be sent to.
+ *
+ * `forwardAddress` answers in two shapes — a bare `host:port` authority on the
+ * desktop and a full `http(s)://…/pf/<id>/` URL in web mode — because the
+ * places that print it want the short form. A browser wants a scheme, and
+ * `window.open("localhost:9090")` resolves against the current page rather than
+ * opening the tunnel.
+ */
+function browsable(address: string): string {
+  return /^https?:\/\//i.test(address) ? address : `http://${address}`;
+}
+
+/**
+ * Where a forward on this local port WILL be reachable from, in the form the
+ * switch's hint shows and the switch itself will open.
+ *
+ * §A.4 writes the hint as a literal `http://localhost:{local}`, which is the
+ * desktop answer and only the desktop answer — the same defect as §13's Copy
+ * URL. `forwardAddress` is the one place that decides between the two
+ * platforms, and it needs an id that does not exist until the start returns,
+ * so it is asked with {@link PLACEHOLDER_ID} and the stand-in is put back as
+ * `<id>`. On the desktop the id never appears in the answer and the hint is
+ * exact — §A.4's line, verbatim. In web mode the reader gets the proxy's real
+ * shape instead of a loopback their browser cannot reach or an id nothing has
+ * assigned yet. Either way the hint and the toast come from ONE rule.
+ */
+function plannedAddress(localPort: number): string {
+  const address = forwardAddress({ id: PLACEHOLDER_ID, localPort });
+  return browsable(address.replace(`/pf/${PLACEHOLDER_ID}/`, "/pf/<id>/"));
+}
+
+export interface NewForwardDialogProps {
+  /** The cluster the forward is made in — a kubeconfig context NAME. */
+  context: string;
+  /** Where the namespace select starts, when the caller knows a good answer. */
+  namespace?: string;
+  /** Cancel, escape, the header's control, and a forward that came up. */
+  onClose: () => void;
+}
+
+/**
+ * §A.4's `New port forward` — the one way to start a tunnel.
+ *
+ * **The clash check runs here, not on the backend.** §A.4's error is
+ * `Port <n> is already forwarded.` and core's forwards store already knows
+ * every live `localPort`, so the answer is on this side of the wire: the field
+ * says so as the digits are typed and `Start forward` is dead while it holds.
+ * Letting the request go out to be refused would be a slower way to learn the
+ * same thing, and the sentence that came back would be about a bind error
+ * rather than about the other tunnel. The store is subscribed to rather than
+ * read once, so stopping the forward that holds the port frees it here without
+ * the reader retyping anything.
+ *
+ * **The address is never assembled here.** §A.4's `http://localhost:{local}`
+ * hint and its `Forwarding localhost:<n> to <target>` toast are both written
+ * against the desktop, where the tunnel really is on this machine's loopback;
+ * in web mode srelens runs in a container whose loopback the browser cannot
+ * reach and the forward is served from a same-origin `/pf/<id>/` proxy.
+ * `forwardAddress` decides that, and the hint, the toast and the browser
+ * switch all read it — so the switch opens exactly the address the hint
+ * promised. The toast can only ask after the start returns, because that is
+ * when the id exists; the hint asks with a placeholder id
+ * ({@link plannedAddress}).
+ *
+ * The target list is the namespace's Services and Pods, named the way kubectl
+ * names them through core's `kindToForwardTarget` — the same function the
+ * equivalent command and the forwards table's Target cell go through. The
+ * `kind` travels beside the label rather than being parsed back out of it.
+ *
+ * `listNamespaces`, `listServices` and `listPods` all report failure by
+ * RETURNING an error rather than throwing, so nothing here wraps them in a
+ * try/catch and calls that error handling; the field is read. `startPortForward`
+ * does throw, and that one is caught.
+ */
+export function NewForwardDialog({ context, namespace: initial, onClose }: NewForwardDialogProps) {
+  const forwards = useSyncExternalStore(subscribeForwards, getForwards, getForwards);
+
+  const [namespaces, setNamespaces] = useState<string[] | null>(null);
+  const [namespace, setNamespace] = useState(initial ?? "");
+  const [targets, setTargets] = useState<Target[] | null>(null);
+  const [target, setTarget] = useState("");
+  const [localText, setLocalText] = useState("");
+  const [remoteText, setRemoteText] = useState("");
+  const [inBrowser, setInBrowser] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  /**
+   * The last thing that went wrong, whichever it was: a listing that came back
+   * with an error field, or a start that threw. One slot rather than three —
+   * the dialog is small enough that a second banner would push the footer off
+   * a short window, and the reader only ever acts on the most recent one.
+   */
+  const [failure, setFailure] = useState<{ title: string; error: unknown } | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setNamespaces(null);
+    // A forward is made in ONE cluster, and the rail's selection is the only
+    // answer the app has to which. With no cluster in focus there is nothing
+    // to list, and `listNamespaces("")` would go to the backend to be told so;
+    // the empty options say it here, in the control that would have offered
+    // them. See the Namespace placeholder below.
+    if (!context) {
+      setNamespaces([]);
+      return;
+    }
+    void listNamespaces(context).then((outcome) => {
+      if (!live) return;
+      if (outcome.error) {
+        setFailure({ title: "Could not list this cluster's namespaces", error: outcome.error });
+        setNamespaces([]);
+        return;
+      }
+      setNamespaces(outcome.namespaces ?? []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [context]);
+
+  useEffect(() => {
+    if (!namespace) {
+      setTargets(null);
+      return;
+    }
+    let live = true;
+    setTargets(null);
+    setTarget("");
+    void Promise.all([listServices(context, namespace), listPods(context, namespace)]).then(
+      ([services, pods]) => {
+        if (!live) return;
+        const error = services.error || pods.error;
+        if (error) {
+          setFailure({ title: `Could not list what ${namespace} can forward`, error });
+        }
+        // Whatever answered is still worth offering: a cluster that lists its
+        // Services but refuses its Pods can still forward a Service.
+        setTargets([
+          ...(services.services ?? []).map((s) => ({
+            value: `${kindToForwardTarget("Service")}/${s.name}`,
+            kind: "Service",
+            name: s.name,
+          })),
+          ...(pods.pods ?? []).map((p) => ({
+            value: `${kindToForwardTarget("Pod")}/${p.name}`,
+            kind: "Pod",
+            name: p.name,
+          })),
+        ]);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [context, namespace]);
+
+  const chosen = useMemo(() => targets?.find((t) => t.value === target), [targets, target]);
+  const localPort = portOf(localText);
+  const remotePort = portOf(remoteText);
+
+  /** §A.4's one field error, decided against the live store. */
+  const clash = localPort !== null && forwards.some((f) => f.localPort === localPort);
+
+  const command =
+    chosen && localPort !== null && remotePort !== null
+      ? toKubectl({
+          action: "port-forward",
+          kind: chosen.kind,
+          name: chosen.name,
+          context,
+          namespace,
+          localPort,
+          remotePort,
+        })
+      : null;
+
+  const ready = command !== null && !clash && !busy;
+
+  async function start() {
+    if (!chosen || localPort === null || remotePort === null || clash) return;
+    setFailure(null);
+    setBusy(true);
+    try {
+      const started = await startPortForward({
+        context,
+        namespace,
+        kind: chosen.kind,
+        name: chosen.name,
+        localPort,
+        remotePort,
+      });
+      // The port the BACKEND bound, not the one that was typed: the two differ
+      // whenever the request could not have the port it asked for.
+      const address = forwardAddress({ id: started.id, localPort: started.localPort });
+      notify.success(`Forwarding ${address} to ${chosen.value}`);
+      if (inBrowser) window.open(browsable(address), "_blank", "noopener,noreferrer");
+      onClose();
+    } catch (e) {
+      setFailure({ title: `Could not forward ${chosen.value}`, error: e });
+      setBusy(false);
+    }
+  }
+
+  const namespaceOptions = (namespaces ?? []).map((n) => ({ value: n }));
+  const targetOptions = (targets ?? []).map((t) => ({ value: t.value }));
+
+  return (
+    <Dialog
+      title="New port forward"
+      maxWidth={WIDTH}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" disabled={!ready} onClick={() => void start()}>
+            Start forward
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3 p-3">
+        {failure && <FailureAlert tone="sev" title={failure.title} error={failure.error} />}
+
+        {/* §A.4's two-column grid, in §A.4's order. Target and Namespace share
+            a row, so the target select sitting first costs nothing: both are on
+            screen at once and the target one says what it still needs. */}
+        <div className="grid grid-cols-2 gap-x-3">
+          <Field label="Target">
+            <Select
+              value={target}
+              onValueChange={setTarget}
+              options={targetOptions}
+              className="w-full"
+              disabled={!namespace || targets === null}
+              placeholder={
+                !namespace
+                  ? "Pick a namespace first"
+                  : targets === null
+                    ? "Loading…"
+                    : targetOptions.length === 0
+                      ? "Nothing here to forward"
+                      : "Choose a target"
+              }
+            />
+          </Field>
+          <Field label="Namespace">
+            <Select
+              value={namespace}
+              onValueChange={setNamespace}
+              options={namespaceOptions}
+              className="w-full"
+              disabled={namespaces === null || !context}
+              placeholder={
+                !context
+                  ? "Pick a cluster in the rail first"
+                  : namespaces === null
+                    ? "Loading…"
+                    : "Choose a namespace"
+              }
+            />
+          </Field>
+          <Field
+            label="Local port"
+            // §A.4's wording, exactly. The banner slot above is for failures
+            // that came from somewhere else; this one belongs to the field.
+            error={clash ? `Port ${localPort} is already forwarded.` : undefined}
+          >
+            <TextInput
+              value={localText}
+              onValueChange={setLocalText}
+              type="number"
+              invalid={clash}
+              placeholder="9090"
+            />
+          </Field>
+          <Field label="Remote port">
+            <TextInput
+              value={remoteText}
+              onValueChange={setRemoteText}
+              type="number"
+              placeholder="8080"
+            />
+          </Field>
+        </div>
+
+        <Switch
+          on={inBrowser}
+          onChange={setInBrowser}
+          label="Open in browser when it comes up"
+          hint={
+            localPort === null
+              ? "Name a local port and this is where it opens."
+              : plannedAddress(localPort)
+          }
+        />
+
+        <div>
+          <SubHead variant="caps">Equivalent command</SubHead>
+          <div className="mt-1">
+            {command ? (
+              <CopyCommand command={command} />
+            ) : (
+              <span className="text-[0.75rem] text-muted">
+                Choose a target and both ports to see it.
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </Dialog>
+  );
+}

@@ -34,11 +34,20 @@ export interface KubectlInput {
   remotePort?: number;
 }
 
-// kubectl's short target forms, not the API resource plurals `kindToResource`
-// returns ("services", "pods") — `kubectl port-forward services/foo` isn't
-// what anyone types or expects to read. Only Pod and Service ever back a
-// forward; anything else falls back to the lowercased kind.
-function kindToForwardTarget(kind: string): string {
+/**
+ * kubectl's short target forms, not the API resource plurals `kindToResource`
+ * returns ("services", "pods") — `kubectl port-forward services/foo` isn't
+ * what anyone types or expects to read. Only Pod and Service ever back a
+ * forward; anything else falls back to the lowercased kind.
+ *
+ * Exported because it is a NAME the UI shows as well as a token the command
+ * carries: the forwards table's Target cell, the New forward dialog's target
+ * options and this mapper's own `port-forward` line all say `svc/checkout-api`
+ * about the same object. Two of those used to keep their own `{ Service: "svc",
+ * Pod: "pod" }` table, which is two answers to one question and one drift away
+ * from a row whose name and whose copied command disagree about what it is.
+ */
+export function kindToForwardTarget(kind: string): string {
   if (kind === "Service") return "svc";
   if (kind === "Pod") return "pod";
   return kind.toLowerCase();

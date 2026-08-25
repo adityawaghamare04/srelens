@@ -4,6 +4,7 @@ import {
   copyKubectlCommand,
   forwardAddress,
   getForwards,
+  kindToForwardTarget,
   notify,
   plural,
   rehydrateForwards,
@@ -23,9 +24,11 @@ import {
   type Column,
   type StatusKind,
 } from "@srelens/ui-kit";
+import { useActiveContext } from "../lib/clusters";
 import { FailureAlert } from "../lib/errorCopy";
 import { Icons } from "../lib/icons";
 import { formatBytes } from "../lib/numbers";
+import { NewForwardDialog } from "./forwards/NewForwardDialog";
 
 /**
  * THE ONE HAND-PAIRED WORD/TONE TABLE ON THIS SCREEN, AND IT IS MARKED BECAUSE
@@ -64,19 +67,14 @@ const FORWARD_VERDICT: Record<ActiveForward["status"], { word: string; kind: Sta
  * kubectl's own short target forms, which is what §13 writes in the Target
  * column (`svc/checkout-api`, `pod/search-indexer-0`).
  *
- * A second marked duplicate, and a smaller one: `kindToForwardTarget` in
- * `packages/core/src/lib/kubectlMapper.ts` is this exact table and is module
- * private, so the command in the row's clipboard and the name in the row's
- * first cell are derived twice. It is a NAME, not a status word — no colour
- * hangs off it — but it is still two answers to one question. **Export
- * `kindToForwardTarget` from core and delete this.** The fallback matches
- * core's: anything that is not a Pod or a Service, which the backend never
- * forwards today, reads as its own lowercased kind rather than as a guess.
+ * Core's `kindToForwardTarget`, which is also what `toKubectl` puts in the
+ * command this row copies and what §A.4's dialog names its options with. This
+ * screen used to keep a private `{ Service: "svc", Pod: "pod" }` table beside
+ * it; three consumers of one rule beats three copies of it, and a drift would
+ * have had the cell and the clipboard disagreeing about what a row is.
  */
-const TARGET_PREFIX: Record<string, string> = { Service: "svc", Pod: "pod" };
-
 function targetOf(kind: string, name: string): string {
-  return `${TARGET_PREFIX[kind] ?? kind.toLowerCase()}/${name}`;
+  return `${kindToForwardTarget(kind)}/${name}`;
 }
 
 /**
@@ -143,6 +141,7 @@ interface ForwardRow {
  */
 export function Forwards(_props: { route: string }) {
   const forwards = useSyncExternalStore(subscribeForwards, getForwards, getForwards);
+  const cluster = useActiveContext();
 
   /**
    * Adopt whatever the backend is still forwarding.
@@ -204,14 +203,12 @@ export function Forwards(_props: { route: string }) {
   const moved = useMemo(() => rows.reduce((sum, r) => sum + r.bytesMoved, 0), [rows]);
 
   /**
-   * TASK 7'S SEAM. §A.4's `New port forward` dialog is Task 7's, and this is
-   * the one function it changes: it becomes `setNewForwardOpen(true)`, with the
-   * dialog mounted at the marked point below. Until then the action is a
-   * deliberate no-op — the button has its home, its copy and both of its call
-   * sites (the header and the empty state's way out), so the dialog lands as
-   * one addition rather than as a redesign of this header.
+   * §A.4's dialog, opened from the header action and from the empty state's
+   * way out — one handler behind both, so a reader with no tunnels reaches the
+   * same dialog as one with four.
    */
-  const openNewForward = () => {};
+  const [newForwardOpen, setNewForwardOpen] = useState(false);
+  const openNewForward = () => setNewForwardOpen(true);
 
   const newForwardButton = (
     <Button variant="primary" size="sm" onClick={openNewForward}>
@@ -281,9 +278,19 @@ export function Forwards(_props: { route: string }) {
 
   return (
     <Screen title="Port forwards" eyebrow="all clusters" actions={newForwardButton} fill>
-      {/* TASK 7 MOUNTS `NewForwardDialog` HERE — inside the screen and beside
-          the body, so the header action and the empty state's action open the
-          same dialog. See `openNewForward` above. */}
+      {/* Beside the body rather than inside either branch of it, so the dialog
+          opens the same from a populated screen and an empty one. */}
+      {newForwardOpen && (
+        <NewForwardDialog
+          // The cluster in focus. A forward is made in one cluster even though
+          // this screen lists every cluster's, and the rail's selection is the
+          // only answer the app has to *which*; the dialog says so itself when
+          // there is none rather than being opened against an empty context.
+          context={cluster?.name ?? ""}
+          namespace={cluster?.namespace}
+          onClose={() => setNewForwardOpen(false)}
+        />
+      )}
       {stopFailure && (
         <div className="p-3 pb-0">
           <FailureAlert

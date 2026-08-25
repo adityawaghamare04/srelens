@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toKubectl } from "./kubectlMapper";
+import { kindToForwardTarget, toKubectl } from "./kubectlMapper";
 
 describe("kubectlMapper", () => {
   describe("read-only commands", () => {
@@ -284,6 +284,35 @@ describe("kubectlMapper", () => {
           remotePort: 443,
         }),
       ).toBe("kubectl --context prod -n prod port-forward svc/checkout-api 9999:443");
+    });
+  });
+
+  describe("kindToForwardTarget", () => {
+    // Exported because the UI names a forward with it too — the forwards
+    // table's Target cell and the New forward dialog's options — and three
+    // consumers of one rule beats three copies that can drift apart.
+    it("gives kubectl's own short forms for the two kinds a forward can have", () => {
+      expect(kindToForwardTarget("Service")).toBe("svc");
+      expect(kindToForwardTarget("Pod")).toBe("pod");
+      // Not the API plurals `kindToResource` would hand back.
+      expect(kindToForwardTarget("Service")).not.toBe("services");
+    });
+
+    it("lowercases anything else rather than guessing a short form", () => {
+      expect(kindToForwardTarget("StatefulSet")).toBe("statefulset");
+    });
+
+    it("is the same mapping the command itself carries", () => {
+      const command = toKubectl({
+        action: "port-forward",
+        kind: "Service",
+        name: "checkout-api",
+        context: "prod",
+        namespace: "prod",
+        localPort: 8080,
+        remotePort: 80,
+      });
+      expect(command).toContain(`port-forward ${kindToForwardTarget("Service")}/checkout-api`);
     });
   });
 });
