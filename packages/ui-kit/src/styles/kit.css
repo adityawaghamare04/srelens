@@ -396,6 +396,15 @@
     gap: 0.35rem;
     font-size: 0.75rem;
     color: var(--ink-muted);
+    /* A flex item's `min-width` is `auto`, which means "never smaller than my
+       content" — so a pill inside a constrained row refused to shrink and its
+       label ran out past the row, painting itself over whatever was
+       right-aligned after it. Found on the Logs rail, where three pods of one
+       Deployment differ only in their last five characters and all three
+       overprinted their line counts into an unreadable smear. Truncating is
+       the caller's business (the label opts in); being allowed to is this
+       component's. */
+    min-width: 0;
   }
   .status .dot { width: 6px; height: 6px; border-radius: 99px; flex-shrink: 0; }
   /* Emitted by StatusPill only under `tinted`, and only for danger and warn.

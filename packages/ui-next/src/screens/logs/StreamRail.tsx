@@ -92,7 +92,12 @@ function ToneRow({
     <div data-slot={slot} className="flex items-center gap-2 px-0.5 py-[3px]">
       {lead}
       <span className="flex min-w-0 flex-1">
-        <StatusPill status={<span className="truncate">{label}</span>} kind={tone} tinted />
+        {/* `min-w-0` as well as `truncate`: the label is itself a flex item of
+            the pill, and a flex item's default `min-width: auto` makes
+            `overflow: hidden` unreachable — the ellipsis never appears and the
+            text runs on. A 29-character pod name is the normal case here, not
+            the edge one. */}
+        <StatusPill status={<span className="min-w-0 truncate">{label}</span>} kind={tone} tinted />
       </span>
       {figure !== undefined && <span className="path shrink-0 text-faint">{figure}</span>}
     </div>
