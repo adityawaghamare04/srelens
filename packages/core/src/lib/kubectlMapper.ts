@@ -18,7 +18,8 @@ export interface KubectlInput {
     | "drain"
     | "cronjob-suspend"
     | "cronjob-resume"
-    | "cronjob-trigger";
+    | "cronjob-trigger"
+    | "port-forward";
   kind: string;
   name: string;
   context: string;
@@ -27,6 +28,20 @@ export interface KubectlInput {
   output?: string;
   /** For scale: target replica count. */
   replicas?: number;
+  /** For port-forward: the local machine's port. */
+  localPort?: number;
+  /** For port-forward: the port on the target pod/service. */
+  remotePort?: number;
+}
+
+// kubectl's short target forms, not the API resource plurals `kindToResource`
+// returns ("services", "pods") — `kubectl port-forward services/foo` isn't
+// what anyone types or expects to read. Only Pod and Service ever back a
+// forward; anything else falls back to the lowercased kind.
+function kindToForwardTarget(kind: string): string {
+  if (kind === "Service") return "svc";
+  if (kind === "Pod") return "pod";
+  return kind.toLowerCase();
 }
 
 // Resource names are DNS-1123 and always shell-safe in practice, but
@@ -97,13 +112,27 @@ function shellQuote(value: string, what: string, windows: boolean): string {
  * `KubectlPreview`'s `note` prop).
  */
 export function toKubectl(input: KubectlInput, windows: boolean = IS_WINDOWS): string {
-  const { action, kind, name, context, namespace, output, replicas } = input;
+  const { action, kind, name, context, namespace, output, replicas, localPort, remotePort } = input;
   // Prefer the authoritative kind→resource table (mirrors the backend's own
   // GVR mapping) over a bare lowercase, which drifts for kinds whose plural
   // isn't just "+s" (Ingress → ingresses). Falls back to lowercasing for
   // CRDs/unknown kinds not in the table.
   const kindLower = kindToResource(kind)?.resource ?? kind.toLowerCase();
   const ns = namespace || "";
+
+  // Ordered differently from every other action below: the design writes
+  // `--context <c> -n <ns>` before the verb, matching how people actually
+  // type a port-forward, so this is handled separately rather than falling
+  // through the shared "verb first, -n/--context appended last" assembly.
+  if (action === "port-forward") {
+    const qName = shellQuote(name, "name", windows);
+    const parts: string[] = ["kubectl", "--context", shellQuote(context, "context", windows)];
+    if (ns) {
+      parts.push("-n", shellQuote(ns, "namespace", windows));
+    }
+    parts.push("port-forward", `${kindToForwardTarget(kind)}/${qName}`, `${localPort}:${remotePort}`);
+    return parts.join(" ");
+  }
 
   const parts: string[] = ["kubectl"];
 

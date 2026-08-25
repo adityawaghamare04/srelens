@@ -222,4 +222,64 @@ describe("kubectlMapper", () => {
       ).toBe("kubectl get pods web-0 -n default --context prod");
     });
   });
+
+  describe("port-forward", () => {
+    it("maps a Service to svc/<name>", () => {
+      expect(
+        toKubectl({
+          action: "port-forward",
+          kind: "Service",
+          namespace: "prod",
+          name: "checkout-api",
+          context: "prod",
+          localPort: 8080,
+          remotePort: 80,
+        }),
+      ).toBe("kubectl --context prod -n prod port-forward svc/checkout-api 8080:80");
+    });
+
+    it("maps a Pod to pod/<name>", () => {
+      expect(
+        toKubectl({
+          action: "port-forward",
+          kind: "Pod",
+          namespace: "prod",
+          name: "checkout-api-5c8b7f2d9-mk3wl",
+          context: "prod",
+          localPort: 5432,
+          remotePort: 5432,
+        }),
+      ).toBe("kubectl --context prod -n prod port-forward pod/checkout-api-5c8b7f2d9-mk3wl 5432:5432");
+    });
+
+    it("single-quotes a context carrying command substitution, same as every other action", () => {
+      // Not just "has a space" — a fixture like that would also pass under
+      // naive double-quoting and prove nothing about which quoting tier ran.
+      expect(
+        toKubectl({
+          action: "port-forward",
+          kind: "Pod",
+          namespace: "prod",
+          name: "web-0",
+          context: "$(touch /tmp/pwn)",
+          localPort: 8080,
+          remotePort: 80,
+        }),
+      ).toBe("kubectl --context '$(touch /tmp/pwn)' -n prod port-forward pod/web-0 8080:80");
+    });
+
+    it("keeps distinct local and remote ports in local:remote order", () => {
+      expect(
+        toKubectl({
+          action: "port-forward",
+          kind: "Service",
+          namespace: "prod",
+          name: "checkout-api",
+          context: "prod",
+          localPort: 9999,
+          remotePort: 443,
+        }),
+      ).toBe("kubectl --context prod -n prod port-forward svc/checkout-api 9999:443");
+    });
+  });
 });
