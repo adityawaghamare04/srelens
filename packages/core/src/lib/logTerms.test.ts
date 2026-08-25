@@ -43,12 +43,17 @@ describe("tallyLogTerms", () => {
     expect(tallyLogTerms(lines)).toEqual([{ term: "pool saturated", count: 3, tone: "warning" }]);
   });
 
-  it("recovers 'liveness deadline', warn-toned, from its own siblings", () => {
+  it("recovers 'liveness deadline exceeded', warn-toned, from its own siblings", () => {
+    // The whole clause, not two words of it: the run ends at the comma, and
+    // those three words are the same three words on both lines, so the
+    // headline is as long as the thing that actually recurred.
     const lines = [
       line("warn liveness deadline exceeded, terminating"),
       line("warn liveness deadline exceeded, terminating"),
     ];
-    expect(tallyLogTerms(lines)).toEqual([{ term: "liveness deadline", count: 2, tone: "warning" }]);
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "liveness deadline exceeded", count: 2, tone: "warning" },
+    ]);
   });
 
   it("a key=value pair shaped exactly like a trusted one, but that never repeats, still falls through to the headline", () => {
@@ -262,5 +267,283 @@ describe("logLineLevel", () => {
         expect(health).toBe("neutral");
       }
     }
+  });
+});
+
+/**
+ * THE REAL INPUT. The tally above was tuned against five invented lines from
+ * a design mock; every fixture in this block is the shape a running cluster
+ * actually emits — nginx, klog (every control-plane component), CoreDNS, a
+ * crash-looping pod, a JSON logger, a container entrypoint. The rail showed
+ * one row on a real workload because these lines open with their framing and
+ * the rule read the framing.
+ */
+describe("tallyLogTerms on real Kubernetes lines", () => {
+  it("tallies nginx's message rather than stopping on the date it opens with", () => {
+    // The single most repeated line in an nginx pod's stream, and it used to
+    // contribute NOTHING: the leading `2026/08/25` is a digit, and a digit
+    // ended the run.
+    const lines = [
+      line("2026/08/25 07:53:02 [notice] 1#1: start worker process 38"),
+      line("2026/08/25 07:53:02 [notice] 1#1: start worker process 39"),
+      line("2026/08/25 07:53:03 [notice] 1#1: start worker process 40"),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "start worker process", count: 3, tone: "neutral" },
+    ]);
+  });
+
+  it("tallies a klog line's message, not its severity letter and month-day", () => {
+    // `I0825` is a severity letter and a date. It is identical on every line
+    // of every control-plane component, so tallying it says nothing at all.
+    const lines = [
+      line(
+        "I0825 08:23:00.651626       1 cidrallocator.go:278] updated ClusterIP allocator for Service CIDR 10.96.0.0/16",
+      ),
+      line(
+        "I0825 08:24:00.652003       1 cidrallocator.go:278] updated ClusterIP allocator for Service CIDR 10.96.0.0/16",
+      ),
+      line(
+        "I0825 08:25:00.651980       1 cidrallocator.go:278] updated ClusterIP allocator for Service CIDR 10.96.0.0/16",
+      ),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "updated ClusterIP", count: 3, tone: "neutral" },
+    ]);
+  });
+
+  it("keeps CoreDNS legible, with its level in the tone instead of the text", () => {
+    const lines = [
+      line("[ERROR] plugin/kubernetes: Failed to watch *v1.Namespace: Unauthorized"),
+      line("[ERROR] plugin/kubernetes: Failed to watch *v1.Service: Unauthorized"),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "plugin/kubernetes Failed", count: 2, tone: "danger" },
+    ]);
+  });
+
+  it("tallies a crash-looping pod's own sentence, past its level word", () => {
+    const lines = [
+      line("FATAL cannot reach mainframe gateway 10.0.4.12:9443"),
+      line("FATAL cannot reach mainframe gateway 10.0.4.19:9443"),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "cannot reach mainframe gateway", count: 2, tone: "danger" },
+    ]);
+  });
+
+  it("tallies a JSON line's msg, which is the only human part of it", () => {
+    // Whole-line tallying gives nothing here: the object is one whitespace-
+    // free token and the timestamp inside makes it unique per line.
+    const lines = [
+      line(
+        '{"level":"info","app":"deployment-srv","component":"services","time":"2026-08-25T08:13:42.051Z","msg":"component updated"}',
+      ),
+      line(
+        '{"level":"info","app":"deployment-srv","component":"services","time":"2026-08-25T08:14:12.884Z","msg":"component updated"}',
+      ),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "component updated", count: 2, tone: "info" },
+    ]);
+  });
+
+  it("reads `message` as well as `msg`", () => {
+    const lines = [
+      line('{"level":"warn","message":"backpressure applied","queue":91}'),
+      line('{"level":"warn","message":"backpressure applied","queue":204}'),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "backpressure applied", count: 2, tone: "warning" },
+    ]);
+  });
+
+  it("a JSON object with no message field contributes nothing, rather than its own braces", () => {
+    const lines = [
+      line('{"level":"info","app":"deployment-srv","phase":"reconcile"}'),
+      line('{"level":"info","app":"deployment-srv","phase":"prune"}'),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([]);
+  });
+
+  it("does not throw on a line that merely opens with a brace", () => {
+    const lines = [line("{not json at all, honestly"), line("{not json at all, really")];
+    expect(() => tallyLogTerms(lines)).not.toThrow();
+    expect(tallyLogTerms(lines)).toEqual([{ term: "{not json at all", count: 2, tone: "neutral" }]);
+  });
+
+  it("tallies the entrypoint's message across the scripts it launches", () => {
+    const lines = [
+      line("/docker-entrypoint.sh: Launching /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh"),
+      line("/docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh"),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "/docker-entrypoint.sh Launching", count: 2, tone: "neutral" },
+    ]);
+  });
+
+  it("gives a mixed real buffer a row per component, and no framing anywhere", () => {
+    // The screenshot: one workload's stream, four components talking. The old
+    // rule produced one row (or four rows of `I0825`); this is the whole
+    // defect, stated once.
+    const lines = [
+      line("2026/08/25 07:53:02 [notice] 1#1: start worker process 38"),
+      line("2026/08/25 07:53:02 [notice] 1#1: start worker process 39"),
+      line(
+        "I0825 08:23:00.651626       1 cidrallocator.go:278] updated ClusterIP allocator for Service CIDR 10.96.0.0/16",
+      ),
+      line(
+        "I0825 08:24:00.652003       1 cidrallocator.go:278] updated ClusterIP allocator for Service CIDR 10.96.0.0/16",
+      ),
+      line('{"level":"info","app":"deployment-srv","time":"2026-08-25T08:13:42.051Z","msg":"component updated"}'),
+      line('{"level":"info","app":"deployment-srv","time":"2026-08-25T08:14:12.884Z","msg":"component updated"}'),
+      line("[ERROR] plugin/kubernetes: Failed to watch *v1.Namespace: Unauthorized"),
+      line("[ERROR] plugin/kubernetes: Failed to watch *v1.Service: Unauthorized"),
+    ];
+    const terms = tallyLogTerms(lines).map((t) => t.term);
+    expect(terms).toEqual(
+      expect.arrayContaining([
+        "start worker process",
+        "updated ClusterIP",
+        "component updated",
+        "plugin/kubernetes Failed",
+      ]),
+    );
+    // Nothing that is the log's framing rather than its message.
+    expect(terms.some((t) => /^I\d{4}\b/.test(t))).toBe(false);
+    expect(terms.some((t) => t.startsWith("2026/"))).toBe(false);
+    expect(terms.some((t) => t.startsWith("["))).toBe(false);
+  });
+
+  it("keeps a whole clause only while the WHOLE clause is what recurred", () => {
+    // Both lines open on the same five words and part on the sixth, so the
+    // clause is not what repeated — the headline is. Take the clause here and
+    // the rail shows a phrase ending in "the", which is the ragged edge the
+    // sliding-prefix version of this rule produced everywhere.
+    const lines = [
+      line("info liveness deadline extended for the drain"),
+      line("info liveness deadline extended for the shutdown"),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([{ term: "liveness deadline", count: 2, tone: "info" }]);
+  });
+
+  it("still ends a term on a numeric token in the MIDDLE of a line", () => {
+    // Skipping structure is a rule about the START of a line only. Inside the
+    // message a number is data — this is what keeps `duration=30011ms` and a
+    // worker pid out of the tally.
+    const lines = [line("cache flushed 4096 entries"), line("cache flushed 128 entries")];
+    expect(tallyLogTerms(lines)).toEqual([{ term: "cache flushed", count: 2, tone: "neutral" }]);
+  });
+
+  it("keeps every term short enough for a 272px rail", () => {
+    const long =
+      "reconciliation of the exceedingly verbose custom resource definition completed successfully without incident";
+    const lines = [line(long), line(long), line(long)];
+    const [top] = tallyLogTerms(lines);
+    expect(top.term.length).toBeLessThanOrEqual(40);
+  });
+
+  it("a long quoted klog warning is trimmed to its headline, not left 90 characters wide", () => {
+    const warning =
+      'I0825 08:13:41.721258       7 warnings.go:107] "Warning: Use tokens from the TokenRequest API or manually created secret-based tokens instead of auto-generated ones"';
+    const [top] = tallyLogTerms([line(warning), line(warning)]);
+    expect(top).toEqual({ term: "Use tokens", count: 2, tone: "warning" });
+  });
+
+  it("a buffer of unrelated real lines still yields nothing, not a list of ones", () => {
+    // The threshold's own failure mode, restated over lines that all now get
+    // past their framing — getting past it must not turn noise into rows.
+    const lines = [
+      line("2026/08/25 07:53:02 [notice] 1#1: start worker process 38"),
+      line("I0825 08:23:00.651626       1 cidrallocator.go:278] updated ClusterIP allocator"),
+      line('{"level":"info","app":"deployment-srv","msg":"component updated"}'),
+      line("[ERROR] plugin/kubernetes: Failed to watch"),
+      line("FATAL cannot reach mainframe gateway 10.0.4.12:9443"),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([]);
+  });
+});
+
+/**
+ * THE SECOND DEFECT. `{"level":"warn",…,"error":{},…}` rendered ERROR in the
+ * level column: `\berror\b` matched an empty JSON field NAME, because a quote
+ * is a non-word character. The line said what it was and we overrode it.
+ */
+describe("a line that declares its own level", () => {
+  it("believes a declared level over a scary word elsewhere in the line", () => {
+    const declared =
+      '{"level":"warn","app":"deployment-srv","source":"helm","name":"m01-test-01-core-services","error":{},"time":"2026-08-25T08:22:00.594Z","msg":"upgrade failed"}';
+    expect(logLineLevel(declared)).toBe("warn");
+    expect(logLineHealth(declared)).toBe("warning");
+  });
+
+  it("returns the declared level exactly as the application spelled it", () => {
+    expect(logLineLevel('{"level":"ERROR","msg":"UpdateServices"}')).toBe("ERROR");
+    expect(logLineHealth('{"level":"ERROR","msg":"UpdateServices"}')).toBe("danger");
+    expect(logLineLevel('{"level":"info","app":"deployment-srv","msg":"component updated"}')).toBe(
+      "info",
+    );
+  });
+
+  it("reads `severity` as well as `level`", () => {
+    // The declared word must CONTRADICT the text scan, or a rule that ignored
+    // `severity` entirely would still read ERROR off the message and pass.
+    const stackdriver = '{"severity":"warning","message":"connection error, retried"}';
+    expect(logLineLevel(stackdriver)).toBe("warning");
+    expect(logLineHealth(stackdriver)).toBe("warning");
+  });
+
+  it("tones the syslog spellings an application may declare", () => {
+    // `err`, `crit` and `notice` are levels the text scan never returns, so
+    // they can only arrive declared — and a real level must not land on
+    // neutral by omission, which is the bug 277924e fixed for `panic`.
+    expect(logLineHealth('{"level":"err","msg":"boom"}')).toBe("danger");
+    expect(logLineHealth('{"level":"crit","msg":"boom"}')).toBe("danger");
+    expect(logLineHealth('{"level":"critical","msg":"boom"}')).toBe("danger");
+    expect(logLineHealth('{"level":"emerg","msg":"boom"}')).toBe("danger");
+    expect(logLineHealth('{"level":"alert","msg":"boom"}')).toBe("danger");
+    expect(logLineHealth('{"level":"notice","msg":"listening"}')).toBe("info");
+    expect(logLineHealth('{"level":"warning","msg":"slow"}')).toBe("warning");
+    expect(logLineHealth('{"level":"debug","msg":"cache miss"}')).toBe("neutral");
+  });
+
+  it("reports a level word it does not recognise, but tones it neutral rather than guessing", () => {
+    // The word is the application's, so the column prints it; the tone is a
+    // claim we cannot make, so we do not make one up from the rest of the
+    // line — which is exactly the guess this whole change removes.
+    expect(logLineLevel('{"level":"audit","msg":"policy evaluated"}')).toBe("audit");
+    expect(logLineHealth('{"level":"audit","msg":"policy evaluated"}')).toBe("neutral");
+  });
+
+  it("falls back to the text scan when the line is not a JSON object", () => {
+    // Malformed, and not an object: both must reach the old path untouched,
+    // and neither may throw.
+    expect(logLineLevel('{"level":"warn","msg":"unterminated')).toBe("warn");
+    expect(logLineLevel("{oops not json, error inside}")).toBe("error");
+    expect(logLineLevel("[1,2,3] error after an array")).toBe("error");
+    expect(logLineLevel('"just a json string"')).toBeUndefined();
+    expect(logLineHealth("null")).toBe("neutral");
+  });
+
+  it("ignores a non-string level and falls back to the text scan", () => {
+    // pino writes `"level":30`. There is no word to print, so the scan
+    // decides, exactly as it did before this existed.
+    expect(logLineLevel('{"level":30,"msg":"listening"}')).toBeUndefined();
+    expect(logLineLevel('{"level":50,"msg":"connection error"}')).toBe("error");
+  });
+
+  it("does not let an empty error field repaint a declared info line", () => {
+    const line1 = '{"level":"info","error":{},"msg":"reconciled"}';
+    expect(logLineHealth(line1)).toBe("info");
+  });
+
+  it("tones the term tally from the declared level too", () => {
+    const lines = [
+      line('{"level":"warn","error":{},"time":"2026-08-25T08:22:00.594Z","msg":"upgrade failed"}'),
+      line('{"level":"warn","error":{},"time":"2026-08-25T08:23:11.104Z","msg":"upgrade failed"}'),
+    ];
+    expect(tallyLogTerms(lines)).toEqual([
+      { term: "upgrade failed", count: 2, tone: "warning" },
+    ]);
   });
 });

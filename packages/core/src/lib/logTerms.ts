@@ -12,11 +12,42 @@ import type { HealthKind } from "./k8sHealth";
  * *event* repeats. Tallying whole lines therefore yields a list of ones,
  * which is the failure mode this file exists to avoid.
  *
- * The first cut — mask anything shaped like data — is easy and structural: a
- * bare token that opens with a digit (`30.0s`, `503`, `18`, `84ms`) is always
- * a value, never a label, so it always ends the run.
+ * ### Framing first: skip it, do not stop on it
  *
- * The hard cut is `key=value` pairs, and it cannot be structural.
+ * A real log line does not open with its message. It opens with its framing —
+ * `2026/08/25 07:53:02 [notice] 1#1:` in front of nginx's `start worker
+ * process`, `I0825 08:23:00.651626       1 cidrallocator.go:278]` in front of
+ * every line klog has ever written. The first version of this rule read a
+ * leading digit as data and ENDED the term there, which meant the most
+ * repeated line in an nginx pod contributed nothing at all and a klog buffer
+ * tallied to `I0825` — a severity letter and a month-day, identical on every
+ * line of every control-plane component. That is the log's framing, not its
+ * message.
+ *
+ * So {@link STRUCTURAL_PREFIXES} is **skipped** rather than terminating the
+ * run: a stamp, a klog header, an nginx `pid#tid:`, a bracketed level, a
+ * leading level word. This is the same principle the old rule already applied
+ * to one case — a bare leading `error`/`warn` was skipped as structural — with
+ * the rest of the framing a real cluster emits brought under it.
+ *
+ * **Leading only.** A numeric token in the MIDDLE of a line still ends the
+ * term, and that is the whole of what keeps `duration=30011ms` and an nginx
+ * worker's pid out of the tally. "Skip when leading, terminate when internal"
+ * is the distinction; a line whose *message* opens with a number (`503 errors
+ * spiking`) still contributes nothing, because nothing about it is stable.
+ *
+ * ### A JSON line tallies its message
+ *
+ * Structured logging is everywhere, and a JSON line is one whitespace-free
+ * token that is unique per line — its own timestamp sees to that — so a
+ * buffer of them used to tally to nothing. If a line parses as a JSON OBJECT
+ * carrying a `msg` or `message` string, that string is the line as far as
+ * this file is concerned. Merely opening with `{` proves nothing, and a parse
+ * failure is not an error here: {@link logObject} returns `null` and the raw
+ * text is used, exactly as before.
+ *
+ * ### The key=value cut, unchanged
+ *
  * `status=503` and `duration=30011ms` are shaped identically — a word, an
  * `=`, and something that starts with a digit — yet one is the rail's
  * strongest signal and the other is noise. Nothing about either token's
@@ -26,48 +57,50 @@ import type { HealthKind } from "./k8sHealth";
  * different value practically every time. That is cardinality, and it is the
  * one thing a shape-based regex cannot see but a pass over the buffer can.
  *
- * So the rule is: **a `key=value` token is trusted, and used whole as the
- * term, once it has been seen recurring — the exact same literal pair,
- * twice or more — anywhere in the buffer.** A `key=value` token that has
- * never repeated is treated the same as a bare number: it ends the run
- * without being included, because a value seen once carries no more meaning
- * here than a raw timestamp would. This is the same recurrence bar
- * ({@link MIN_RECURRENCES}) the tally itself enforces on whole terms —
- * applied one level down, to the tokens that might become one.
+ * So: **a `key=value` token is trusted, and used whole as the term, once it
+ * has been seen recurring — the exact same literal pair, twice or more —
+ * anywhere in the buffer.** An unrepeated pair ends the run without being
+ * included, because a value seen once carries no more meaning here than a raw
+ * timestamp would. A trusted pair wins outright and becomes the term by
+ * itself: `request failed status=503 …` yields `status=503`, because the code
+ * is the more specific, more diagnostic fact and there is no principled way
+ * to keep both without the rail scrolling.
  *
- * A trusted `key=value` pair, wherever it sits in the line, wins outright
- * and becomes the term by itself — `request failed status=503 …` yields
- * `status=503`, not `request failed`, because the code is the more specific,
- * more diagnostic fact, and there is no principled way to keep both without
- * the rail scrolling. When no token in the line has earned that trust, the
- * fallback is the message's own leading words: the run of bare, non-numeric
- * tokens from the start, capped at two, which is how `pool timeout`, `pool
- * saturated` and `liveness deadline` are recovered from lines that carry no
- * repeatable `key=value` pair at all. A line that opens with a bare number
- * or an untrusted pair, and has no bare words before it, contributes nothing
- * — there is nothing stable to say about it.
+ * ### How long a term is: the clause, if the clause recurs
  *
- * A log line commonly opens with its own level word (`ERROR pool timeout …`);
- * that word is structural, not the message, so a single leading severity
- * word is skipped rather than counted toward the two-word cap.
+ * The old rule capped the term at two words, which is `pool timeout` but also
+ * `start worker` (nginx says `start worker process`) and `cannot reach` (the
+ * pod said `cannot reach mainframe gateway`). Two is arbitrary, and the
+ * buffer can answer the question itself.
  *
- * This recovers three of the design's four named terms unconditionally
- * (`pool timeout`, `pool saturated`, `liveness deadline` — none of their
- * lines carry a `key=value` pair that recurs) and the fourth,
- * `status=503`, precisely because it is the one that does.
+ * The run is the line's opening clause: bare tokens from the start of the
+ * message, ending at a number, an untrusted pair, a comma or a full stop —
+ * the punctuation the writer themselves put where the headline ends. **If
+ * that whole clause recurs {@link MIN_RECURRENCES} times and fits the rail,
+ * the whole clause is the term**; otherwise it is trimmed back to the
+ * {@link HEADLINE_WORDS}-word headline. Self-tuning, and it costs one more
+ * pass over the buffer: `start worker process` survives whole because those
+ * three words are the same three words 44 times over, while `liveness
+ * deadline extended for the drain` collapses to `liveness deadline` the
+ * moment the next line says `… for the shutdown` instead.
+ *
+ * A sliding version of the same idea — the longest *prefix* that recurs,
+ * trimmed word by word — was tried first and is not what shipped: it turns
+ * `pool saturated, queueing request depth=…` into `pool saturated queueing
+ * request` and cuts long messages mid-phrase (`updated ClusterIP allocator
+ * for Service`), because a prefix that fits the rail almost never lands on a
+ * phrase boundary. All-or-nothing at the clause is the same self-tuning
+ * behaviour without the ragged edges.
+ *
+ * {@link MAX_TERM_CHARS} is the rail's own width talking: the terms sit in a
+ * 272px column, so a 90-character term is useless even when it is accurate.
  *
  * ## Tone
  *
  * "Every status word and tone comes from core" (plan constraint) — so this
  * file does not invent a colour vocabulary. It reuses `HealthKind`
  * ({@link "./k8sHealth"}), core's one canonical severity vocabulary, rather
- * than adding a sibling. `LogLine` (`./logBuffer`) carries no parsed level
- * field, so the level is read off the raw text the same way classic already
- * does it (`lineLevel` in `apps/desktop/src/components/LogsView.tsx`, a
- * whole-string word search) — reprojected onto `HealthKind` instead of
- * classic's own local union, so this file is not a second copy of that
- * table, just a second consumer of the one scan. If `LogLine` grows a real
- * parsed level later, this is the one place that needs to change.
+ * than adding a sibling.
  *
  * A term's lines are not all the same severity — the same `status=503`
  * fires from a request logged at `warn` on retry and `error` on final
@@ -77,24 +110,72 @@ import type { HealthKind } from "./k8sHealth";
  * single worst occurrence, because that is the line the reader most needs
  * the colour to point at.
  */
-const TERM_WORDS = 2;
+const HEADLINE_WORDS = 2;
 
 /**
  * A tally is only useful once something has actually recurred; a term (or a
- * `key=value` token) seen once is, by definition, not recurring, and
- * showing it turns the rail back into the wall-of-noise it exists to
- * summarise. Two occurrences is the lowest bar that still means "recurred".
+ * `key=value` token, or a whole clause) seen once is, by definition, not
+ * recurring, and showing it turns the rail back into the wall-of-noise it
+ * exists to summarise. Two occurrences is the lowest bar that still means
+ * "recurred".
  */
 const MIN_RECURRENCES = 2;
 
 /** How many rows the rail shows by default — enough breadth, not a scroll. */
 const DEFAULT_CAP = 8;
 
+/**
+ * The widest term the rail can actually show. `STREAM_RAIL_WIDTH` is 272px
+ * and a term row spends part of that on a status dot and a right-aligned
+ * count, so a term much past forty characters is drawn as an ellipsis — and
+ * two terms that differ only after the ellipsis are one useless row. Terms
+ * are trimmed at a word boundary rather than mid-word.
+ */
+const MAX_TERM_CHARS = 40;
+
 /** A leading digit means the token is a number, a duration, or an id. */
 const OPENS_WITH_DIGIT = /^-?\d/;
 
-/** A bare severity word, structural rather than message content when leading. */
-const SEVERITY_WORD = /^(?:error|fatal|panic|warn|warning|info|debug|trace)$/i;
+/**
+ * Every level word this file recognises anywhere — the kit's `LEVEL_TONE`
+ * vocabulary (`packages/ui-kit/src/LogLine.tsx`) plus the syslog spellings an
+ * application can declare. Longest alternatives first so `error` is never
+ * matched as `err`.
+ */
+const LEVEL_WORDS =
+  "fatal|dpanic|panic|critical|crit|alert|emergency|emerg|error|err|warning|warn|notice|info|debug|trace";
+
+/**
+ * The framing a real log line opens with, in the order it is peeled off.
+ * Applied to the START of the message only, repeatedly, until nothing
+ * matches — nginx puts four of these in front of one sentence.
+ *
+ * Each is deliberately shaped, never "anything numeric": a message that
+ * genuinely opens with a figure (`503 errors spiking`) has to keep
+ * contributing nothing, which is what stops the tally inventing rows out of
+ * per-line data.
+ */
+const STRUCTURAL_PREFIXES: readonly RegExp[] = [
+  // A quote around the whole message — klog wraps its structured warnings.
+  /^["'`]+/,
+  // klog: `I0825 08:23:00.651626       1 cidrallocator.go:278]`.
+  /^[IWEF]\d{4}\s+\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\s+\d+\s+\S+:\d+\]\s*/,
+  // RFC3339 / ISO, with or without a zone.
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s*/,
+  // nginx and friends: `2026/08/25 07:53:02`.
+  /^\d{4}\/\d{2}\/\d{2}(?:\s+\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?)?\s*/,
+  // A bare wall clock, which is what a stripped stream line can start with.
+  /^\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\s*/,
+  // nginx's `1#1:` — worker pid and thread id, the same on every line.
+  /^\d+#\d+:\s*/,
+  // A bracketed level: CoreDNS's `[ERROR]`, nginx's `[notice]`. The level
+  // leaves the text and stays in the tone, which is the channel the rail
+  // already draws it in — and skipping it is what gets past `[notice]` to
+  // nginx's actual sentence.
+  new RegExp(`^\\[(?:${LEVEL_WORDS})\\]\\s*`, "i"),
+  // A bare leading level word, `error pool timeout` / `FATAL cannot reach`.
+  new RegExp(`^(?:${LEVEL_WORDS})\\b[:,]?\\s+`, "i"),
+];
 
 /** Words classic already keys the danger tone off, verbatim. */
 const DANGER_WORD = /\b(?:error|fatal|panic)\b/i;
@@ -109,6 +190,103 @@ const INFO_WORD = /\binfo\b/i;
  */
 const DEBUG_TRACE_WORD = /\b(?:debug|trace)\b/i;
 
+/** A parsed JSON log line. `unknown` values: the shape is the app's, not ours. */
+type LogObject = Readonly<Record<string, unknown>>;
+
+/** The fields a structured logger states its own severity in. */
+const LEVEL_FIELDS = ["level", "severity"] as const;
+/** The fields a structured logger puts the human sentence in. */
+const MESSAGE_FIELDS = ["msg", "message"] as const;
+
+/**
+ * The line as a JSON object, or `null` for the overwhelming majority of log
+ * lines that are not one.
+ *
+ * Opening with `{` proves nothing — `{not json at all` opens with `{` — so
+ * this parses and lets the parse decide, and a failure is a `null` rather
+ * than a throw: a malformed line is a normal thing for a log to contain and
+ * must not take the rail down with it. Arrays and bare scalars parse fine and
+ * are still not log objects, so they are rejected too.
+ *
+ * A stamped line is tried a second time with its framing off, so a JSON
+ * logger behind a k8s timestamp is still read as JSON.
+ */
+function logObject(text: string): LogObject | null {
+  return parseObject(text) ?? parseObject(skipStructure(text));
+}
+
+function parseObject(text: string): LogObject | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as LogObject;
+  } catch {
+    return null;
+  }
+}
+
+/** The first of `fields` the object carries as a non-empty string. */
+function stringField(obj: LogObject, fields: readonly string[]): string | undefined {
+  for (const field of fields) {
+    const value = obj[field];
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+  return undefined;
+}
+
+/** Peel every structural prefix off the front of a line; see {@link STRUCTURAL_PREFIXES}. */
+function skipStructure(text: string): string {
+  let rest = text.trim();
+  // Bounded rather than `while (true)`: every pass must shorten the string, so
+  // this can only spin if a pattern ever matches empty. It cannot, but a log
+  // line is untrusted input and an infinite loop in it would freeze the rail.
+  for (let pass = 0; pass < STRUCTURAL_PREFIXES.length; pass += 1) {
+    const before = rest;
+    for (const prefix of STRUCTURAL_PREFIXES) {
+      rest = rest.replace(prefix, "").trimStart();
+    }
+    if (rest === before) break;
+  }
+  return rest;
+}
+
+/**
+ * What the tally reads: a JSON logger's own `msg`, or the raw line — either
+ * way with the framing skipped. This is "the human-meaningful part of the
+ * line", and everything below counts words in it rather than in the text the
+ * stream happened to deliver.
+ */
+function messageOf(text: string, obj: LogObject | null): string {
+  const declared = obj === null ? undefined : stringField(obj, MESSAGE_FIELDS);
+  return skipStructure(declared ?? text);
+}
+
+/**
+ * One word of a message, and whether the writer ended their clause on it.
+ *
+ * The clause boundary is the writer's own punctuation — `pool saturated,
+ * queueing request` is a headline and an aside, and the comma says so. A
+ * colon is NOT a boundary: `plugin/kubernetes: Failed to watch` is one
+ * thought, and CoreDNS would otherwise tally to its component name alone.
+ */
+interface Token {
+  readonly text: string;
+  readonly endsClause: boolean;
+}
+
+/** Whitespace-split tokens, quotes and trailing sentence punctuation stripped. */
+function tokenize(text: string): Token[] {
+  const tokens: Token[] = [];
+  for (const raw of text.trim().split(/\s+/)) {
+    const endsClause = /[,;.!?]$/.test(raw.replace(/["'`]+$/, ""));
+    const stripped = raw.replace(/^["'`]+/, "").replace(/["'`.,;:!?]+$/, "");
+    if (stripped.length > 0) tokens.push({ text: stripped, endsClause });
+  }
+  return tokens;
+}
+
 function isBareNumeric(token: string): boolean {
   return OPENS_WITH_DIGIT.test(token);
 }
@@ -120,33 +298,66 @@ function splitKeyValue(token: string): { key: string; value: string } | null {
   return { key: token.slice(0, eq), value: token.slice(eq + 1) };
 }
 
-/** Whitespace-split tokens, trailing sentence punctuation stripped. */
-function tokenize(text: string): string[] {
-  return text
-    .trim()
-    .split(/\s+/)
-    .map((raw) => raw.replace(/[.,;:!?]+$/, ""))
-    .filter((t) => t.length > 0);
+/** What one line offers the tally: a trusted pair, or its opening clause. */
+interface Candidate {
+  /** A `key=value` token seen recurring; it wins outright. */
+  readonly trusted: string | null;
+  /** The line's opening clause, word by word. */
+  readonly clause: readonly string[];
 }
 
 /**
  * One line's candidate term: the first `key=value` token that has recurred
- * (trusted) anywhere in the buffer, or else the leading run of bare words,
- * capped at {@link TERM_WORDS}. See the module doc for the reasoning.
+ * (trusted) anywhere in the buffer, or else the run of bare words from the
+ * start of the message to the first number, untrusted pair, or clause-ending
+ * punctuation. See the module doc for the reasoning.
  */
-function lineTerm(tokens: readonly string[], kvFrequency: ReadonlyMap<string, number>): string | null {
-  const bareRun: string[] = [];
+function candidateOf(
+  tokens: readonly Token[],
+  kvFrequency: ReadonlyMap<string, number>,
+): Candidate {
+  const clause: string[] = [];
   for (const token of tokens) {
-    const kv = splitKeyValue(token);
-    if (kv !== null) {
-      if ((kvFrequency.get(token) ?? 0) >= MIN_RECURRENCES) return token;
+    if (splitKeyValue(token.text) !== null) {
+      if ((kvFrequency.get(token.text) ?? 0) >= MIN_RECURRENCES) {
+        return { trusted: token.text, clause };
+      }
       break; // an unrepeated pair is where the varying detail starts
     }
-    if (isBareNumeric(token)) break;
-    if (bareRun.length === 0 && SEVERITY_WORD.test(token)) continue; // a leading level word, not content
-    bareRun.push(token);
+    if (isBareNumeric(token.text)) break; // mid-line, a number is data
+    clause.push(token.text);
+    if (token.endsClause) break;
   }
-  return bareRun.length > 0 ? bareRun.slice(0, TERM_WORDS).join(" ") : null;
+  return { trusted: null, clause };
+}
+
+/** The first {@link HEADLINE_WORDS} words, and never wider than the rail. */
+function headline(clause: readonly string[]): string {
+  let term = clause[0];
+  for (let i = 1; i < Math.min(clause.length, HEADLINE_WORDS); i += 1) {
+    const wider = `${term} ${clause[i]}`;
+    if (wider.length > MAX_TERM_CHARS) break;
+    term = wider;
+  }
+  return term;
+}
+
+/**
+ * The clause if the whole clause recurred and fits the rail, else its
+ * headline. The buffer decides the length, so `start worker process` keeps
+ * its third word and `liveness deadline extended for the drain` does not keep
+ * its last four.
+ */
+function termOf(
+  clause: readonly string[],
+  clauseFrequency: ReadonlyMap<string, number>,
+): string | null {
+  if (clause.length === 0) return null;
+  const whole = clause.join(" ");
+  if (whole.length <= MAX_TERM_CHARS && (clauseFrequency.get(whole) ?? 0) >= MIN_RECURRENCES) {
+    return whole;
+  }
+  return headline(clause);
 }
 
 /**
@@ -156,35 +367,49 @@ function lineTerm(tokens: readonly string[], kvFrequency: ReadonlyMap<string, nu
  * `logLineHealth` below and the Logs screen's level column both read it
  * through here rather than running their own regex over the same text.
  *
- * This is a **text-scan heuristic, not a parsed field** — say so plainly,
- * because the stream gives us nothing structured to read instead. `LogLine`
- * (`./logBuffer`) carries only `{ source, text }`; there is no level column
- * anywhere between the backend and here. So this scans the whole raw line,
- * case-insensitively, for a recognised level word — the same vocabulary
- * classic's `lineLevel` already keys off
- * (`apps/desktop/src/components/LogsView.tsx:61`), plus `debug`/`trace`,
- * which classic never needed a colour for but a level column still has room
- * to print. If `LogLine` ever grows a real parsed level, THIS is the one
- * function to repoint at it.
+ * **A line that declares its own level is believed.** A JSON logger writes
+ * `{"level":"warn",…}`; the application has stated the answer and there is
+ * nothing to guess. Guessing was a real bug: `{"level":"warn",…,"error":{},…}`
+ * rendered ERROR, because `\berror\b` matches a JSON field NAME — a quote is
+ * a non-word character — so an `error` key holding an empty object repainted
+ * the whole line. Same family as `informant` reading as `info`: a word scan
+ * reading a word in the wrong context. `level` and `severity` are read, in
+ * that order, and only as strings: pino writes `"level":30`, which is no word
+ * to print, so a numeric level falls through to the scan below.
+ *
+ * The declared word is returned VERBATIM, so the column prints what the
+ * application called it. A level outside {@link LEVEL_HEALTH} — an
+ * application's own `audit`, say — is still returned and still reads
+ * `neutral`: the word is theirs to print, but inventing a severity for a
+ * vocabulary we do not know is exactly the guess this change removes. (Such a
+ * word is also outside the kit's `LEVEL_TONE`, so the level column draws it
+ * muted; closing that is the kit's to do, as it was for `panic` in 277924e.)
+ *
+ * Everything below the declared level is unchanged, because every
+ * unstructured log in the world depends on it. It is a **text-scan heuristic,
+ * not a parsed field** — `LogLine` (`./logBuffer`) carries only
+ * `{ source, text }`, so this scans the whole raw line, case-insensitively,
+ * for a recognised level word — the same vocabulary classic's `lineLevel`
+ * already keys off (`apps/desktop/src/components/LogsView.tsx:61`), plus
+ * `debug`/`trace`, which classic never needed a colour for but a level column
+ * still has room to print.
  *
  * Checked worst-first (danger family, then warning, then info, then
  * debug/trace) so a line that somehow carries more than one recognised word
  * — "escalated to error after a warn" — returns the word that matters more,
- * not whichever regex happened to match first. This is the same precedence
- * `logLineHealth` checked before this function existed; it is preserved here
- * so factoring the scan out changes nothing about which word wins.
+ * not whichever regex happened to match first.
  *
  * **Returns the literal word, not `logLineHealth`'s tone name** — the level
  * column wants "error", and printing `logLineHealth`'s "danger" there was
- * the bug this function exists to fix. One caveat: `panic` is danger-family
- * here (as it always has been) but is not a key the kit's `LEVEL_TONE`
- * (`packages/ui-kit/src/LogLine.tsx`) recognises, so a line whose only level
- * word is `panic` will still print "panic" in the column but the kit tones
- * it `muted` rather than `sev` — narrowing this function to drop `panic`
- * would silently change what a real panic line reports, so the mismatch is
- * left for the kit to close instead.
+ * the bug this function exists to fix.
  */
 export function logLineLevel(text: string): string | undefined {
+  return levelOf(text, logObject(text));
+}
+
+function levelOf(text: string, obj: LogObject | null): string | undefined {
+  const declared = obj === null ? undefined : stringField(obj, LEVEL_FIELDS);
+  if (declared !== undefined) return declared;
   return (
     DANGER_WORD.exec(text)?.[0] ??
     WARNING_WORD.exec(text)?.[0] ??
@@ -194,13 +419,28 @@ export function logLineLevel(text: string): string | undefined {
   );
 }
 
-/** {@link logLineLevel}'s recognised words, worst-first, mapped to their tone. */
+/**
+ * {@link logLineLevel}'s words mapped to their tone — the scan's own
+ * vocabulary, plus the syslog spellings only a declared level can produce
+ * (`err`, `crit`, `emerg`, `notice`). A real level landing on `neutral`
+ * because this table forgot it is the bug 277924e fixed for `panic`, so the
+ * table covers everything {@link LEVEL_WORDS} recognises; `debug` and `trace`
+ * are absent on purpose, having never been toned.
+ */
 const LEVEL_HEALTH: Record<string, HealthKind> = {
-  error: "danger",
+  emergency: "danger",
+  emerg: "danger",
+  alert: "danger",
+  critical: "danger",
+  crit: "danger",
   fatal: "danger",
   panic: "danger",
-  warn: "warning",
+  dpanic: "danger",
+  error: "danger",
+  err: "danger",
   warning: "warning",
+  warn: "warning",
+  notice: "info",
   info: "info",
 };
 
@@ -220,7 +460,10 @@ const LEVEL_HEALTH: Record<string, HealthKind> = {
  * invented at the call site.
  */
 export function logLineHealth(text: string): HealthKind {
-  const level = logLineLevel(text);
+  return healthOf(levelOf(text, logObject(text)));
+}
+
+function healthOf(level: string | undefined): HealthKind {
   if (level === undefined) return "neutral";
   return LEVEL_HEALTH[level.toLowerCase()] ?? "neutral";
 }
@@ -254,28 +497,42 @@ export function tallyLogTerms(
   options?: { readonly cap?: number },
 ): LogTerm[] {
   const cap = options?.cap ?? DEFAULT_CAP;
-  const tokenized = lines.map((l) => tokenize(l.text));
+  // Parsed once per line, not once per question: `logObject` is the only
+  // expensive step here and three passes below want the same answer from it.
+  const parsed = lines.map((l) => logObject(l.text));
+  const tokenized = lines.map((l, i) => tokenize(messageOf(l.text, parsed[i])));
 
   // Pass 1: how many times has each literal key=value token recurred, over
   // the WHOLE buffer? This is the cardinality signal the rule is built on.
   const kvFrequency = new Map<string, number>();
   for (const tokens of tokenized) {
     for (const token of tokens) {
-      if (splitKeyValue(token) !== null) {
-        kvFrequency.set(token, (kvFrequency.get(token) ?? 0) + 1);
+      if (splitKeyValue(token.text) !== null) {
+        kvFrequency.set(token.text, (kvFrequency.get(token.text) ?? 0) + 1);
       }
     }
   }
 
-  // Pass 2: pick each line's term with that frequency table in hand, and
-  // track how many lines chose it and the worst tone among them.
+  // Pass 2: each line's opening clause, and how often each WHOLE clause
+  // recurred — which is what decides whether a term keeps its third word.
+  const candidates = tokenized.map((tokens) => candidateOf(tokens, kvFrequency));
+  const clauseFrequency = new Map<string, number>();
+  for (const candidate of candidates) {
+    if (candidate.trusted !== null || candidate.clause.length === 0) continue;
+    const whole = candidate.clause.join(" ");
+    clauseFrequency.set(whole, (clauseFrequency.get(whole) ?? 0) + 1);
+  }
+
+  // Pass 3: pick each line's term, and track how many lines chose it and the
+  // worst tone among them.
   const counts = new Map<string, number>();
   const tones = new Map<string, HealthKind>();
   for (let i = 0; i < lines.length; i += 1) {
-    const term = lineTerm(tokenized[i], kvFrequency);
+    const candidate = candidates[i];
+    const term = candidate.trusted ?? termOf(candidate.clause, clauseFrequency);
     if (term === null) continue;
     counts.set(term, (counts.get(term) ?? 0) + 1);
-    const health = logLineHealth(lines[i].text);
+    const health = healthOf(levelOf(lines[i].text, parsed[i]));
     const worst = tones.get(term);
     if (worst === undefined || HEALTH_RANK[health] > HEALTH_RANK[worst]) {
       tones.set(term, health);
