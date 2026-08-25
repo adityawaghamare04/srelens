@@ -20,6 +20,7 @@ import {
   StringList,
 } from "./sections";
 import { SELF_DESCRIBING_KINDS } from "./GenericBody";
+import { hasSelector, requirementText, selectorOf, type WorkloadSelector } from "../../lib/workloadSelector";
 
 /** The annotation a Deployment records its current rollout number in. */
 const REVISION_ANNOTATION = "deployment.kubernetes.io/revision";
@@ -51,6 +52,25 @@ function updateStrategyText(strategy: Record<string, unknown>): string {
   if (maxSurge != null) parts.push(`surge ${maxSurge}`);
   if (maxUnavailable != null) parts.push(`unavailable ${maxUnavailable}`);
   return [type, ...parts].join(" · ");
+}
+
+/**
+ * A selector as the pane reads it: the equality labels as `k=v` pairs, with
+ * each requirement under them in Kubernetes' own syntax.
+ *
+ * BOTH halves, because a row that shows only the labels describes a wider set
+ * of pods than the table below it lists — and a workload selected entirely by
+ * expressions had no Selector row at all, on a pane that now finds its pods.
+ */
+function SelectorValue({ selector }: { selector: WorkloadSelector }) {
+  return (
+    <>
+      <PairList pairs={Object.entries(selector.matchLabels)} breakValues />
+      {selector.matchExpressions.length > 0 && (
+        <StringList items={selector.matchExpressions.map(requirementText)} />
+      )}
+    </>
+  );
 }
 
 /** The images a workload's pod template runs, each named once. */
@@ -190,7 +210,7 @@ export const workloadFacts: FactsFor = ({ kind, object, revisions }) => {
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
-  const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
+  const selector = selectorOf(object);
   const owners = meta.ownerReferences ?? [];
   const created = str(meta.creationTimestamp);
 
@@ -225,8 +245,8 @@ export const workloadFacts: FactsFor = ({ kind, object, revisions }) => {
   ];
   if (strategy) facts.push({ label: "Strategy", value: strategy });
   if (revision) facts.push({ label: "Revision", value: revisionText });
-  if (Object.keys(selector).length > 0) {
-    facts.push({ label: "Selector", value: <PairList pairs={Object.entries(selector)} breakValues /> });
+  if (hasSelector(selector)) {
+    facts.push({ label: "Selector", value: <SelectorValue selector={selector} /> });
   }
   if (spec.minReadySeconds != null) {
     facts.push({ label: "Min ready seconds", value: str(spec.minReadySeconds) });
@@ -262,7 +282,7 @@ export const workloadFacts: FactsFor = ({ kind, object, revisions }) => {
 function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
   const spec = asRecord(object.spec);
   const status = asRecord(object.status);
-  const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
+  const selector = selectorOf(object);
   const strategyText = updateStrategyText(asRecord(spec.updateStrategy));
 
   return (
@@ -273,9 +293,7 @@ function DaemonSetSchedulingSection({ object }: { object: K8sObject }) {
       {status.updatedNumberScheduled != null && <KV k="Up-to-date" v={str(status.updatedNumberScheduled)} />}
       {status.numberAvailable != null && <KV k="Available" v={str(status.numberAvailable)} />}
       {strategyText && <KV k="Update strategy" v={strategyText} />}
-      {Object.keys(selector).length > 0 && (
-        <KV k="Selector" v={<PairList pairs={Object.entries(selector)} breakValues />} />
-      )}
+      {hasSelector(selector) && <KV k="Selector" v={<SelectorValue selector={selector} />} />}
     </Section>
   );
 }
@@ -336,8 +354,7 @@ export function WorkloadDetailsBody({
   const meta = object.metadata ?? {};
   const spec = asRecord(object.spec);
   const namespace = str(meta.namespace);
-  const selector = asRecord(asRecord(spec.selector).matchLabels) as Record<string, string>;
-  const hasSelector = Object.keys(selector).length > 0;
+  const selector = selectorOf(object);
   const selfDescribing = SELF_DESCRIBING_KINDS.has(kind);
   const conditions = asArray(asRecord(object.status).conditions) as unknown as Condition[];
 
@@ -349,7 +366,7 @@ export function WorkloadDetailsBody({
           other wrapped kind gets. */}
       {kind === "DaemonSet" && <DaemonSetSchedulingSection object={object} />}
       <DeployRevisionsSection state={revisions} />
-      {hasSelector && namespace && selfDescribing && (
+      {hasSelector(selector) && namespace && selfDescribing && (
         <RelatedPodsSection context={context} namespace={namespace} selector={selector} />
       )}
       {selfDescribing && <ConditionsSection conditions={conditions} />}

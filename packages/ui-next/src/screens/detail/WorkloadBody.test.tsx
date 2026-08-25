@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import type { K8sObject, PodSummary, PodMetric, ReplicaSetSummary } from "@srelens/core";
+import type {
+  K8sObject,
+  LabelSelectorRequirement,
+  PodSummary,
+  PodMetric,
+  ReplicaSetSummary,
+} from "@srelens/core";
 
 // `WorkloadDetailsBody`'s "Pods" section reads live pods/metrics for the
 // workload's selector, and a Deployment's "Deploy Revisions" section reads
@@ -9,7 +15,17 @@ import type { K8sObject, PodSummary, PodMetric, ReplicaSetSummary } from "@srele
 // said" without one. `importOriginal` keeps every reader
 // (`updateStrategy`, `str`, `asRecord`, ...) intact.
 const { podsForSelector, podMetrics, listReplicaSets } = vi.hoisted(() => ({
-  podsForSelector: vi.fn(async (): Promise<{ pods?: PodSummary[]; error?: string }> => ({ pods: [] })),
+  // Typed with the arguments core's own `podsForSelector` takes, so a case
+  // below can answer FROM the selector it was sent rather than from a fixed
+  // list — see `answersFromLabels`.
+  podsForSelector: vi.fn(
+    async (
+      _context: string,
+      _namespace: string,
+      _selector?: Record<string, string>,
+      _expressions?: LabelSelectorRequirement[],
+    ): Promise<{ pods?: PodSummary[]; error?: string }> => ({ pods: [] }),
+  ),
   podMetrics: vi.fn(async (): Promise<{ metrics?: PodMetric[]; error?: string }> => ({ metrics: [] })),
   listReplicaSets: vi.fn(async (): Promise<{ replicasets?: ReplicaSetSummary[]; error?: string }> => ({
     replicasets: [],
@@ -100,6 +116,59 @@ const POD_A: PodSummary = {
   age: "2d",
   image: "app:1.0",
 };
+
+/** The canary of the same app: `app=web` alone selects it, and only the
+ *  `track NotIn canary` requirement keeps it out. */
+const POD_CANARY: PodSummary = { ...POD_A, name: "web-canary-9" };
+
+/** Two pods and the labels they carry — the cluster `answersFromLabels`
+ *  serves. */
+const LABELLED_PODS: { pod: PodSummary; labels: Record<string, string> }[] = [
+  { pod: POD_A, labels: { app: "web", track: "stable" } },
+  { pod: POD_CANARY, labels: { app: "web", track: "canary" } },
+];
+
+/** One requirement, applied the way the API server applies it. */
+function satisfies(labels: Record<string, string>, requirement: LabelSelectorRequirement): boolean {
+  const value = labels[requirement.key];
+  const values = requirement.values ?? [];
+  switch (requirement.operator) {
+    case "In":
+      return value !== undefined && values.includes(value);
+    case "NotIn":
+      return value === undefined || !values.includes(value);
+    case "Exists":
+      return value !== undefined;
+    case "DoesNotExist":
+      return value === undefined;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Answer `podsForSelector` FROM the selector it was actually sent, the way a
+ * cluster does.
+ *
+ * A mock resolving a fixed list hands back the same pods whether or not the
+ * expressions arrived, so it cannot tell a query that carried the whole
+ * selector from one that carried half of it — the accident these cases must
+ * not rest on. An empty selector answers with nothing, which is the backend's
+ * own deliberate rule: an unconstrained selector would otherwise match the
+ * whole namespace.
+ */
+function answersFromLabels() {
+  podsForSelector.mockImplementation(async (_context, _namespace, selector = {}, expressions = []) => {
+    if (Object.keys(selector).length === 0 && expressions.length === 0) return { pods: [] };
+    return {
+      pods: LABELLED_PODS.filter(
+        ({ labels }) =>
+          Object.entries(selector).every(([k, v]) => labels[k] === v) &&
+          expressions.every((requirement) => satisfies(labels, requirement)),
+      ).map(({ pod }) => pod),
+    };
+  });
+}
 
 /** The label column of one flat block, in the order it reads. `heading`
  *  names the block; without one, the pane's first block — which the design
@@ -450,7 +519,7 @@ describe("WorkloadDetailsBody", () => {
         />,
       );
       await waitFor(() => expect(screen.getByText("web-abc-1")).toBeDefined());
-      expect(podsForSelector).toHaveBeenCalledWith("ctx", "default", { app: "web" });
+      expect(podsForSelector).toHaveBeenCalledWith("ctx", "default", { app: "web" }, []);
       expect(screen.getAllByText("node-a").length).toBeGreaterThan(0);
       expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
     });
@@ -546,6 +615,123 @@ describe("WorkloadDetailsBody", () => {
       );
       expect(screen.getByText("Loading pods")).toBeDefined();
       expect([...container.children].every((el) => el.classList.contains("section"))).toBe(true);
+    });
+  });
+
+  /**
+   * A `LabelSelector` is the CONJUNCTION of its two halves: a pod belongs to
+   * the workload only when it satisfies the equality labels AND every
+   * requirement. Reading `matchLabels` alone was wrong twice over — a
+   * workload selected entirely by expressions resolved to an empty selector,
+   * which the backend deliberately answers with no pods, and a workload with
+   * both halves resolved to a selector WIDER than the real one, so this table
+   * listed pods the workload does not own under its name.
+   *
+   * Every case here answers from the selector it was sent
+   * (`answersFromLabels`): a fixture whose `matchLabels` alone would select
+   * the same pods proves nothing, because dropping the expression would leave
+   * it green.
+   */
+  describe("the whole selector, both halves", () => {
+    const NOT_CANARY: LabelSelectorRequirement = { key: "track", operator: "NotIn", values: ["canary"] };
+    const APP_IN_WEB: LabelSelectorRequirement = { key: "app", operator: "In", values: ["web"] };
+
+    it("lists only the pods the whole selector names, not the wider matchLabels set", async () => {
+      answersFromLabels();
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", {
+            replicas: 1,
+            selector: { matchLabels: { app: "web" }, matchExpressions: [NOT_CANARY] },
+          })}
+          context="ctx"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("web-abc-1")).toBeDefined());
+      // The canary carries `app=web` too. It is in this table exactly when the
+      // requirement was dropped on the way to the cluster.
+      expect(screen.queryByText("web-canary-9")).toBeNull();
+      expect(podsForSelector).toHaveBeenCalledWith("ctx", "default", { app: "web" }, [NOT_CANARY]);
+    });
+
+    it("finds the pods of a workload selected entirely by expressions", async () => {
+      answersFromLabels();
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", { replicas: 2, selector: { matchExpressions: [APP_IN_WEB] } })}
+          context="ctx"
+        />,
+      );
+      // The Pods panel is not merely empty without the expressions — it is
+      // absent, because the selector read as `{}` and the panel is gated on
+      // having one.
+      await waitFor(() => expect(screen.getByText("web-abc-1")).toBeDefined());
+      expect(screen.getByText("web-canary-9")).toBeDefined();
+      expect(podsForSelector).toHaveBeenCalledWith("ctx", "default", {}, [APP_IN_WEB]);
+    });
+
+    it("re-reads the pods when only the expressions change", async () => {
+      answersFromLabels();
+      const withRequirement = (requirement: LabelSelectorRequirement) =>
+        workload("Deployment", {
+          replicas: 1,
+          selector: { matchLabels: { app: "web" }, matchExpressions: [requirement] },
+        });
+      const { rerender } = render(
+        <WorkloadDetailsBody object={withRequirement(NOT_CANARY)} context="ctx" />,
+      );
+      await waitFor(() => expect(screen.getByText("web-abc-1")).toBeDefined());
+      rerender(
+        <WorkloadDetailsBody
+          object={withRequirement({ key: "track", operator: "In", values: ["canary"] })}
+          context="ctx"
+        />,
+      );
+      // The equality half did not move, so a re-fetch keyed on `matchLabels`
+      // alone would leave the stable pod on screen under the canary selector.
+      await waitFor(() => expect(screen.getByText("web-canary-9")).toBeDefined());
+      expect(screen.queryByText("web-abc-1")).toBeNull();
+    });
+
+    it("reads the requirements in the Selector row beside the equality labels", () => {
+      render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", {
+            replicas: 1,
+            selector: { matchLabels: { app: "web" }, matchExpressions: [NOT_CANARY] },
+          })}
+          context="ctx"
+        />,
+      );
+      expect(screen.getByText("app=")).toBeDefined();
+      expect(screen.getByText("track notin (canary)")).toBeDefined();
+    });
+
+    it("still gives a Selector row to a workload whose selector is expressions alone", () => {
+      const { container } = render(
+        <WorkloadDetailsBody
+          object={workload("Deployment", {
+            replicas: 1,
+            selector: { matchExpressions: [{ key: "app", operator: "In", values: ["web", "api"] }] },
+          })}
+          context="ctx"
+        />,
+      );
+      expect(factLabels(container)).toContain("Selector");
+      expect(screen.getByText("app in (web, api)")).toBeDefined();
+    });
+
+    it("reads a DaemonSet's requirements in its Scheduling block", () => {
+      const { container } = render(
+        <WorkloadDetailsBody
+          object={workload("DaemonSet", {
+            selector: { matchExpressions: [{ key: "logging", operator: "Exists" }] },
+          })}
+          context="ctx"
+        />,
+      );
+      expect(factLabels(container, "Scheduling")).toContain("Selector");
+      expect(screen.getByText("logging")).toBeDefined();
     });
   });
 
@@ -717,7 +903,7 @@ describe("WorkloadDetailsBody", () => {
       // a bare `getByText`.
       expect(screen.getAllByRole("heading", { name: "Pods" })).toHaveLength(1);
       expect(podsForSelector).toHaveBeenCalledTimes(1);
-      expect(podsForSelector).toHaveBeenCalledWith("ctx", "kube-system", { app: "logging" });
+      expect(podsForSelector).toHaveBeenCalledWith("ctx", "kube-system", { app: "logging" }, []);
     });
   });
 

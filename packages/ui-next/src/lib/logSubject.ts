@@ -12,6 +12,7 @@ import {
   type K8sObject,
   type LogTarget,
 } from "@srelens/core";
+import { selectorOf } from "./workloadSelector";
 
 /**
  * A route's subject, resolved to the pods and containers a stream can open
@@ -44,7 +45,7 @@ export interface PodSubject {
 /**
  * A workload, named by kind + name. `kind` is whatever `getObject`
  * understands — Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, or any
- * kind whose `spec.selector.matchLabels` names its pods.
+ * kind whose `spec.selector` names its pods.
  */
 export interface WorkloadSubject {
   type: "workload";
@@ -195,14 +196,6 @@ function terminationOf(
   };
 }
 
-/** The label a matchLabels selector would carry on a workload's spec, read
- *  loosely so a spec that doesn't have one just yields no pods. */
-function selectorOf(object: unknown): Record<string, string> {
-  const spec = asRecord(asRecord(object).spec);
-  const matchLabels = asRecord(spec.selector).matchLabels;
-  return (matchLabels ?? {}) as Record<string, string>;
-}
-
 /** The pod names in scope for `subject` — itself for a pod, or its
  *  selector's matches for a workload. */
 async function podsInScope(
@@ -214,7 +207,14 @@ async function podsInScope(
   const workload = await getObject(subject.context, subject.kind, subject.namespace, subject.name, invoke);
   if (workload.error !== undefined) return { error: workload.error };
 
-  const out = await podsForSelector(subject.context, subject.namespace, selectorOf(workload.object), invoke);
+  const selector = selectorOf(workload.object);
+  const out = await podsForSelector(
+    subject.context,
+    subject.namespace,
+    selector.matchLabels,
+    selector.matchExpressions,
+    invoke,
+  );
   if (out.error !== undefined) return { error: out.error };
   return { pods: (out.pods ?? []).map((p) => p.name) };
 }

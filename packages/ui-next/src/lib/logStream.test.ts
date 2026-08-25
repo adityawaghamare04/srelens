@@ -393,6 +393,43 @@ describe("useLogStream", () => {
     expect(startLogStream).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores a line from a stream cancelled by a dependency change before its connect promise settles", async () => {
+    // Narrowing `sinceSeconds` (or changing container/tailLines) tears down
+    // the in-flight connect and starts a new one. The old stream's connect
+    // promise has not resolved yet, so cleanup cannot call `stop()` on it —
+    // there is nothing to stop yet. If the old stream's initial tail line
+    // arrives on the channel before its stray `.then()` gets around to
+    // stopping it, that line must NOT land in the buffer the new effect just
+    // cleared.
+    const s1 = fakeStream();
+    const { result, rerender } = renderHook(
+      ({ sinceSeconds }: { sinceSeconds?: number }) =>
+        useLogStream("kind-dev", "default", [target], { sinceSeconds }),
+      { initialProps: { sinceSeconds: undefined as number | undefined } },
+    );
+    expect(startLogStream).toHaveBeenCalledTimes(1);
+    // s1's connect promise is deliberately left unresolved here.
+
+    const s2 = fakeStream();
+    rerender({ sinceSeconds: 300 });
+    expect(startLogStream).toHaveBeenCalledTimes(2);
+
+    // The stale stream's initial tail line lands after the dependency change
+    // cancelled it, but before its connect promise resolves and stop() runs.
+    act(() => s1.line("", "stale-tail-line"));
+
+    await s2.connect();
+    act(() => s2.line("", "fresh-line"));
+    await waitFor(() => expect(result.current.lines).toHaveLength(1));
+    expect(result.current.lines[0].text).toBe("fresh-line");
+
+    // The stale stream resolving late must still be stopped (existing
+    // behaviour), but must not have contributed any lines.
+    await s1.connect();
+    expect(s1.stop).toHaveBeenCalledTimes(1);
+    expect(result.current.lines).toHaveLength(1);
+  });
+
   it("clears the buffer on demand without restarting the stream", async () => {
     const s = fakeStream();
     const { result } = renderHook(() => useLogStream("kind-dev", "default", [target]));

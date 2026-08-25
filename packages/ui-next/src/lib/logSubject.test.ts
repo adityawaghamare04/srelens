@@ -444,3 +444,131 @@ describe("resolveLogSubject's previous instances", () => {
     expect(result.previous).toEqual([]);
   });
 });
+
+/**
+ * What `k8s.podsForSelector` is sent — both halves of the workload's
+ * `LabelSelector`, because a pod matches only when it satisfies both.
+ */
+interface SelectorPayload {
+  context: string;
+  namespace: string;
+  selector: Record<string, string>;
+  matchExpressions?: { key: string; operator: string; values?: string[] }[];
+}
+
+/** A workload object whose selector carries whatever halves a test needs. */
+const workloadSelecting = (selector: Record<string, unknown>) => ({ spec: { selector } });
+
+/**
+ * A fake `invoke` whose `k8s.podsForSelector` answers from the selector it was
+ * actually sent, the way a cluster does — so a test can distinguish a query
+ * that carried the whole selector from one that carried half of it. Every pod
+ * it names answers `getObject` with a single `app` container.
+ */
+function invokeSelecting(
+  workload: unknown,
+  pods: (payload: SelectorPayload) => { name: string }[] | Error,
+): { invoke: Invoker; sent: SelectorPayload[] } {
+  const sent: SelectorPayload[] = [];
+  const invoke = (async (id: string, input?: unknown): Promise<unknown> => {
+    if (id === "k8s.getObject") {
+      const { kind } = input as { kind: string };
+      if (kind === "Deployment") return { object: workload };
+      return { object: podObject(["app"]) };
+    }
+    if (id === "k8s.podsForSelector") {
+      const payload = input as SelectorPayload;
+      sent.push(payload);
+      const answer = pods(payload);
+      if (answer instanceof Error) throw answer;
+      return { pods: answer };
+    }
+    throw new Error(`unexpected capability ${id}`);
+  }) as Invoker;
+  return { invoke, sent };
+}
+
+describe("resolveLogSubject's selector", () => {
+  it("sends both halves of a workload's selector", async () => {
+    const { invoke, sent } = invokeSelecting(
+      workloadSelecting({
+        matchLabels: { app: "web" },
+        matchExpressions: [{ key: "track", operator: "NotIn", values: ["canary"] }],
+      }),
+      () => [{ name: "web-abc" }],
+    );
+    await resolveLogSubject(workloadSubject, invoke);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].selector).toEqual({ app: "web" });
+    expect(sent[0].matchExpressions).toEqual([
+      { key: "track", operator: "NotIn", values: ["canary"] },
+    ]);
+  });
+
+  it("follows only the pods the whole selector names, not the wider matchLabels set", async () => {
+    // The cluster's answer differs by which halves arrived: `app=web` alone
+    // selects the canary pod too, and only the expression excludes it. A
+    // resolution that dropped the expression would follow two pods here.
+    const { invoke } = invokeSelecting(
+      workloadSelecting({
+        matchLabels: { app: "web" },
+        matchExpressions: [{ key: "track", operator: "NotIn", values: ["canary"] }],
+      }),
+      (payload) =>
+        (payload.matchExpressions ?? []).length > 0
+          ? [{ name: "web-stable" }]
+          : [{ name: "web-stable" }, { name: "web-canary" }],
+    );
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    expect(result.status).toBe("resolved");
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.targets.map((t) => t.pod)).toEqual(["web-stable"]);
+  });
+
+  it("resolves a workload whose selector is expressions alone", async () => {
+    // No `matchLabels` at all. The backend answers an unconstrained selector
+    // with no pods on purpose, so a resolution that sent only the equality
+    // half would report this workload as having none.
+    const { invoke } = invokeSelecting(
+      workloadSelecting({
+        matchExpressions: [{ key: "app", operator: "In", values: ["web"] }],
+      }),
+      (payload) =>
+        Object.keys(payload.selector).length === 0 && (payload.matchExpressions ?? []).length === 0
+          ? []
+          : [{ name: "web-abc" }],
+    );
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    expect(result.status).toBe("resolved");
+    if (result.status !== "resolved") throw new Error("expected resolved");
+    expect(result.targets.map((t) => t.pod)).toEqual(["web-abc"]);
+  });
+
+  it("passes a requirement through verbatim, so the backend can refuse what it cannot render", async () => {
+    // Operators are case-sensitive; "notin" is not one. Nothing here corrects
+    // it — a corrected selector is a different selector, and following the
+    // wrong pods silently is the outcome this whole path exists to avoid.
+    const { invoke, sent } = invokeSelecting(
+      workloadSelecting({
+        matchExpressions: [{ key: "track", operator: "notin", values: ["canary"] }],
+      }),
+      () => new Error("unknown label selector operator \"notin\""),
+    );
+    const result = await resolveLogSubject(workloadSubject, invoke);
+    expect(sent[0].matchExpressions).toEqual([
+      { key: "track", operator: "notin", values: ["canary"] },
+    ]);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") throw new Error("expected error");
+    expect(result.error.detail.length).toBeGreaterThan(0);
+  });
+
+  it("sends no expressions for a selector that has none", async () => {
+    const { invoke, sent } = invokeSelecting(
+      workloadSelecting({ matchLabels: { app: "web" } }),
+      () => [{ name: "web-abc" }],
+    );
+    await resolveLogSubject(workloadSubject, invoke);
+    expect(sent[0].matchExpressions).toBeUndefined();
+  });
+});

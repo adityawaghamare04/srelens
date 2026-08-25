@@ -291,11 +291,22 @@ export function useLogStream(
     const total = sources.size;
     const seen = new Map<string, LogStatus>();
 
+    // Effect-scoped, unlike `onLine` itself: a dependency change (since,
+    // container, tail length, ...) cancels THIS run before its connect
+    // promise settles, and the old stream's initial tail lines can still
+    // arrive on the channel in the gap before its `.then()` gets around to
+    // calling `stop()`. Without this guard those lines land, through the
+    // shared `onLine`, in the buffer the new effect already cleared.
+    const guardedOnLine = (source: string, text: string) => {
+      if (cancelled) return;
+      onLine(source, text);
+    };
+
     startLogStream(
       context,
       namespace,
       streamTargets,
-      onLine,
+      guardedOnLine,
       (s, source) => {
         if (cancelled) return;
         seen.set(source, s);
