@@ -14,6 +14,10 @@
 //   --context=NAME           kube context to select (default: the kubeconfig's
 //                            own current-context, i.e. what kubectl would use)
 //   --scroll-to=TEXT         scroll the heading whose text is TEXT into view
+//   --click=TEXT             click the button/control whose text is TEXT, then
+//                            settle again (repeatable: --click=A --click=B)
+//   --select=LABEL:VALUE     set the <select> whose aria-label is LABEL to
+//                            VALUE, e.g. --select=Since:all
 //   --wait=MS                extra settle time after the app stops loading
 //   --build / --no-build     force or skip the frontend rebuild (default: rebuild
 //                            when a source file is newer than apps/desktop/dist)
@@ -401,7 +405,11 @@ const TITLES = {
 };
 function tabFor(r, id) {
   const slug = r.startsWith("/k/") ? r.slice(3) : null;
-  const [title, kind] = TITLES[r] ?? [
+  // `/logs/<kind>/<namespace>/<name>` is titled after its subject, not after
+  // its path — the same branch `describe()` grew when the screen was routed.
+  // Without it a stream tab photographs as "logs/Deployment/payments/…".
+  const logs = /^\/logs\/[^/]+\/[^/]+\/([^/]+)$/.exec(r);
+  const [title, kind] = (logs ? [`${decodeURIComponent(logs[1])} · logs`, "logs"] : TITLES[r]) ?? [
     slug ? slug[0].toUpperCase() + slug.slice(1) : r.replace(/^\//, ""),
     slug ? "workloads" : "control",
   ];
@@ -468,6 +476,49 @@ if (isHash) {
   // hash is set in the live document rather than navigated to.
   await evaluate(`window.location.hash = ${JSON.stringify(route)}`);
   await sleep(1500);
+}
+
+// Some states are only reachable by pressing something — `Previous instance`
+// on the logs screen is one: it is a toggle over the same stream, not a route,
+// so no seeded workspace can open it. Matched on the control's own text rather
+// than a selector, so this stays readable and does not encode a class name that
+// the design owns.
+const clicks = argv.filter((a) => a.startsWith("--click=")).map((a) => a.slice("--click=".length));
+for (const wanted of clicks) {
+  const found = await evaluate(`(() => {
+    const controls = [...document.querySelectorAll("button,[role=button],[role=switch],[role=tab]")];
+    const el = controls.find((c) => (c.innerText ?? "").trim() === ${JSON.stringify(wanted)})
+      ?? controls.find((c) => (c.innerText ?? "").trim().includes(${JSON.stringify(wanted)}));
+    if (!el) return false;
+    el.scrollIntoView({ block: "center" });
+    el.click();
+    return true;
+  })()`);
+  if (!found) console.error(`  ! nothing to click called ${wanted}`);
+  await waitForApp();
+}
+
+// A dropdown, for the states that hang off one — `Since` on the logs screen
+// decides whether a stream opens with a container's whole history or with the
+// last five minutes, and a workload that logs only at boot has nothing at all
+// to show under the default. React listens for `change` on a <select>
+// directly, so a plain dispatched event is enough here (an <input> would need
+// the native value setter).
+const selects = argv.filter((a) => a.startsWith("--select=")).map((a) => a.slice("--select=".length));
+for (const pair of selects) {
+  const at = pair.indexOf(":");
+  const [label, value] = [pair.slice(0, at), pair.slice(at + 1)];
+  const found = await evaluate(`(() => {
+    const el = [...document.querySelectorAll("select")].find(
+      (s) => (s.getAttribute("aria-label") ?? "").trim().toLowerCase() === ${JSON.stringify(label.toLowerCase())},
+    );
+    if (!el) return false;
+    el.value = ${JSON.stringify(value)};
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  })()`);
+  if (!found) console.error(`  ! no select called ${label}`);
+  await waitForApp();
 }
 
 if (flags["scroll-to"]) {
