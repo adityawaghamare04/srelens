@@ -1178,7 +1178,11 @@ describe("what a restart costs the reader", () => {
       notify();
     });
     await userEvent.click(screen.getByRole("button", { name: /dismiss/i }));
-    expect(screen.queryByText(/scrollback/i)).toBeNull();
+    // `waitFor`, not a bare query: the click is async, and asserting the
+    // notice is gone in the same tick passes only while the machine is quick
+    // enough to have flushed the state update. Under full-suite load it was
+    // not, and this test failed roughly one run in seven.
+    await waitFor(() => expect(screen.queryByText(/scrollback/i)).toBeNull());
 
     act(() => {
       h.state.restarts = 2;

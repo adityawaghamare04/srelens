@@ -19,6 +19,7 @@ import { Icons } from "../lib/icons";
 import { ROW_ACTION_LABEL } from "../lib/kinds/rowActions";
 import type { KindActions, ListRow } from "../lib/kinds/types";
 import { openTab } from "../lib/tabsStore";
+import { logsRoute } from "./Logs";
 
 export interface UseRowMenuArgs {
   /** The kubeconfig context name — what every core action call is scoped to. */
@@ -44,9 +45,15 @@ function isSuspended(row: ListRow): boolean {
 }
 
 /**
- * The row menu's logs/shell/forward tabs — placeholders for screens that do
- * not exist yet. Deliberately NOT `detailRoute`: designing their real route
- * model is a later step's job, not this one's.
+ * The row menu's shell/forward tabs — placeholders for screens that do not
+ * exist yet. Deliberately NOT `detailRoute`: designing their real route model
+ * is a later step's job, not this one's.
+ *
+ * Logs no longer comes through here. This shape carries a name and nothing
+ * else, so it cannot say which kind or namespace the subject is in — which was
+ * survivable while every one of these rendered a Placeholder, and stopped being
+ * so the moment Logs became a real screen: the front door opened onto an empty
+ * pane. It mints {@link logsRoute} instead.
  */
 const nav = (name: string, suffix: string) => `/resources/${encodeURIComponent(name)}/${suffix}`;
 
@@ -149,7 +156,11 @@ export function useRowMenu({ context, kind, actions }: UseRowMenuArgs): {
       },
     ];
     if (actions.logs) {
-      list.push({ label: ROW_ACTION_LABEL.logs, icon: Icons.logs, onPick: () => openTab(nav(row.name, "logs"), { clusterName: context }) });
+      list.push({
+        label: ROW_ACTION_LABEL.logs,
+        icon: Icons.logs,
+        onPick: () => openTab(logsRoute(kind, ns, row.name), { clusterName: context }),
+      });
     }
     if (actions.shell) {
       list.push({ label: ROW_ACTION_LABEL.shell, icon: Icons.terminal, onPick: () => openTab(nav(row.name, "shell"), { clusterName: context }) });
