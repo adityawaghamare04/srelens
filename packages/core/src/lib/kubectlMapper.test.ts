@@ -246,10 +246,14 @@ describe("kubectlMapper", () => {
           namespace: "prod",
           name: "checkout-api-5c8b7f2d9-mk3wl",
           context: "prod",
-          localPort: 5432,
+          // Deliberately different: equal ports make the assertion pass whether
+          // the pair is rendered local:remote or remote:local, so a swap would
+          // go unnoticed here and the test would prove only half of what it
+          // is named for.
+          localPort: 15432,
           remotePort: 5432,
         }),
-      ).toBe("kubectl --context prod -n prod port-forward pod/checkout-api-5c8b7f2d9-mk3wl 5432:5432");
+      ).toBe("kubectl --context prod -n prod port-forward pod/checkout-api-5c8b7f2d9-mk3wl 15432:5432");
     });
 
     it("single-quotes a context carrying command substitution, same as every other action", () => {
