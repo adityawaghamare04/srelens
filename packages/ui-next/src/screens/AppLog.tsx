@@ -13,20 +13,12 @@ import {
 import { useResource } from "../lib/useResource";
 import { Icons } from "../lib/icons";
 import { LEVELS, filterLines, parseAppLog, type Level } from "../lib/appLogLines";
+import { groupNumber } from "../lib/numbers";
 
 const LEVEL_OPTIONS = [
   { value: "all", label: "All levels" },
   ...LEVELS.map((level) => ({ value: level, label: level })),
 ];
-
-/**
- * Grouped the way the design writes numbers — a space every three digits, by
- * hand rather than through `toLocaleString`, which would put a comma in it
- * under one locale and a full stop under another.
- */
-function groupNumber(n: number): string {
-  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-}
 
 /**
  * srelens's own log: the tail of the rotating file it writes as it runs,

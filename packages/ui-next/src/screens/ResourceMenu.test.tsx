@@ -137,6 +137,17 @@ describe("useRowMenu", () => {
     expect(store.currentWorkspace().tabs.some((t) => t.route === "/k/Pod/kube-system/web-0")).toBe(true);
   });
 
+  it("opens Follow logs at the Logs screen's route, not the placeholder one", async () => {
+    // The row menu is the screen's front door — the bare `/logs` empty state
+    // tells the reader to come through it. It used to mint
+    // `/resources/<name>/logs`, which carries a name and no kind or namespace,
+    // so it could not name a subject and rendered a Placeholder: an empty pane
+    // where the logs should be.
+    render(<Harness args={POD_ARGS} row={POD_ROW} />);
+    await userEvent.click(screen.getByRole("button", { name: "Follow logs" }));
+    expect(store.currentWorkspace().tabs.some((t) => t.route === "/logs/Pod/kube-system/web-0")).toBe(true);
+  });
+
   it("opens a cluster-scoped resource with the placeholder namespace segment", async () => {
     render(<Harness args={NODE_ARGS} row={NODE_ROW} />);
     await userEvent.click(screen.getByRole("button", { name: "Open in new tab" }));

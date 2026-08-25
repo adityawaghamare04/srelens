@@ -61,6 +61,7 @@ describe("the list of ported screens", () => {
       "/k",
       "/events",
       "/overview",
+      "/logs",
     ]);
   });
 
@@ -72,6 +73,7 @@ describe("the list of ported screens", () => {
       "Resource lists and details",
       "Events",
       "Cluster overview",
+      "Logs",
     ]);
   });
 });

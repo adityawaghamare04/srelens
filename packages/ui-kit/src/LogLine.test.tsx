@@ -31,6 +31,26 @@ describe("LogLine", () => {
     expect(cell(container, "level").style.color).toContain("var(--warn)");
   });
 
+  it("tones a panic as severely as it reads", () => {
+    // `panic` is what a Go process says on its way out, and core's severity rule
+    // has always treated it as danger. It was missing from LEVEL_TONE, so the
+    // most severe line a process can emit rendered grey.
+    const { container } = render(<LogLine ts="14:02:11" level="panic" message="runtime error" />);
+    expect(cell(container, "level").style.color).toContain("var(--sev)");
+  });
+
+  it("tones every word core calls danger as severely as core means it", () => {
+    // core's LEVEL_HEALTH is the vocabulary a log line's declared level is read
+    // against, and this map is what colours it. A word core calls danger that
+    // this map has never heard of falls through to muted grey — which is how
+    // `panic` shipped grey until it was caught. `emerg` and `alert` are
+    // syslog's two most severe levels, above `crit`.
+    for (const level of ["emerg", "emergency", "alert", "dpanic"]) {
+      const { container } = render(<LogLine ts="14:02:11" level={level} message="x" />);
+      expect(cell(container, "level").style.color).toContain("var(--sev)");
+    }
+  });
+
   it("stays neutral for a level it does not recognise", () => {
     const { container } = render(<LogLine ts="14:02:11" level="audit" message="x" />);
     expect(cell(container, "level").style.color).toContain("var(--ink-muted)");

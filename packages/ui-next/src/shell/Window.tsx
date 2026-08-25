@@ -3,6 +3,7 @@ import { isApplePlatform, isTauri, listContexts, loadKubeconfigFiles, type Clust
 import { Button, Checkbox, Drawer, LoadingState, TabStrip, TextInput, type ContextMenuItem, type StripTab } from "@srelens/ui-kit";
 import { setContexts, setKubeconfigFiles, useContexts } from "../lib/clusters";
 import { loadColumnPrefs } from "../lib/columnPrefs";
+import { loadRecentLogSubjects } from "../lib/logRecents";
 import { loadMarks } from "../lib/marks";
 import { loadPeekWidth } from "../lib/peekWidth";
 import { loadSectionFolds } from "../lib/sectionFolds";
@@ -134,6 +135,11 @@ export function Window({
       // `links`/`expanded` on the same store, this one is persisted, and
       // unread it costs the reader their picker choice on every launch.
       loadNamespaces();
+      // And the subjects a bare `/logs` offers as a way in. Unread, that
+      // screen has nothing to offer on the first visit of every launch — and
+      // the first subject followed then spreads over an empty list and erases
+      // every earlier one, exactly as `loadMarks` above describes.
+      loadRecentLogSubjects();
       // Classic threads these through every call for a reason: a context that
       // came from an additional kubeconfig file cannot have a client built for
       // it until the backend has been told the file's path, and the list races

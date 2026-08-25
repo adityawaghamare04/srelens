@@ -3,6 +3,7 @@ import { K8S_KIND, RESOURCE_LABELS, type ResourceKind } from "@srelens/core";
 import { parseDetailRoute } from "./detailRoute";
 import { AppLog } from "../screens/AppLog";
 import { Events } from "../screens/Events";
+import { Logs, parseLogsRoute } from "../screens/Logs";
 import { Overview } from "../screens/Overview";
 import { ReleaseNotes } from "../screens/ReleaseNotes";
 import { ResourceDetailScreen, Resources } from "../screens/Resources";
@@ -93,6 +94,15 @@ export function describe(route: string, clusterName?: string): RouteInfo {
   if (route.startsWith("/edit/")) {
     return { route, title: `Edit ${decodeURIComponent(route.split("/")[2] ?? "")}`, sub, kind: "edit" };
   }
+  // `/logs/<kind>/<namespace>/<name>` — five segments, matched by none of the
+  // exact tables below, so without this it fell to the last-resort branch and
+  // titled itself after the raw path under the control-room icon. The subject
+  // IS the tab's identity here (`openTab` dedupes by route), so a strip with
+  // two streams open has to say which is which. Parsed rather than
+  // prefix-matched, for the reason `parseLogsRoute` gives: a decoded name can
+  // contain a `/`, so only the segment count tells the shape.
+  const logs = parseLogsRoute(route);
+  if (logs) return { route, title: `${logs.name} · logs`, sub, kind: "logs" };
   // A detail route (`/k/<kind>/<namespace>/<name>`) shares the `/k/` prefix
   // with a LIST route (`/k/<slug>`) — this must run before the list branch
   // below, or a detail route would fall into it and title itself after the
@@ -123,6 +133,10 @@ const SCREENS: Record<string, ScreenComponent> = Object.assign(Object.create(nul
   "/resources": Workloads,
   "/events": Events,
   "/overview": Overview,
+  // The bare route. Its deeper `/logs/<kind>/<namespace>/<name>` shape reaches
+  // the same screen through `parseLogsRoute` in `screenFor` — one screen, two
+  // shapes, because telling them apart is the screen's own job.
+  "/logs": Logs,
 });
 
 /**
@@ -147,6 +161,11 @@ export function screenFor(route: string): ScreenComponent | null {
   // were just another kind slug. Matched by parse rather than by adding a
   // second `/k/` entry to `PREFIXED`, which cannot tell the two apart at all.
   if (parseDetailRoute(route)) return ResourceDetailScreen;
+  // A logs subject route, for the same reason and by the same means: matched
+  // by parse rather than by a `/logs/` prefix entry, so `/logs/` on its own —
+  // and anything else under the prefix that is not a whole subject — stays a
+  // Placeholder instead of rendering a stream with no subject in it.
+  if (parseLogsRoute(route)) return Logs;
   // `/k/events` shares its `/k/` prefix with every other built-in list route
   // below, and `events` IS in core's `K8S_KIND` (so `isBuiltInKind` is true) —
   // but `descriptors.ts`'s `TYPED` table has no `events` entry, so the prefix

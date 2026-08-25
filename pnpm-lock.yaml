@@ -62,6 +62,9 @@ importers:
       '@srelens/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@srelens/ui-kit':
+        specifier: workspace:*
+        version: link:../../packages/ui-kit
       '@srelens/ui-next':
         specifier: workspace:*
         version: link:../../packages/ui-next
