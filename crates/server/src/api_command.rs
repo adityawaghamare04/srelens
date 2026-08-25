@@ -315,6 +315,13 @@ async fn run(
             env.streams.forward.stop(a.id);
             json!(null)
         }
+        "list_forwards" => {
+            // A read, not a mutator, and must stay off WEB_DENIED_COMMANDS: a
+            // browser reload empties the frontend's module-level store while
+            // this manager keeps forwarding, and this is the only way a web
+            // client has to ask what is still live.
+            json!({ "forwards": env.streams.forward.list() })
+        }
         "start_terminal" => {
             let a: TerminalStart = parse(body)?;
             let id = env
@@ -381,11 +388,11 @@ async fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::helm_args_denied;
+    use super::{helm_args_denied, WEB_DENIED_COMMANDS};
     use crate::{router, AppState};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use serde_json::json;
+    use serde_json::{json, Value};
     use srelens_capability::Registry;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -538,6 +545,52 @@ mod tests {
             body["error"],
             json!("helm repo/plugin operations are not available in web mode")
         );
+    }
+
+    #[test]
+    fn list_forwards_is_not_in_the_web_deny_list() {
+        // Denying it would reinstate the leak it closes: a web reload would
+        // empty the frontend store with no way to ask the server what is
+        // still running.
+        assert!(!WEB_DENIED_COMMANDS.contains(&"list_forwards"));
+    }
+
+    #[tokio::test]
+    async fn list_forwards_is_reachable_on_web_and_returns_the_managers_list() {
+        let state = AppState::for_tests(Arc::new(Registry::new())).await;
+        let user = state.db.upsert_user("i", "s", "u@x", "U", 1).await.unwrap();
+        let env = state
+            .user_envs
+            .env_for(&state.db, &state.master_key, user.id)
+            .await
+            .unwrap();
+        env.streams.forward.insert_test_forward(9, 44444);
+        let token = state
+            .db
+            .create_session(user.id, crate::unix_now())
+            .await
+            .unwrap();
+
+        let resp = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/command/list_forwards")
+                    .header("content-type", "application/json")
+                    .header("cookie", format!("srelens_session={token}"))
+                    .header("x-srelens-csrf", "1")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["forwards"][0]["id"], json!(9));
+        assert_eq!(body["forwards"][0]["localPort"], json!(44444));
     }
 
     #[tokio::test]
