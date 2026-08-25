@@ -232,7 +232,7 @@ async function saveOrDownload(
  * when a stream is opened with `timestamps: true`, which this screen always is
  * because the design gives the time its own column.
  */
-const RFC3339 = /^\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})(\.\d+)?Z? ?/;
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})(\.\d+)?(?:Z|[+-]\d{2}:?\d{2})? ?/;
 
 /** One line as the body draws it: the four columns, plus what a filter reads. */
 interface Row {

@@ -465,6 +465,17 @@ describe("Logs", () => {
     expect(lastOptions().timestamps).toBe(true);
   });
 
+  it("strips a stamp that carries a zone offset, not only a Z", async () => {
+    // A container runtime that stamps local time emits
+    // `2026-08-25T08:13:41.721258+02:00`. Consuming the date and time but not
+    // the offset left `+02:00 ` glued to the front of every message on the
+    // screen — and the rail then tallied it as the stream's top term, 1993
+    // times, which is to say once per line.
+    h.state.lines = [{ source: "", text: "2026-08-25T08:13:41.721258+02:00 pool timeout waited=30.0s" }];
+    const region = await (draw(), body());
+    expect(within(region).getByText(/^pool timeout waited=30.0s$/)).toBeTruthy();
+  });
+
   it("opens on the whole log, not the last five minutes", async () => {
     // Classic defaults to ALL and this screen replaces it, so a narrower
     // default is a regression a reader meets on their first visit: a workload
