@@ -696,7 +696,13 @@ function LogsStream({
 }) {
   const { ask } = useConsole();
   const [text, setText] = useState("");
-  const [since, setSince] = useState("5m");
+  // `all`, as classic has always defaulted, and not the design's drawn `5m`.
+  // A mock is drawn against a fixture that never stops talking; a real
+  // workload that has been quiet for six minutes renders "Nothing has been
+  // logged yet" under a 5m window — true, useless, and indistinguishable from
+  // a broken screen. The tail cap already bounds what arrives, so the age
+  // window costs the reader their logs and buys nothing.
+  const [since, setSince] = useState("all");
   const [container, setContainer] = useState(ALL_CONTAINERS);
   const [wrap, setWrap] = useState(false);
   const [metrics, setMetrics] = useState({
@@ -1270,6 +1276,11 @@ function LogsStream({
             />
           ) : rows.length === 0 ? (
             <EmptyState
+              // The body is `whitespace-nowrap` so an unwrapped line keeps the
+              // fixed height the windowing depends on. Prose inherits it too,
+              // and then no `max-width` can wrap: this hint ran off the pane
+              // and under the rail on a real cluster.
+              className="whitespace-normal"
               title="Nothing has been logged yet"
               hint={`srelens is following ${targets.length} container${targets.length === 1 ? "" : "s"} across ${podCount(targets)}; none of them has written a line${windowLabel}.`}
             />
@@ -1279,6 +1290,7 @@ function LogsStream({
             // message for both tells a reader their filter is fine when it is
             // the only thing hiding the line they came for.
             <EmptyState
+              className="whitespace-normal"
               title="No lines match"
               hint={`${groupNumber(rows.length)} line${rows.length === 1 ? " is" : "s are"} in the buffer; none of them matches this filter.`}
               action={

@@ -446,7 +446,11 @@ describe("Logs", () => {
   it("wires the since select to what the stream is asked to tail", async () => {
     draw();
     await screen.findByRole("log", { name: /logs/i });
-    expect(lastOptions().sinceSeconds).toBe(300);
+    // Opens on the whole log; the narrowing is the reader's to ask for.
+    expect(lastOptions().sinceSeconds).toBeUndefined();
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /since/i }), "5m");
+    await waitFor(() => expect(lastOptions().sinceSeconds).toBe(300));
 
     await userEvent.selectOptions(screen.getByRole("combobox", { name: /since/i }), "1h");
     await waitFor(() => expect(lastOptions().sinceSeconds).toBe(3600));
@@ -461,11 +465,41 @@ describe("Logs", () => {
     expect(lastOptions().timestamps).toBe(true);
   });
 
+  it("opens on the whole log, not the last five minutes", async () => {
+    // Classic defaults to ALL and this screen replaces it, so a narrower
+    // default is a regression a reader meets on their first visit: a workload
+    // quiet for six minutes renders "Nothing has been logged yet", which is
+    // true, useless, and reads as a broken screen. The tail cap already bounds
+    // how much arrives, so the age window buys nothing and costs the logs.
+    draw();
+    await screen.findByRole("log", { name: /logs/i });
+    expect(lastOptions().sinceSeconds).toBeUndefined();
+    expect((screen.getByRole("combobox", { name: /since/i }) as HTMLSelectElement).value).toBe("all");
+  });
+
+  it("lets an empty state wrap, though the lines around it must not", async () => {
+    // The body is `whitespace-nowrap` so an unwrapped log line keeps its fixed
+    // height — the windowing depends on it. EmptyState renders inside that
+    // body, where its own `max-w-[42ch]` cannot take effect: the hint ran off
+    // under the rail on a real cluster.
+    h.state.lines = [];
+    draw();
+    const empty = await screen.findByText(/nothing has been logged yet/i);
+    expect(empty.parentElement?.className ?? "").toContain("whitespace-normal");
+  });
+
   describe("the three states the design leaves out", () => {
     it("says nothing has been logged yet, naming the window that decides it", async () => {
       const region = await (draw(), body());
       expect(within(region).getByText(/nothing has been logged yet/i)).toBeTruthy();
-      expect(within(region).getByText(/last 5m/i)).toBeTruthy();
+      // No window by default, so no window clause: the screen opens on the
+      // whole log and has nothing to blame the silence on.
+      expect(within(region).queryByText(/in the last/i)).toBeNull();
+
+      // Narrow it, and the sentence names what is now hiding the lines —
+      // which is the whole point of saying it.
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: /since/i }), "5m");
+      expect(await within(region).findByText(/last 5m/i)).toBeTruthy();
     });
 
     it("says nothing MATCHES, which is a different sentence", async () => {
