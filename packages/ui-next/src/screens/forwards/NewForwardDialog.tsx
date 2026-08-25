@@ -318,6 +318,15 @@ export function NewForwardDialog({
   /** §A.4's one field error, decided against the live store. */
   const clash = localPort !== null && forwards.some((f) => f.localPort === localPort);
 
+  /** The fields the equivalent command still wants, in the order they are read. */
+  const missingForCommand = [
+    target ? null : "a target",
+    localPort === null ? "a local port" : null,
+    remotePort === null ? "a remote port" : null,
+  ]
+    .filter((f): f is string => f !== null)
+    .join(" and ");
+
   const command =
     chosen && localPort !== null && remotePort !== null
       ? toKubectl({
@@ -461,9 +470,12 @@ export function NewForwardDialog({
             {command ? (
               <CopyCommand command={command} />
             ) : (
-              <span className="text-[0.75rem] text-muted">
-                Choose a target and both ports to see it.
-              </span>
+              /* Names what is actually missing, rather than listing every
+                 field. Opened from a port's `Forward` the target, namespace
+                 and remote port all arrive filled, and a line reading "choose
+                 a target" then asks the reader for the one thing they have
+                 already done. */
+              <span className="text-[0.75rem] text-muted">{`Fill in ${missingForCommand} to see it.`}</span>
             )}
           </div>
         </div>

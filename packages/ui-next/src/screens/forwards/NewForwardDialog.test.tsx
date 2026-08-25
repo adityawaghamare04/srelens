@@ -463,6 +463,17 @@ describe("NewForwardDialog — opened from the thing being forwarded", () => {
     expect(input("Local port").value).toBe("");
   });
 
+  it("asks only for what is missing, not for the target it was handed", async () => {
+    // Opened from a port's Forward, everything but the local port arrives
+    // filled. A line reading "choose a target and both ports" then asks the
+    // reader for two things they already have, and it is the first thing they
+    // read under the command they came to copy.
+    openOn(POD_TARGET);
+    await screen.findByRole("dialog");
+    expect(screen.getByText("Fill in a local port to see it.")).toBeTruthy();
+    expect(screen.queryByText(/a target/)).toBeNull();
+  });
+
   it("prefills nothing when there is no target — the screen's own way in, unchanged", async () => {
     open();
     await screen.findByRole("dialog");
